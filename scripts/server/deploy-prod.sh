@@ -23,9 +23,15 @@ REMOTE_DIR="${REMOTE_DIR:-/opt/admin}"
 TARGET="${USER}@${HOST}"
 
 echo "== 1. Pre-flight (local) =="
-node backend/node_modules/typescript/bin/tsc --noEmit -p backend/tsconfig.json
-node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.json
-echo "typecheck OK"
+# node/tsc only exist on dev machines — when deploying from a server host
+# (where node runs inside Docker only) skip the typecheck gracefully.
+if command -v node >/dev/null 2>&1 && [ -f backend/node_modules/typescript/bin/tsc ] && [ -f frontend/node_modules/typescript/bin/tsc ]; then
+  node backend/node_modules/typescript/bin/tsc --noEmit -p backend/tsconfig.json
+  node frontend/node_modules/typescript/bin/tsc --noEmit -p frontend/tsconfig.json
+  echo "typecheck OK"
+else
+  echo "node/tsc not available on this host — skipping typecheck (typecheck on a dev machine before pushing)"
+fi
 
 echo "== 2. Sync project to ${TARGET}:${REMOTE_DIR} (rsync over SSH) =="
 if [ "${SKIP_SYNC:-0}" != "1" ]; then

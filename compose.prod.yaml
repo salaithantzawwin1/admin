@@ -4,6 +4,10 @@
 # =============================================================
 services:
   backend:
+    # base maps backend on 127.0.0.1:3000 — remap to 3010 here so the prod
+    # frontend (0.0.0.0:3000) can bind without an address clash.
+    ports: !override
+      - "127.0.0.1:3010:3000"
     environment:
       APP_ENV: production
       SEED_PASSWORD: ${SEED_PASSWORD:?SEED_PASSWORD required — sysadmin initial password}
