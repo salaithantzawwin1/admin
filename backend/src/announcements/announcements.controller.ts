@@ -84,6 +84,13 @@ export class AnnouncementsController {
     return this.announcements.publish(id, this.actor(req));
   }
 
+  /** Pull a live announcement back to DRAFT (audience keeps read/ack history). */
+  @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
+  @Post(':id/unpublish')
+  unpublish(@Req() req, @Param('id') id: string) {
+    return this.announcements.unpublish(id, this.actor(req));
+  }
+
   /** Target/read/unread counts (requiresAck announcements). */
   @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
   @Get(':id/read-stats')

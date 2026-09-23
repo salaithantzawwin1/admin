@@ -18,6 +18,9 @@ const ALLOWED_MIME = [
 
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB per file (plan §31: file type/size validation)
 
+/** Announcements may carry at most this many files (UI promises "up to 10"). */
+const MAX_ANNOUNCEMENT_FILES = 10;
+
 @Injectable()
 export class AttachmentsService {
   private uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
@@ -59,6 +62,10 @@ export class AttachmentsService {
           where: { userId, role: { name: 'SYSTEM_ADMIN' } },
         });
         if (!admin) throw new ForbiddenException('Not your announcement');
+      }
+      const existing = await this.prisma.attachment.count({ where: { announcementId } });
+      if (existing >= MAX_ANNOUNCEMENT_FILES) {
+        throw new BadRequestException(`Announcement attachments are limited to ${MAX_ANNOUNCEMENT_FILES} files`);
       }
     }
 

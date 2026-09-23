@@ -8,6 +8,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
+import { htmlToText, sanitizeHtml } from './sanitize-html';
 
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'] as const;
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'] as const;
@@ -124,7 +125,8 @@ export class AnnouncementsService {
       data: {
         code: await this.numbering.next('ANN'),
         title: data.title.trim(),
-        content: data.content.trim(),
+        // rich text is stored as sanitized HTML — scripts/styles/event handlers never survive
+        content: sanitizeHtml(data.content.trim()),
         category: category as never,
         priority: priority as never,
         status,
@@ -156,7 +158,7 @@ export class AnnouncementsService {
       where: { id },
       data: {
         title: data.title?.trim(),
-        content: data.content?.trim(),
+        content: data.content !== undefined ? sanitizeHtml(data.content.trim()) : undefined,
         category: (CATEGORIES as readonly string[]).includes(data.category || '') ? data.category as never : undefined,
         priority: data.priority && (PRIORITIES as readonly string[]).includes(data.priority) ? data.priority as never : undefined,
         endAt: data.endAt === null ? null : data.endAt ? new Date(data.endAt) : undefined,
@@ -197,6 +199,26 @@ export class AnnouncementsService {
     return { success: true };
   }
 
+  /**
+   * Unpublish — pull a live announcement back to DRAFT.
+   * The audience keeps its read/ack history for the records; the announcement
+   * simply stops being visible (listMine only shows PUBLISHED) and can be
+   * edited or re-published afterwards.
+   */
+  async unpublish(id: string, actor: Actor) {
+    const a = await this.prisma.announcement.findUnique({ where: { id } });
+    if (!a) throw new NotFoundException('Announcement not found');
+    if (a.status !== 'PUBLISHED') throw new ConflictException('Only published announcements can be unpublished');
+    const updated = await this.prisma.announcement.update({ where: { id }, data: { status: 'DRAFT' } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ANNOUNCEMENT_UNPUBLISHED', module: 'ANNOUNCEMENT', recordId: id,
+      oldValue: { code: a.code, status: 'PUBLISHED' },
+      newValue: { code: a.code, status: 'DRAFT' },
+    });
+    return updated;
+  }
+
   async publish(id: string, actor: Actor) {
     const a = await this.prisma.announcement.findUnique({ where: { id }, include: { targets: true } });
     if (!a) throw new NotFoundException('Announcement not found');
@@ -214,7 +236,8 @@ export class AnnouncementsService {
     await this.notifications.notifyMany([...new Set(userIds)], {
       type: 'ANNOUNCEMENT',
       title: `${a.priority === 'NORMAL' ? 'Announcement' : a.priority} — ${a.title}`,
-      body: a.content.slice(0, 300),
+      // Telegram/notification channels take plain text — strip the rich-text markup
+      body: htmlToText(a.content).slice(0, 300) || a.title,
       link: '/announcements',
     });
     await this.audit.log({
