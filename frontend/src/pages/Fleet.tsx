@@ -61,6 +61,7 @@ interface Vehicle {
   currentMileage: number;
   status: string;
   driver?: { name: string } | null;
+  driverId?: string | null;
 }
 
 const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red'> = {
@@ -177,11 +178,13 @@ export default function Fleet() {
         body: {
           brandModel: vForm.brandModel,
           capacity: Number(vForm.capacity),
-          driverId: vForm.driverId || undefined,
+          // null clears the default driver ("blank") — undefined would leave it unchanged
+          driverId: vForm.driverId || null,
           status: vForm.status,
         },
       });
       setEditingV(null);
+      setVForm(emptyVForm);
       flash('Vehicle updated');
       load();
     } catch (e) {
@@ -195,9 +198,11 @@ export default function Fleet() {
     try {
       await api(`/fleet/drivers/${editingD.id}`, {
         method: 'PATCH',
-        body: { name: dForm.name, phone: dForm.phone || undefined, licenseNo: dForm.licenseNo || undefined, status: dForm.status },
+        // null clears the field ("blank") — undefined would leave it unchanged
+        body: { name: dForm.name, phone: dForm.phone || null, licenseNo: dForm.licenseNo || null, status: dForm.status },
       });
       setEditingD(null);
+      setDForm(emptyDForm);
       flash('Driver updated');
       load();
     } catch (e) {
@@ -239,8 +244,8 @@ export default function Fleet() {
         actions={
           canManage ? (
             <>
-              <Button variant="ghost" onClick={() => { setShowD(!showD); setEditingD(null); }}>{showD ? 'Close' : '+ Driver'}</Button>
-              <Button onClick={() => { setShowV(!showV); setEditingV(null); }}>{showV ? 'Close' : '+ Vehicle'}</Button>
+              <Button variant="ghost" onClick={() => { setShowD(!showD); setEditingD(null); if (!showD) setDForm(emptyDForm); }}>{showD ? 'Close' : '+ Driver'}</Button>
+              <Button onClick={() => { setShowV(!showV); setEditingV(null); if (!showV) setVForm(emptyVForm); }}>{showV ? 'Close' : '+ Vehicle'}</Button>
             </>
           ) : undefined
         }
@@ -467,7 +472,8 @@ export default function Fleet() {
                         setEditingD(null);
                         setShowV(false);
                         setShowD(false);
-                        setVForm({ vehicleNo: v.vehicleNo, vehicleType: v.vehicleType, brandModel: v.brandModel, capacity: v.capacity, driverId: drivers.find((d) => d.name === v.driver?.name)?.id ?? '', status: v.status });
+                        // prefill by driver id (not name — duplicate names would mismatch)
+                        setVForm({ vehicleNo: v.vehicleNo, vehicleType: v.vehicleType, brandModel: v.brandModel, capacity: v.capacity, driverId: v.driverId ?? '', status: v.status });
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
                     >
