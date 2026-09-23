@@ -50,6 +50,10 @@ export default function Employees() {
   const [form, setForm] = useState({ ...EMPTY });
   const [edit, setEdit] = useState<EmployeeRow | null>(null);
   const [editRoles, setEditRoles] = useState<string[]>([]);
+  // Link-User CRUD: 'none' (no account) | 'link' (attach an existing user) | 'create' (new account)
+  const [linkMode, setLinkMode] = useState<'none' | 'link' | 'create'>('none');
+  const [linkUserId, setLinkUserId] = useState('');
+  const [allUsers, setAllUsers] = useState<{ id: string; username: string; fullName: string }[]>([]);
   const [newLogin, setNewLogin] = useState({ username: '', password: '', roles: ['EMPLOYEE'] as string[], authSource: 'LOCAL' as 'LOCAL' | 'AD' });
   const [confirmDelete, setConfirmDelete] = useState<EmployeeRow | null>(null);
   const [confirmText, setConfirmText] = useState('');
@@ -69,6 +73,12 @@ export default function Employees() {
   }, []);
 
   useEffect(load, [load]);
+
+  /** User accounts without an employee link — candidates for "Link existing user". */
+  const loadLinkableUsers = () =>
+    api<{ items: { id: string; username: string; fullName: string }[] }>('/users?pageSize=100')
+      .then((r) => setAllUsers(r.items ?? []))
+      .catch(() => setAllUsers([]));
 
   const create = async () => {
     setModalError('');
@@ -95,6 +105,21 @@ export default function Employees() {
     }
   };
 
+  const unlinkUser = async () => {
+    if (!edit?.user) return;
+    setModalError('');
+    try {
+      await api(`/org/employees/${edit.id}/login`, { method: 'DELETE' });
+      toast(`Unlinked — ${edit.user.username} remains on the Users page`);
+      setEdit({ ...edit, user: null, roles: [] });
+      setEditRoles([]);
+      setLinkMode('none');
+      load();
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
   const saveEdit = async () => {
     if (!edit) return;
     setModalError('');
@@ -111,13 +136,21 @@ export default function Employees() {
       });
       if (edit.user) {
         await api(`/org/employees/${edit.id}/roles`, { method: 'PATCH', body: { roles: editRoles } });
-      } else if (newLogin.username && (newLogin.password || newLogin.authSource === 'AD')) {
+      } else if (linkMode === 'link' && linkUserId) {
+        // attach an EXISTING user account to this employee
+        await api(`/org/employees/${edit.id}/login`, {
+          method: 'POST',
+          body: { userId: linkUserId },
+        });
+      } else if (linkMode === 'create' && newLogin.username && (newLogin.password || newLogin.authSource === 'AD')) {
         await api(`/org/employees/${edit.id}/login`, {
           method: 'POST',
           body: { username: newLogin.username, password: newLogin.password || undefined, roles: newLogin.roles, authSource: newLogin.authSource },
         });
       }
       setEdit(null);
+      setLinkMode('none');
+      setLinkUserId('');
       setNewLogin({ username: '', password: '', roles: ['EMPLOYEE'], authSource: 'LOCAL' });
       toast('Employee updated');
       load();
@@ -267,10 +300,15 @@ export default function Employees() {
                   onClick={() => {
                     setEdit({ ...e0 });
                     setEditRoles(e0.roles ?? []);
+                    setLinkMode('none');
+                    setLinkUserId('');
+                    setNewLogin({ username: '', password: '', roles: ['EMPLOYEE'], authSource: 'LOCAL' });
                     if (e0.user) {
                       api<{ roles: string[] }>(`/org/employees/${e0.id}/roles`)
                         .then((r) => setEditRoles(r.roles))
                         .catch(() => undefined);
+                    } else {
+                      loadLinkableUsers();
                     }
                   }}
                 >
@@ -327,8 +365,21 @@ export default function Employees() {
               </select>
             </div>
             {edit.user ? (
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Linked user — {edit.user.username} · roles (Ctrl+click for multiple)</label>
+              <div className="border border-gray-200 rounded-lg p-3">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="text-sm text-gray-700">
+                    Linked user: <span className="font-mono font-medium">{edit.user.username}</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 hover:bg-orange-50"
+                    title="Remove the link — the account itself stays on the Users page (history is kept)"
+                    onClick={unlinkUser}
+                  >
+                    Unlink user
+                  </button>
+                </div>
+                <label className="block text-xs text-gray-500 mb-1">Roles (Ctrl+click for multiple)</label>
                 <select
                   multiple
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white h-28 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
@@ -340,33 +391,67 @@ export default function Employees() {
               </div>
             ) : (
               <div className="border border-dashed border-gray-300 rounded-lg p-3">
-                <div className="text-xs text-gray-500 mb-2">This employee has no login account — create one (optional)</div>
-                <div className="flex flex-wrap items-center gap-4 mb-2">
-                  <label className="flex items-center gap-1.5 text-sm text-gray-700">
-                    <input type="radio" checked={newLogin.authSource === 'LOCAL'} onChange={() => setNewLogin({ ...newLogin, authSource: 'LOCAL' })} className="accent-yellow-600" />
-                    Local account
-                  </label>
-                  <label className="flex items-center gap-1.5 text-sm text-gray-700">
-                    <input type="radio" checked={newLogin.authSource === 'AD'} onChange={() => setNewLogin({ ...newLogin, authSource: 'AD' })} className="accent-yellow-600" />
-                    Windows AD account
-                  </label>
+                <div className="text-xs text-gray-500 mb-2">This employee has no login account.</div>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  <button
+                    type="button"
+                    className={`text-xs px-3 py-1.5 rounded-lg border ${linkMode === 'link' ? 'border-gold bg-yellow-50 text-yellow-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                    onClick={() => { setLinkMode('link'); loadLinkableUsers(); }}
+                  >
+                    Link an existing user
+                  </button>
+                  <button
+                    type="button"
+                    className={`text-xs px-3 py-1.5 rounded-lg border ${linkMode === 'create' ? 'border-gold bg-yellow-50 text-yellow-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+                    onClick={() => setLinkMode('create')}
+                  >
+                    Create a new account
+                  </button>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <Input placeholder="Username (AD: same as Windows)" value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
-                  {newLogin.authSource === 'LOCAL' ? (
-                    <Input placeholder="Password (min 8)" type="password" value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
-                  ) : (
-                    <div className="text-xs text-gray-500 self-center">No password here — AD verifies the Windows password at sign-in.</div>
-                  )}
-                </div>
-                <select
-                  multiple
-                  className="w-full mt-3 border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white h-24 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
-                  value={newLogin.roles}
-                  onChange={(e) => setNewLogin({ ...newLogin, roles: Array.from(e.target.selectedOptions).map((o) => o.value) })}
-                >
-                  {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
+                {linkMode === 'link' && (
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">User account to link</label>
+                    <select
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+                      value={linkUserId}
+                      onChange={(e) => setLinkUserId(e.target.value)}
+                    >
+                      <option value="">— choose an account —</option>
+                      {allUsers.map((u) => <option key={u.id} value={u.id}>{u.username} — {u.fullName}</option>)}
+                    </select>
+                    <div className="text-xs text-gray-400 mt-1">Accounts already linked to another employee are not shown here; linking keeps the account's existing roles.</div>
+                  </div>
+                )}
+                {linkMode === 'create' && (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-4">
+                      <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                        <input type="radio" checked={newLogin.authSource === 'LOCAL'} onChange={() => setNewLogin({ ...newLogin, authSource: 'LOCAL' })} className="accent-yellow-600" />
+                        Local account
+                      </label>
+                      <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                        <input type="radio" checked={newLogin.authSource === 'AD'} onChange={() => setNewLogin({ ...newLogin, authSource: 'AD' })} className="accent-yellow-600" />
+                        Windows AD account
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <Input placeholder="Username (AD: same as Windows)" value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
+                      {newLogin.authSource === 'LOCAL' ? (
+                        <Input placeholder="Password (min 8)" type="password" value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
+                      ) : (
+                        <div className="text-xs text-gray-500 self-center">No password here — AD verifies the Windows password at sign-in.</div>
+                      )}
+                    </div>
+                    <select
+                      multiple
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white h-24 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+                      value={newLogin.roles}
+                      onChange={(e) => setNewLogin({ ...newLogin, roles: Array.from(e.target.selectedOptions).map((o) => o.value) })}
+                    >
+                      {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
             <div className="flex justify-end gap-2 pt-2">
@@ -375,7 +460,8 @@ export default function Employees() {
                 onClick={saveEdit}
                 disabled={
                   edit.fullName.length < 2 ||
-                  (!edit.user && newLogin.username !== '' && (newLogin.username.length < 3 || (newLogin.authSource === 'LOCAL' && newLogin.password.length < 8) || newLogin.roles.length === 0))
+                  (linkMode === 'link' && !linkUserId) ||
+                  (linkMode === 'create' && (newLogin.username.length < 3 || (newLogin.authSource === 'LOCAL' && newLogin.password.length < 8) || newLogin.roles.length === 0))
                 }
               >
                 Save Changes
