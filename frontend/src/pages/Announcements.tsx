@@ -31,6 +31,8 @@ interface Announcement {
   createdBy?: string; targets?: Target[];
   read?: boolean; acked?: string | null;
   readCount?: number;
+  /** photo thumbnails included in /mine responses (first 4) */
+  photos?: Attachment[];
   createdAt: string;
 }
 interface Attachment { id: string; filename: string; size: number; mimeType: string }
@@ -99,6 +101,28 @@ function AttachmentSections({ files, className = '' }: { files: Attachment[]; cl
 
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
+/** Miniature photo strip for list cards — inline, lazy, click-through to the detail view. */
+function PhotoStrip({ photos, onOpen }: { photos: Attachment[]; onOpen: () => void }) {
+  if (photos.length === 0) return null;
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      <div className="flex gap-1">
+        {photos.slice(0, 4).map((f) => (
+          <img
+            key={f.id}
+            src={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
+            alt={f.filename}
+            loading="lazy"
+            className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-80"
+            onClick={onOpen}
+          />
+        ))}
+      </div>
+      {photos.length > 4 && <span className="text-xs text-gray-400">+{photos.length - 4} more</span>}
+    </div>
+  );
+}
+
 /** ============ Employee view ============ */
 function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reload: () => void }) {
   const [open, setOpen] = useState<Announcement | null>(null);
@@ -156,6 +180,7 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
             </div>
           </div>
           <p className="text-sm text-gray-600 mt-2 line-clamp-2">{plain(a.content)}</p>
+          <PhotoStrip photos={a.photos ?? []} onOpen={() => openDetail(a)} />
         </Card>
       ))}
 

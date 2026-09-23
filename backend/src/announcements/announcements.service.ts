@@ -303,21 +303,23 @@ export class AnnouncementsService {
         ],
       },
       orderBy: [
-        { priority: 'desc' },
         { publishAt: 'desc' },
       ],
       include: {
         targets: true,
         reads: { where: { userId: actor.userId }, select: { readAt: true, ackAt: true } },
         createdBy: { select: { fullName: true } },
+        // first photos so list cards can show thumbnails without a second round-trip
+        attachments: { orderBy: { createdAt: 'asc' }, take: 4, select: { id: true, filename: true, mimeType: true, size: true } },
       },
       take: 50,
     });
-    return (rows as unknown as Array<Prisma.AnnouncementGetPayload<{ include: { targets: true; reads: { where: { userId: string }; select: { readAt: true; ackAt: true } }; createdBy: { select: { fullName: true } } } }>>).map((a) => ({
+    return (rows as unknown as Array<Prisma.AnnouncementGetPayload<{ include: { targets: true; reads: { where: { userId: string }; select: { readAt: true; ackAt: true } }; createdBy: { select: { fullName: true } }; attachments: { select: { id: true; filename: true; mimeType: true; size: true } } } }>>).map((a) => ({
       id: a.id, code: a.code, title: a.title, content: a.content, category: a.category,
       priority: a.priority, publishAt: a.publishAt, startAt: a.startAt, endAt: a.endAt,
       requiresAck: a.requiresAck, createdBy: a.createdBy.fullName,
       read: a.reads.length > 0, acked: a.reads[0]?.ackAt ?? null,
+      photos: a.attachments.filter((f) => f.mimeType.startsWith('image/')),
     }));
   }
 
