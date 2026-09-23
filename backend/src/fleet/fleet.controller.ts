@@ -1,12 +1,21 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { DriverStatus, VehicleStatus, VehicleType } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { FleetService } from './fleet.service';
 import { Actor } from '../org/org.service';
+
+class VehicleTypeDto {
+  @IsString() @MinLength(2) @MaxLength(32) name!: string;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+class VehicleTypeUpdateDto {
+  @IsOptional() @IsBoolean() active?: boolean;
+}
 
 class VehicleDto {
   @IsString() @MinLength(2) @MaxLength(32) vehicleNo!: string;
@@ -84,6 +93,33 @@ export class FleetController {
   @RequirePermissions(PERMISSIONS.FLEET_READ)
   drivers(@Query('status') status?: DriverStatus) {
     return this.fleet.listDrivers(status);
+  }
+
+  // ---------- vehicle type master data (Plan §6 — no hard-coded lists) ----------
+
+  /** Active types drive the pickers; managers also see inactive ones. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('vehicle-types')
+  vehicleTypes() {
+    return this.fleet.listVehicleTypes();
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_TYPES_MANAGE)
+  @Post('vehicle-types')
+  createVehicleType(@Req() req, @Body() dto: VehicleTypeDto) {
+    return this.fleet.createVehicleType(dto.name.trim().toUpperCase().replace(/\s+/g, '_'), this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_TYPES_MANAGE)
+  @Patch('vehicle-types/:id')
+  async updateVehicleType(@Req() req, @Param('id') id: string, @Body() dto: VehicleTypeUpdateDto) {
+    return this.fleet.updateVehicleType(id, { active: dto.active }, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_TYPES_MANAGE)
+  @Delete('vehicle-types/:id')
+  deleteVehicleType(@Req() req, @Param('id') id: string) {
+    return this.fleet.deleteVehicleType(id, this.actor(req));
   }
 
   // ---------- write: SYSTEM_ADMIN or ADMINISTRATION ----------

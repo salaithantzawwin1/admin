@@ -16,6 +16,82 @@ export class FleetService {
     private notifications: NotificationsService,
   ) {}
 
+  // ---------- vehicle type master data (Plan §6) ----------
+
+  /** All types for managers; pickers filter to active on the client. */
+  listVehicleTypes() {
+    return this.prisma.vehicleTypeMaster.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  async createVehicleType(name: string, actor: Actor) {
+    const exists = await this.prisma.vehicleTypeMaster.findUnique({ where: { name } });
+    if (exists) throw new ConflictException(`Vehicle type "${name}" already exists`);
+    if (!/^[A-Z][A-Z0-9_]{1,31}$/.test(name)) {
+      throw new BadRequestException('Use letters/numbers/underscore (e.g. STAFF_BUS) — stored uppercase like the existing list');
+    }
+    // keep the Postgres enum in sync so vehicles/requests can actually use the
+    // new value (regex-validated name — safe to inline)
+    try {
+      await this.prisma.$executeRawUnsafe(`ALTER TYPE "VehicleType" ADD VALUE IF NOT EXISTS '${name}'`);
+    } catch (e) {
+      console.error(`[fleet] could not extend VehicleType enum with '${name}':`, (e as Error).message);
+    }
+    const type = await this.prisma.vehicleTypeMaster.create({ data: { name } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_TYPE_CREATED', module: 'FLEET', recordId: type.id,
+      newValue: { name: type.name },
+    });
+    return type;
+  }
+
+  /** Toggle active (hide from pickers). Renames are not allowed — the name
+   *  is the enum value stored on vehicles/requests. */
+  async updateVehicleType(id: string, data: { active?: boolean }, actor: Actor) {
+    const type = await this.prisma.vehicleTypeMaster.findUnique({ where: { id } });
+    if (!type) throw new NotFoundException('Vehicle type not found');
+    const updated = await this.prisma.vehicleTypeMaster.update({ where: { id }, data: { active: data.active } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_TYPE_UPDATED', module: 'FLEET', recordId: id,
+      oldValue: { active: type.active }, newValue: { active: updated.active },
+    });
+    return updated;
+  }
+
+  /**
+   * Delete only when no vehicle or car request uses the type —
+   * otherwise deactivate it so history stays intact.
+   */
+  async deleteVehicleType(id: string, actor: Actor) {
+    const type = await this.prisma.vehicleTypeMaster.findUnique({ where: { id } });
+    if (!type) throw new NotFoundException('Vehicle type not found');
+    const countEnum = async (field: 'vehicleType' | 'vehicleTypeRequired') => {
+      try {
+        return field === 'vehicleType'
+          ? await this.prisma.vehicle.count({ where: { vehicleType: type.name as never } })
+          : await this.prisma.carRequest.count({ where: { vehicleTypeRequired: type.name as never } });
+      } catch {
+        // a name that is not (yet) a Postgres enum value cannot exist in an
+        // enum column — treat as unused
+        return 0;
+      }
+    };
+    const [vehicles, requests] = await Promise.all([countEnum('vehicleType'), countEnum('vehicleTypeRequired')]);
+    if (vehicles + requests > 0) {
+      throw new ConflictException(
+        `Cannot delete "${type.name}": ${vehicles} vehicle(s) / ${requests} request(s) use it — deactivate it instead`,
+      );
+    }
+    await this.prisma.vehicleTypeMaster.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_TYPE_DELETED', module: 'FLEET', recordId: id,
+      oldValue: { name: type.name },
+    });
+    return { ok: true };
+  }
+
   // ---------- vehicles ----------
   listVehicles(status?: VehicleStatus) {
     return this.prisma.vehicle.findMany({

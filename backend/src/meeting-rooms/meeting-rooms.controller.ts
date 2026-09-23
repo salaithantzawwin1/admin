@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
@@ -72,6 +72,34 @@ export class MeetingRoomsController {
   @Post('requests/:requestId/admin-cancel')
   cancel(@Req() req, @Param('requestId') requestId: string, @Body() body: { comment?: string }) {
     return this.rooms.adminCancel(requestId, body.comment, this.actor(req));
+  }
+
+  // ---------- facility master data (Plan §7 — no hard-coded lists) ----------
+
+  /** Active facilities drive the checkbox picker; managers also see inactive ones. */
+  @RequirePermissions(PERMISSIONS.MEETING_ROOMS_ASSIGN)
+  @Get('facilities')
+  facilities() {
+    return this.rooms.listFacilities();
+  }
+
+  @RequirePermissions(PERMISSIONS.MEETING_ROOMS_FACILITIES_MANAGE)
+  @Post('facilities')
+  createFacility(@Req() req, @Body() body: { name: string; active?: boolean }) {
+    if (!body?.name?.trim()) throw new BadRequestException('Facility name is required');
+    return this.rooms.createFacility(body.name.trim(), body.active, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.MEETING_ROOMS_FACILITIES_MANAGE)
+  @Patch('facilities/:id')
+  updateFacility(@Req() req, @Param('id') id: string, @Body() body: { active?: boolean }) {
+    return this.rooms.updateFacility(id, { active: body?.active }, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.MEETING_ROOMS_FACILITIES_MANAGE)
+  @Delete('facilities/:id')
+  deleteFacility(@Req() req, @Param('id') id: string) {
+    return this.rooms.deleteFacility(id, this.actor(req));
   }
 
   // ---------- room setup CRUD (Administration) ----------

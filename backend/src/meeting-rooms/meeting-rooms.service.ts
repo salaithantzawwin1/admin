@@ -457,6 +457,60 @@ export class MeetingRoomsService {
     return this.prisma.meetingRoom.findMany({ orderBy: { name: 'asc' } });
   }
 
+  // ---------- facility master data (Plan §7) ----------
+
+  listFacilities() {
+    return this.prisma.facilityMaster.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  async createFacility(name: string, active: boolean | undefined, actor: Actor) {
+    const exists = await this.prisma.facilityMaster.findUnique({ where: { name } });
+    if (exists) throw new ConflictException(`Facility "${name}" already exists`);
+    const facility = await this.prisma.facilityMaster.create({ data: { name, active } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'FACILITY_CREATED', module: 'MEETING_ROOMS', recordId: facility.id,
+      newValue: { name: facility.name },
+    });
+    return facility;
+  }
+
+  /** Toggle active (hide from the picker). Renames are not allowed — rooms
+   *  store facilities as a CSV of names. */
+  async updateFacility(id: string, data: { active?: boolean }, actor: Actor) {
+    const facility = await this.prisma.facilityMaster.findUnique({ where: { id } });
+    if (!facility) throw new NotFoundException('Facility not found');
+    const updated = await this.prisma.facilityMaster.update({ where: { id }, data: { active: data.active } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'FACILITY_UPDATED', module: 'MEETING_ROOMS', recordId: id,
+      oldValue: { active: facility.active }, newValue: { active: updated.active },
+    });
+    return updated;
+  }
+
+  /**
+   * Delete only when no room references the facility name —
+   * otherwise deactivate it so existing rooms stay correct.
+   */
+  async deleteFacility(id: string, actor: Actor) {
+    const facility = await this.prisma.facilityMaster.findUnique({ where: { id } });
+    if (!facility) throw new NotFoundException('Facility not found');
+    const used = await this.prisma.meetingRoom.count({
+      where: { facilities: { contains: facility.name } },
+    });
+    if (used > 0) {
+      throw new ConflictException(`Cannot delete "${facility.name}": ${used} room(s) use it — deactivate it instead`);
+    }
+    await this.prisma.facilityMaster.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'FACILITY_DELETED', module: 'MEETING_ROOMS', recordId: id,
+      oldValue: { name: facility.name },
+    });
+    return { ok: true };
+  }
+
   async createRoom(data: { name: string; location?: string; capacity?: number; facilities?: string }, actor: Actor) {
     const exists = await this.prisma.meetingRoom.findUnique({ where: { name: data.name } });
     if (exists) throw new ConflictException(`Room "${data.name}" already exists`);
