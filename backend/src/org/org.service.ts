@@ -132,13 +132,36 @@ export class OrgService {
     return employee;
   }
 
-  /** Attach a new login account to an existing employee (Edit modal). */
-  async linkLogin(id: string, data: { username: string; password?: string; roles: RoleName[]; authSource?: 'LOCAL' | 'AD' }, actor: Actor) {
+  /**
+   * Attach a login account to an existing employee (Edit modal).
+   *
+   * Two modes:
+   * - `userId` given → link an EXISTING user account (e.g. one created on the
+   *   Users page) — the missing half of the Link-User CRUD.
+   * - otherwise create a NEW account (username/password/authSource required).
+   */
+  async linkLogin(id: string, data: { userId?: string; username?: string; password?: string; roles?: RoleName[]; authSource?: 'LOCAL' | 'AD' }, actor: Actor) {
     const employee = await this.prisma.employee.findUnique({ where: { id }, include: { user: true } });
     if (!employee) throw new NotFoundException('Employee not found');
     if (employee.user) throw new ConflictException('Employee already has a login account');
-    const exists = await this.prisma.user.findUnique({ where: { username: data.username } });
-    if (exists) throw new ConflictException('Username already exists');
+
+    // ---- mode A: link an existing user ----
+    if (data.userId) {
+      if (data.username) throw new BadRequestException('Pick either an existing user or a new username, not both');
+      const target = await this.prisma.user.findUnique({ where: { id: data.userId }, include: { employee: true } });
+      if (!target) throw new NotFoundException('User not found');
+      if (target.employee) throw new ConflictException(`User "${target.username}" is already linked to employee ${target.employee.employeeNo}`);
+      await this.prisma.employee.update({ where: { id }, data: { userId: target.id } });
+      await this.audit.log({
+        ...actor, action: 'EMPLOYEE_LOGIN_LINKED', module: 'ORG', recordId: id,
+        newValue: { linkedUserId: target.id, username: target.username, existing: true },
+      });
+      return this.employeeRoles(id);
+    }
+
+    // ---- mode B: create a new account and link it ----
+    const username = data.username ?? '';
+    if (username.length < 3) throw new BadRequestException('Username is required');
     if (!data.roles || data.roles.length === 0) {
       throw new BadRequestException('Select at least one role');
     }
@@ -146,16 +169,18 @@ export class OrgService {
     if (!isAd && !data.password) {
       throw new BadRequestException('Password is required for a local account');
     }
+    const exists = await this.prisma.user.findUnique({ where: { username } });
+    if (exists) throw new ConflictException('Username already exists');
 
     await this.prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
-          username: data.username,
+          username,
           fullName: employee.fullName,
           email: employee.email ?? undefined,
           passwordHash: isAd ? AD_UNUSABLE_HASH : await bcrypt.hash(data.password!, 10),
           authSource: isAd ? 'AD' : 'LOCAL',
-          userRoles: { create: data.roles.map((name) => ({ role: { connect: { name } } })) },
+          userRoles: { create: data.roles!.map((name) => ({ role: { connect: { name } } })) },
         },
       });
       await tx.employee.update({ where: { id }, data: { userId: user.id } });
@@ -163,9 +188,29 @@ export class OrgService {
 
     await this.audit.log({
       ...actor, action: 'EMPLOYEE_LOGIN_LINKED', module: 'ORG', recordId: id,
-      newValue: { username: data.username, roles: data.roles },
+      newValue: { username, roles: data.roles },
     });
     return this.employeeRoles(id);
+  }
+
+  /**
+   * Remove the employee ↔ user link — the Link-User Delete (un CRUD မပါတဲ့ အပိုင်း).
+   * The login account itself is NOT deleted (it may hold workflow history);
+   * it simply becomes a standalone account on the Users page.
+   */
+  async unlinkLogin(id: string, actor: Actor) {
+    const employee = await this.prisma.employee.findUnique({ where: { id }, include: { user: true } });
+    if (!employee) throw new NotFoundException('Employee not found');
+    if (!employee.user) throw new BadRequestException('This employee has no linked login account');
+    const username = employee.user.username;
+    const userId = employee.user.id;
+    await this.prisma.employee.update({ where: { id }, data: { userId: null } });
+    await this.audit.log({
+      ...actor, action: 'EMPLOYEE_LOGIN_UNLINKED', module: 'ORG', recordId: id,
+      oldValue: { userId, username },
+      newValue: { username },
+    });
+    return { success: true, username };
   }
 
   /** Read the linked user's roles (for the Employee page role column). */
@@ -208,7 +253,17 @@ export class OrgService {
     departmentId?: string; branchId?: string; status?: 'ACTIVE' | 'INACTIVE';
   }, actor: Actor) {
     const old = await this.mustFindEmployee(id);
-    const employee = await this.prisma.employee.update({ where: { id }, data });
+    // keep the linked account's name/email in sync with the employee master record
+    const sync: { fullName?: string; email?: string | null } = {};
+    if (data.fullName && data.fullName !== old.fullName) sync.fullName = data.fullName;
+    if (data.email !== undefined && data.email !== old.email) sync.email = data.email || null;
+    const employee = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.employee.update({ where: { id }, data });
+      if (updated.userId && Object.keys(sync).length > 0) {
+        await tx.user.update({ where: { id: updated.userId }, data: sync }).catch(() => undefined);
+      }
+      return updated;
+    });
     await this.audit.log({ ...actor, action: 'EMPLOYEE_UPDATED', module: 'ORG', recordId: id, oldValue: old, newValue: data });
     return employee;
   }

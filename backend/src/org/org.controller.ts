@@ -128,8 +128,15 @@ export class OrgController {
 
   @RequirePermissions(PERMISSIONS.ORG_MANAGE)
   @Post('employees/:id/login')
-  linkLogin(@Req() req, @Param('id') id: string, @Body() dto: { username: string; password?: string; roles: RoleName[]; authSource?: 'LOCAL' | 'AD' }) {
+  linkLogin(@Req() req, @Param('id') id: string, @Body() dto: { userId?: string; username?: string; password?: string; roles?: RoleName[]; authSource?: 'LOCAL' | 'AD' }) {
     return this.org.linkLogin(id, dto, this.actor(req));
+  }
+
+  /** Remove the employee ↔ user link (the account itself is kept on the Users page). */
+  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @Delete('employees/:id/login')
+  unlinkLogin(@Req() req, @Param('id') id: string) {
+    return this.org.unlinkLogin(id, this.actor(req));
   }
 
   @RequirePermissions(PERMISSIONS.ORG_MANAGE)
