@@ -413,19 +413,22 @@ enum NotificationReadStatus {
 }
 
 model Attachment {
-  id           String   @id @default(uuid()) @db.Uuid
-  requestId    String?  @db.Uuid
-  filename     String
-  storedName   String   @unique
-  mimeType     String
-  size         Int
-  uploadedById String   @db.Uuid
-  createdAt    DateTime @default(now())
+  id             String   @id @default(uuid()) @db.Uuid
+  requestId      String?  @db.Uuid
+  announcementId String?  @db.Uuid // generalized owner (Plan §18 announcement attachments)
+  filename       String
+  storedName     String   @unique
+  mimeType       String
+  size           Int
+  uploadedById   String   @db.Uuid
+  createdAt      DateTime @default(now())
 
-  request    RequestDocument? @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  uploadedBy User             @relation("Attachments", fields: [uploadedById], references: [id])
+  request      RequestDocument? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  announcement Announcement?    @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  uploadedBy   User             @relation("Attachments", fields: [uploadedById], references: [id])
 
   @@index([requestId])
+  @@index([announcementId])
   @@map("attachments")
 }
 
@@ -486,6 +489,7 @@ model Announcement {
   createdBy User                  @relation("Announcements", fields: [createdById], references: [id])
   targets   AnnouncementTarget[]
   reads     AnnouncementRead[]
+  attachments Attachment[]
 
   @@index([status, publishAt])
   @@index([category])

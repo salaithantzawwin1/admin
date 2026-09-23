@@ -20,9 +20,16 @@ export class AttachmentsController {
     @UploadedFile() file: Express.Multer.File | undefined,
     @Req() req,
     @Query('requestId') requestId?: string,
+    @Query('announcementId') announcementId?: string,
   ) {
     if (!file) throw new BadRequestException('No file provided');
-    return this.attachments.upload(file, requestId || undefined, req.user.id, req.user.username);
+    return this.attachments.upload(file, requestId || undefined, req.user.id, req.user.username, announcementId || undefined);
+  }
+
+  /** Metadata list for an announcement (caller is announcements-manage guarded or a reader). */
+  @Get('announcement/:announcementId')
+  async listByAnnouncement(@Param('announcementId') announcementId: string) {
+    return this.attachments.listByAnnouncement(announcementId);
   }
 
   @Get('request/:requestId')

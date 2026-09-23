@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, hasPermission } from '../api';
+import { api, getToken, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -32,20 +32,28 @@ interface Announcement {
   readCount?: number;
   createdAt: string;
 }
+interface Attachment { id: string; filename: string; size: number; mimeType: string }
 interface ReadStats { target: number; read: number; unread: number; acked: number; requiresAck: boolean }
+
+const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
 /** ============ Employee view ============ */
 function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reload: () => void }) {
   const [open, setOpen] = useState<Announcement | null>(null);
+  const [files, setFiles] = useState<Attachment[]>([]);
 
   const openDetail = async (a: Announcement) => {
     setOpen(a);
+    setFiles([]);
     if (!a.read) {
       try { await api(`/announcements/${a.id}/read`, { method: 'POST' }); } catch { /* best-effort */ }
       reload();
     }
+    try {
+      setFiles(await api<Attachment[]>(`/attachments/announcement/${a.id}`));
+    } catch { /* files are supplementary */ }
   };
 
   const ack = async (a: Announcement) => {
@@ -99,6 +107,22 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
             <span className="text-xs text-gray-400">{fmtDate(open.publishAt)}</span>
           </div>
           <p className="text-sm text-gray-700 whitespace-pre-wrap">{open.content}</p>
+          {files.length > 0 && (
+            <div className="mt-4 border-t border-gray-100 pt-3">
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Attachments</div>
+              <div className="space-y-1">
+                {files.map((f) => (
+                  <a
+                    key={f.id}
+                    href={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
+                    className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+                  >
+                    📎 {f.filename} <span className="text-xs text-gray-400">({fmtSize(f.size)})</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
           {open.requiresAck && !open.acked && (
             <div className="mt-4 flex justify-end">
               <Button onClick={() => ack(open)}>I acknowledge this notice</Button>
@@ -130,6 +154,8 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
   const [org, setOrg] = useState<{ departments: { id: string; name: string }[]; branches: { id: string; name: string }[]; users: { id: string; fullName: string; username: string }[] }>({
     departments: [], branches: [], users: [],
   });
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploadIds, setUploadIds] = useState<Announcement['id'][]>([]);
 
   const loadOrg = useCallback(() => {
     api<{ id: string; name: string }[]>('/departments').then((r) => setOrg((o) => ({ ...o, departments: r }))).catch(() => {});
@@ -142,8 +168,25 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
   const openCreate = () => {
     setEditing(null);
     setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userId: '', branchId: '' });
+    setPendingFiles([]);
     setError('');
     setFormOpen(true);
+  };
+
+  /** Upload files for a created/edited announcement (best-effort — name+content already saved). */
+  const uploadFiles = async (announcementId: string) => {
+    for (const f of pendingFiles) {
+      const fd = new FormData();
+      fd.append('file', f);
+      try {
+        await fetch(`/api/attachments/upload?announcementId=${announcementId}`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${getToken()}` },
+          body: fd,
+        });
+      } catch { /* surface nothing — the announcement itself is saved */ }
+    }
+    setPendingFiles([]);
   };
 
   const openEdit = (a: Announcement) => {
@@ -176,7 +219,9 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
                 ? { targetType: 'ROLE', targetId: form.roleId }
                 : { targetType: 'EMPLOYEE', targetId: form.userId };
         body.targets = [target];
-        await api('/announcements', { method: 'POST', body });
+        const created = await api<{ id: string }>('/announcements', { method: 'POST', body });
+        setUploadIds([created.id]);
+        await uploadFiles(created.id);
       } else {
         if (form.endAt === '' && editing.endAt) body.endAt = null; // explicit clear
         await api(`/announcements/${editing.id}`, { method: 'PATCH', body });
@@ -328,6 +373,20 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
                 <Input type="datetime-local" value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
               </div>
             </div>
+            {!editing && (
+              <div>
+                <label className="text-xs text-gray-500">Attachments (optional, max 10 MB each)</label>
+                <input
+                  type="file"
+                  multiple
+                  className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-gray-100 file:text-gray-700 file:cursor-pointer hover:file:bg-gray-200"
+                  onChange={(e) => setPendingFiles(Array.from(e.target.files ?? []))}
+                />
+                {pendingFiles.length > 0 && (
+                  <div className="text-xs text-gray-400 mt-1">{pendingFiles.map((f) => f.name).join(', ')}</div>
+                )}
+              </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button disabled={busy || !form.title || !form.content} onClick={submit}>{editing ? 'Save' : 'Create'}</Button>

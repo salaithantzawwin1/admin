@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { AnnouncementPriority, AnnouncementStatus, AnnouncementTargetType, Prisma, RoleName } from '@prisma/client';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -17,6 +19,8 @@ export interface TargetInput {
 
 @Injectable()
 export class AnnouncementsService {
+  private uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
+
   constructor(
     private prisma: PrismaService,
     private numbering: NumberingService,
@@ -178,7 +182,13 @@ export class AnnouncementsService {
     if (a.status === 'PUBLISHED' || a.status === 'EXPIRED') {
       throw new ConflictException('Published announcements stay in history — set an end date to expire it instead');
     }
+    // delete attachment files (DB rows cascade) before dropping the announcement
+    const files = await this.prisma.attachment.findMany({ where: { announcementId: id }, select: { storedName: true } });
     await this.prisma.announcement.delete({ where: { id } });
+    for (const f of files) {
+      const p = path.join(this.uploadRoot, f.storedName);
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    }
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ANNOUNCEMENT_DELETED', module: 'ANNOUNCEMENT', recordId: id,
