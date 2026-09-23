@@ -77,11 +77,15 @@ const DRIVER_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red' | 'gray'
   INACTIVE: 'gray',
 };
 
-const TYPES = ['SEDAN', 'SUV', 'PICKUP', 'VAN', 'BUS', 'TRUCK', 'OTHER'];
+interface VehicleTypeRow {
+  id: string;
+  name: string;
+  active: boolean;
+}
 const VEHICLE_STATUSES = ['AVAILABLE', 'IN_USE', 'UNDER_MAINTENANCE', 'OUT_OF_SERVICE'];
 const DRIVER_STATUSES = ['AVAILABLE', 'ON_TRIP', 'ON_LEAVE', 'INACTIVE'];
 
-const emptyVForm = { vehicleNo: '', vehicleType: 'SEDAN', brandModel: '', capacity: 4, driverId: '', status: 'AVAILABLE' };
+const emptyVForm = { vehicleNo: '', vehicleType: '', brandModel: '', capacity: 4, driverId: '', status: 'AVAILABLE' };
 const emptyDForm = { name: '', phone: '', licenseNo: '', status: 'AVAILABLE' };
 
 export default function Fleet() {
@@ -109,17 +113,22 @@ export default function Fleet() {
   const [absences, setAbsences] = useState<Absence[]>([]);
   const [absenceForm, setAbsenceForm] = useState({ driverId: '', startsAt: '', endsAt: '', reason: '' });
   const canManage = hasPermission('fleet.manage');
+  const canSetup = hasPermission('fleet.types.manage');
 
+  // vehicle type master data (Plan §6) — no hard-coded lists
+  const [types, setTypes] = useState<VehicleTypeRow[]>([]);
+  const [newType, setNewType] = useState('');
   // fleet view lives in the URL (?tab=absences) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const fleetTab: 'main' | 'absences' = tabParam === 'absences' ? 'absences' : 'main';
-  const setFleetTab = (t: 'main' | 'absences') => setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
+  const fleetTab: 'main' | 'absences' | 'setup' = tabParam === 'absences' || tabParam === 'setup' ? tabParam : 'main';
+  const setFleetTab = (t: 'main' | 'absences' | 'setup') => setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
 
   const load = useCallback(() => {
     api<Vehicle[]>('/fleet/vehicles').then(setVehicles).catch((e) => setError(e.message));
     api<Driver[]>('/fleet/drivers').then(setDrivers).catch(() => {});
     api<Absence[]>('/fleet/absences').then(setAbsences).catch(() => {});
+    api<VehicleTypeRow[]>('/fleet/vehicle-types').then(setTypes).catch(() => {});
     if (hasPermission('fleet.manage')) {
       api<TgBinding[]>('/fleet/drivers/telegram-bindings')
         .then((list) => setBindings(Object.fromEntries(list.map((b) => [b.id, b]))))
@@ -236,6 +245,42 @@ export default function Fleet() {
     }
   };
 
+  // ---------- vehicle type setup (Plan §6 master data) ----------
+  const createType = async () => {
+    if (!newType.trim()) return;
+    setError('');
+    try {
+      await api('/fleet/vehicle-types', { method: 'POST', body: { name: newType.trim() } });
+      setNewType('');
+      flash('Vehicle type added');
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add type');
+    }
+  };
+
+  const toggleType = async (t: VehicleTypeRow) => {
+    setError('');
+    try {
+      await api(`/fleet/vehicle-types/${t.id}`, { method: 'PATCH', body: { active: !t.active } });
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update type');
+    }
+  };
+
+  const deleteType = async (t: VehicleTypeRow) => {
+    if (!window.confirm(`Delete vehicle type ${t.name}?`)) return;
+    setError('');
+    try {
+      await api(`/fleet/vehicle-types/${t.id}`, { method: 'DELETE' });
+      flash(`Type ${t.name} deleted`);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete type — deactivate it instead if vehicles use it');
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -267,6 +312,16 @@ export default function Fleet() {
             {t === 'main' ? 'Vehicles & Drivers' : `🗓 Driver Absences (${absences.filter((a) => a.status === 'ACTIVE').length})`}
           </button>
         ))}
+        {canSetup && (
+          <button
+            className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+              fleetTab === 'setup' ? 'bg-yellow-50 border-yellow-300 text-yellow-800' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+            }`}
+            onClick={() => setFleetTab('setup')}
+          >
+            ⚙ Setup
+          </button>
+        )}
       </div>
 
       {deletingV && (
@@ -333,7 +388,8 @@ export default function Fleet() {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Type</label>
                 <Select value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
-                  {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  <option value="">— Type —</option>
+                  {types.filter((t) => t.active || t.name === vForm.vehicleType).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                 </Select>
               </div>
             </div>
@@ -352,7 +408,7 @@ export default function Fleet() {
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setShowV(false)}>Cancel</Button>
-              <Button onClick={createVehicle} disabled={!vForm.vehicleNo || !vForm.brandModel}>Add Vehicle</Button>
+              <Button onClick={createVehicle} disabled={!vForm.vehicleNo || !vForm.brandModel || !vForm.vehicleType}>Add Vehicle</Button>
             </div>
           </div>
         </Modal>
@@ -369,7 +425,8 @@ export default function Fleet() {
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Type</label>
                 <Select value={vForm.vehicleType} disabled>
-                  {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  <option value="">— Type —</option>
+                  {types.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                 </Select>
               </div>
             </div>
@@ -722,6 +779,50 @@ export default function Fleet() {
         )}
       </Card>
       </>
+      )}{fleetTab === 'setup' && (canManage || canSetup) && (
+        <Card className="mb-6 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Vehicle types</h2>
+              <p className="text-xs text-gray-500 mt-0.5">Master data for the vehicle Type picker (Plan §6) — stored uppercase like SEDAN / SUV. A type that vehicles or requests already use cannot be deleted; deactivate it to hide it from pickers.</p>
+            </div>
+          </div>
+          {canManage && (
+            <div className="flex gap-2 mb-4">
+              <Input
+                placeholder="New type e.g. STAFF_BUS"
+                value={newType}
+                onChange={(e) => setNewType(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') createType(); }}
+              />
+              <Button onClick={createType} disabled={!newType.trim()}>Add type</Button>
+            </div>
+          )}
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                <th className="px-4 py-3 font-medium">Type</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {types.length === 0 && <tr><td colSpan={canManage ? 3 : 2}><Empty label="No vehicle types yet" /></td></tr>}
+              {types.map((t) => (
+                <tr key={t.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 font-medium font-mono text-xs">{t.name}</td>
+                  <td className="px-4 py-2.5"><Badge color={t.active ? 'green' : 'gray'}>{t.active ? 'ACTIVE' : 'HIDDEN'}</Badge></td>
+                  {canManage && (
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                      <button className="text-blue-600 hover:underline mr-3" onClick={() => toggleType(t)}>{t.active ? 'Hide' : 'Show'}</button>
+                      <button className="text-red-600 hover:underline" onClick={() => deleteType(t)}>Delete</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
       )}
 
       {historyFor && (

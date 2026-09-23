@@ -54,6 +54,12 @@ interface SetupRoom {
   status: string;
 }
 
+interface FacilityRow {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
   DRAFT: 'gray',
   PENDING_APPROVAL: 'yellow',
@@ -65,7 +71,7 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   CANCELLED: 'gray',
 };
 
-type Tab = 'requests' | 'calendar' | 'setup';
+type Tab = 'requests' | 'calendar' | 'setup' | 'facilities';
 
 // local datetime-local value from a Date (no TZ shift)
 function toLocalInput(d: Date): string {
@@ -77,7 +83,7 @@ export default function MeetingRooms() {
   // active tab lives in the URL (?tab=calendar) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as Tab | null;
-  const tab: Tab = tabParam === 'calendar' || tabParam === 'setup' ? tabParam : 'requests';
+  const tab: Tab = tabParam === 'calendar' || tabParam === 'setup' || tabParam === 'facilities' ? tabParam : 'requests';
   const setTab = (t: Tab) => setSearchParams(t === 'requests' ? {} : { tab: t }, { replace: false });
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
@@ -98,17 +104,20 @@ export default function MeetingRooms() {
   // room setup CRUD state (Administration)
   const [setup, setSetup] = useState<SetupRoom[]>([]);
   const [showRoomForm, setShowRoomForm] = useState(false);
-  const [roomForm, setRoomForm] = useState({ name: '', location: '', capacity: 8, facilities: '', status: 'AVAILABLE' });
+  const [roomForm, setRoomForm] = useState({ name: '', location: '', capacity: 8, facilities: '' as string | string[], status: 'AVAILABLE' });
   const [editingRoom, setEditingRoom] = useState<SetupRoom | null>(null);
   const [deletingRoom, setDeletingRoom] = useState<SetupRoom | null>(null);
+  // facility master data (Plan §7) — checkbox picker source
+  const [facilities, setFacilities] = useState<FacilityRow[]>([]);
+  const [newFacility, setNewFacility] = useState('');
 
   // public holidays for the selected start-date year (weekend/holiday warning)
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [slotHint, setSlotHint] = useState('');
 
   const loadSetup = useCallback(() => {
-    if (!hasPermission('meeting-rooms.assign')) return;
     api<SetupRoom[]>('/meeting-rooms/setup').then(setSetup).catch(() => {});
+    api<FacilityRow[]>('/meeting-rooms/facilities').then(setFacilities).catch(() => {});
   }, []);
 
   // when the form opens, prefill Start with the current date (next full hour) —
@@ -223,14 +232,29 @@ export default function MeetingRooms() {
   const startWeekend = startDow === 0 || startDow === 6;
 
   // ---------- room setup CRUD handlers ----------
+  // facilities: string[] (checkboxes) ⇄ CSV string for storage/API
+  const facCsv = (f: string | string[]): string =>
+    Array.isArray(f) ? f.join(', ') : f;
+  const toggleFacility = (name: string) => {
+    const current = Array.isArray(roomForm.facilities)
+      ? roomForm.facilities
+      : roomForm.facilities.split(',').map((x) => x.trim()).filter(Boolean);
+    const next = current.includes(name) ? current.filter((f) => f !== name) : [...current, name];
+    setRoomForm({ ...roomForm, facilities: next });
+  };
+  const selectedFacilities = (): string[] =>
+    Array.isArray(roomForm.facilities)
+      ? roomForm.facilities
+      : roomForm.facilities.split(',').map((x) => x.trim()).filter(Boolean);
+
   const createRoom = async () => {
     setModalError('');
     try {
       await api('/meeting-rooms/setup', {
         method: 'POST',
-        body: { name: roomForm.name.trim(), location: roomForm.location.trim() || undefined, capacity: Number(roomForm.capacity) || 8, facilities: roomForm.facilities.trim() || undefined },
+        body: { name: roomForm.name.trim(), location: roomForm.location.trim() || undefined, capacity: Number(roomForm.capacity) || 8, facilities: facCsv(roomForm.facilities) || undefined },
       });
-      setRoomForm({ name: '', location: '', capacity: 8, facilities: '', status: 'AVAILABLE' });
+      setRoomForm({ name: '', location: '', capacity: 8, facilities: [], status: 'AVAILABLE' });
       setShowRoomForm(false);
       toast('Room added');
       loadSetup();
@@ -250,7 +274,7 @@ export default function MeetingRooms() {
           name: roomForm.name.trim(),
           location: roomForm.location.trim() || undefined,
           capacity: Number(roomForm.capacity) || 8,
-          facilities: roomForm.facilities.trim() || undefined,
+          facilities: facCsv(roomForm.facilities) || undefined,
           status: roomForm.status,
         },
       });
@@ -260,6 +284,42 @@ export default function MeetingRooms() {
       load();
     } catch (e) {
       setModalError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  // ---------- facility setup CRUD handlers ----------
+  const createFacility = async () => {
+    if (!newFacility.trim()) return;
+    setError('');
+    try {
+      await api('/meeting-rooms/facilities', { method: 'POST', body: { name: newFacility.trim() } });
+      setNewFacility('');
+      toast('Facility added');
+      loadSetup();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add facility');
+    }
+  };
+
+  const toggleFacilityRow = async (f: FacilityRow) => {
+    setError('');
+    try {
+      await api(`/meeting-rooms/facilities/${f.id}`, { method: 'PATCH', body: { active: !f.active } });
+      loadSetup();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to update facility');
+    }
+  };
+
+  const deleteFacility = async (f: FacilityRow) => {
+    if (!window.confirm(`Delete facility ${f.name}?`)) return;
+    setError('');
+    try {
+      await api(`/meeting-rooms/facilities/${f.id}`, { method: 'DELETE' });
+      toast(`Facility ${f.name} deleted`);
+      loadSetup();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to delete facility — deactivate it instead if rooms use it');
     }
   };
 
@@ -280,7 +340,7 @@ export default function MeetingRooms() {
   const TABS: { key: Tab; label: string }[] = [
     { key: 'requests', label: 'Requests' },
     { key: 'calendar', label: 'Calendar' },
-    ...(canAssign ? [{ key: 'setup' as Tab, label: 'Room setup' }] : []),
+    ...(canAssign ? [{ key: 'setup' as Tab, label: 'Room setup' }, { key: 'facilities' as Tab, label: 'Facilities' }] : []),
   ];
 
   return (
@@ -526,6 +586,39 @@ export default function MeetingRooms() {
         </>
       )}
 
+      {/* ---------- Tab: Facilities (Administration only) ---------- */}
+      {tab === 'facilities' && canAssign && (
+        <Card className="mb-6 p-5">
+          <div className="mb-3">
+            <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Facilities</h2>
+            <p className="text-xs text-gray-500 mt-0.5">Master data for the room Facilities checkboxes (Plan §7). A facility that rooms already use cannot be deleted — deactivate it to hide it from the picker.</p>
+          </div>
+          <div className="flex gap-2 mb-4">
+            <Input
+              placeholder="New facility e.g. Whiteboard"
+              value={newFacility}
+              onChange={(e) => setNewFacility(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') createFacility(); }}
+            />
+            <Button onClick={createFacility} disabled={!newFacility.trim()}>Add facility</Button>
+          </div>
+          {facilities.length === 0 ? (
+            <Empty label="No facilities yet — add the ones your rooms offer" />
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {facilities.map((f) => (
+                <div key={f.id} className="flex items-center gap-2 border border-gray-200 rounded-full px-3 py-1.5 text-sm">
+                  <span className={f.active ? 'text-gray-800' : 'text-gray-400 line-through'}>{f.name}</span>
+                  <Badge color={f.active ? 'green' : 'gray'}>{f.active ? 'ACTIVE' : 'HIDDEN'}</Badge>
+                  <button className="text-blue-600 hover:underline text-xs" onClick={() => toggleFacilityRow(f)}>{f.active ? 'Hide' : 'Show'}</button>
+                  <button className="text-red-600 hover:underline text-xs" onClick={() => deleteFacility(f)}>Delete</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
       {/* ---------- Tab: Room setup (Administration only) ---------- */}
       {tab === 'setup' && canAssign && (
         <>
@@ -537,7 +630,7 @@ export default function MeetingRooms() {
                 onClick={() => {
                   setShowRoomForm(!showRoomForm);
                   setEditingRoom(null);
-                  setRoomForm({ name: '', location: '', capacity: 8, facilities: '', status: 'AVAILABLE' });
+                  setRoomForm({ name: '', location: '', capacity: 8, facilities: [], status: 'AVAILABLE' });
                 }}
               >
                 {showRoomForm ? 'Close' : '+ Add Room'}
@@ -567,7 +660,21 @@ export default function MeetingRooms() {
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Facilities</label>
-                    <Input placeholder="TV, Whiteboard…" value={roomForm.facilities} onChange={(e) => setRoomForm({ ...roomForm, facilities: e.target.value })} />
+                    <div className="flex flex-wrap gap-3 mb-2">
+                      {facilities.filter((f) => f.active).map((f) => (
+                        <label key={f.id} className="flex items-center gap-1.5 text-sm text-gray-700">
+                          <input type="checkbox" className="accent-yellow-600" checked={selectedFacilities().includes(f.name)} onChange={() => toggleFacility(f.name)} />
+                          {f.name}
+                        </label>
+                      ))}
+                    </div>
+                    {selectedFacilities().some((x) => !facilities.some((f) => f.name === x)) && (
+                      <Input
+                        value={selectedFacilities().filter((x) => !facilities.some((f) => f.name === x)).join(', ')}
+                        readOnly
+                        title="Legacy free-text values kept on this room — manage them in the Facilities tab"
+                      />
+                    )}
                   </div>
                   <div className="flex justify-end gap-2 pt-2">
                     <Button variant="ghost" onClick={() => { setShowRoomForm(false); setEditingRoom(null); }}>Cancel</Button>
