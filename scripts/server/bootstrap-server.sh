@@ -2,14 +2,22 @@
 # =============================================================
 # AMS Server Bootstrap — installs Docker Engine + Compose plugin
 # Target: Ubuntu 22.04 (adminsrv / 192.168.100.110)
-# Run as:  PW='...' bash scripts/server/bootstrap-server.sh
+# Run as:  PW='...' bash scripts/server/bootstrap-server.sh   (password via env)
+#          or after key-setup: HOST=... USER=... bash scripts/server/bootstrap-server.sh
+# NOTE: never hardcode the server password here — this file is committed.
 # =============================================================
 set -euo pipefail
 
-PW='asd123!@#'
+PW="${PW:?Provide the server password: PW='...' bash $0}"
+HOST="${HOST:-192.168.100.110}"
+SSH_USER="${SSH_USER:-glgadmin}"
 
 run() {
-  plink -ssh glgadmin@192.168.100.110 -pw "$PW" "$1"
+  if [ -n "${USE_PLINK:-}" ]; then
+    plink -ssh "$SSH_USER@$HOST" -pw "$PW" "$1"
+  else
+    ssh "$SSH_USER@$HOST" "$1"
+  fi
 }
 
 # remote sudo helper: runs 'echo PW | sudo -S ...' on the server
@@ -40,9 +48,9 @@ echo "== [4/5] Enabling & starting Docker =="
 run "sudo -k"
 srun "systemctl enable --now docker"
 
-echo "== [5/5] Adding glgadmin to docker group =="
+echo "== [5/5] Adding $SSH_USER to docker group =="
 run "sudo -k"
-srun "usermod -aG docker glgadmin"
+srun "usermod -aG docker $SSH_USER"
 
 run "docker --version && docker compose version"
 echo "BOOTSTRAP COMPLETE"
