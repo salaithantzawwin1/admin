@@ -77,7 +77,30 @@ curl -s -X PATCH -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: applicatio
   -d '{"endAt":"2030-06-01T00:00:00.000Z"}' "$BASE/announcements/$AID" | J "'endAt='+j.endAt"
 docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE module='ANNOUNCEMENT' ORDER BY \\\"createdAt\\\" DESC LIMIT 3\""
 
-echo "== 17) cleanup =="
+echo "== 17) rich text sanitized on create (script stripped, tags kept) =="
+R=$(curl -s -X POST -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"E2E rich","content":"<h2>Hello</h2><script>alert(1)</script><p>Bold <b>text</b> <img src=x onerror=alert(2)></p>","targets":[{"targetType":"ALL"}]}' \
+  "$BASE/announcements")
+RID=$(echo "$R" | J "j.id")
+echo "$R" | J "'stored='+j.content"
+echo "$R" | J "j.content.includes('<script')||j.content.includes('onerror') ? 'XSS-FAIL' : 'SANITIZED-OK'"
+
+echo "== 18) unpublish: PUBLISHED → DRAFT (expect DRAFT) =="
+curl -s -X POST -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$AID/unpublish" | J "'status='+j.status"
+echo "-- employee /mine after unpublish (expect 0) =="
+curl -s -H "Authorization: Bearer $ETOKEN" "$BASE/announcements/mine" | J "j.filter(x=>x.id==='$AID').length"
+echo "-- unpublish a draft again (expect 409) =="
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$AID/unpublish"
+echo "-- employee cannot unpublish (expect 403) =="
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $ETOKEN" "$BASE/announcements/$RID/unpublish"
+echo "-- republish after unpublish (expect PUBLISHED + notified) =="
+curl -s -X POST -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$AID/publish" | J "'status='+j.status"
+docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE action='ANNOUNCEMENT_UNPUBLISHED' ORDER BY \\\"createdAt\\\" DESC LIMIT 1\""
+
+echo "== 19) notification body is plain text (no tags) =="
+docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT body FROM notifications WHERE type='ANNOUNCEMENT' AND title LIKE '%E2E water%' ORDER BY \\\"createdAt\\\" DESC LIMIT 1\"" | head -c 120; echo
+
+echo "== 20) cleanup =="
 curl -s -X DELETE -H "Authorization: Bearer $ATOKEN" "$BASE/attachments/$FID" | head -c 40; echo
 curl -s -X DELETE -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$SID" | head -c 40; echo
 # published ones are delete-guarded by the API → remove test rows directly (cascades targets/reads/attachment rows)

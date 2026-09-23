@@ -237,3 +237,8 @@ curl -s http://127.0.0.1:3010/api/health
   including PURCHASING/FINANCE (migration 27 + boot seed); Permission Matrix screen now
   labels all 19 codes; added `verify-rbac.sh` (guard 403/200 checks, runtime matrix edit,
   superuser lock, audit logging).
+- 2026-09-23 — announcements v2: **Unpublish** (PUBLISHED → DRAFT, read/ack history kept,
+  audit-logged), rich-text compose (sanitized HTML: bold/italic/underline/strike, H2/H3,
+  lists, alignment — script/style/event handlers stripped server-side), notification and
+  Telegram bodies now plain text, photo-first attachments (image grid + zoom, docs as
+  download cards), 10-file per-announcement cap, admin detail view.
