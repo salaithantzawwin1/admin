@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, getToken, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { RichTextEditor } from '../components/RichTextEditor';
@@ -92,21 +92,82 @@ const splitFiles = (files: Attachment[]) => ({
   docs: files.filter((f) => !isImage(f.mimeType)),
 });
 
+/** Full-screen photo viewer — arrows, keyboard, counter, download link. */
+function Lightbox({ photos, index, onClose, onIndex }: { photos: Attachment[]; index: number; onClose: () => void; onIndex: (i: number) => void }) {
+  const f = photos[index];
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+      if (e.key === 'ArrowRight' && index < photos.length - 1) onIndex(index + 1);
+      if (e.key === 'ArrowLeft' && index > 0) onIndex(index - 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [index, photos.length, onClose, onIndex]);
+  if (!f) return null;
+  const src = `/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`;
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/90 flex flex-col" onClick={onClose}>
+      <div className="flex items-center justify-between px-4 py-3 text-white/90 text-sm" onClick={(e) => e.stopPropagation()}>
+        <span className="font-mono text-xs truncate">{f.filename}</span>
+        <div className="flex items-center gap-3">
+          <span>{index + 1} / {photos.length}</span>
+          <a href={src} download className="hover:text-white" title="Download">⬇</a>
+          <button onClick={onClose} className="hover:text-white text-lg leading-none" title="Close (Esc)">×</button>
+        </div>
+      </div>
+      <div className="flex-1 flex items-center justify-center min-h-0 relative px-14">
+        {index > 0 && (
+          <button
+            className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 text-white text-xl transition-colors"
+            onClick={(e) => { e.stopPropagation(); onIndex(index - 1); }}
+            title="Previous (←)"
+          >‹</button>
+        )}
+        <img
+          src={src}
+          alt={f.filename}
+          className="max-w-full max-h-full object-contain rounded shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        />
+        {index < photos.length - 1 && (
+          <button
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 text-white text-xl transition-colors"
+            onClick={(e) => { e.stopPropagation(); onIndex(index + 1); }}
+            title="Next (→)"
+          >›</button>
+        )}
+      </div>
+      <div className="h-16 shrink-0 flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
+        {photos.map((p, i) => (
+          <img
+            key={p.id}
+            src={`/api/attachments/${p.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
+            alt=""
+            onClick={() => onIndex(i)}
+            className={`h-10 w-14 object-cover rounded cursor-pointer transition-all ${i === index ? 'ring-2 ring-white opacity-100' : 'opacity-50 hover:opacity-80'}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** Photos first (grid), then text, then document links — Plan §18 attachments. */
 function AttachmentSections({ files, className = '' }: { files: Attachment[]; className?: string }) {
   const { photos, docs } = splitFiles(files);
-  const [zoom, setZoom] = useState<Attachment | null>(null);
+  const [lightbox, setLightbox] = useState<number | null>(null);
   if (files.length === 0) return null;
   return (
     <div className={className}>
       {photos.length > 0 && (
         <div className="ann-gallery mt-3">
-          {photos.map((f) => (
+          {photos.map((f, i) => (
             <img
               key={f.id}
               src={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
               alt={f.filename}
-              onClick={() => setZoom(f)}
+              onClick={() => setLightbox(i)}
             />
           ))}
         </div>
@@ -127,13 +188,56 @@ function AttachmentSections({ files, className = '' }: { files: Attachment[]; cl
           </div>
         </div>
       )}
-      {zoom && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setZoom(null)}>
-          <img src={`/api/attachments/${zoom.id}/download?token=${encodeURIComponent(getToken() ?? '')}`} alt={zoom.filename} className="max-w-full max-h-full rounded-lg shadow-2xl" />
-        </div>
-      )}
+      {lightbox != null && <Lightbox photos={photos} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />}
     </div>
   );
+}
+
+/** Copy the announcement's deep link (?ann=<id> reopens it) to the clipboard. */
+function ShareButton({ id, code }: { id: string; code: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    const url = `${location.origin}/announcements?ann=${id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard API can be blocked (http LAN) — fall back to the old way
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  return (
+    <button
+      onClick={copy}
+      className={`text-xs px-2 py-1 rounded-md border transition-colors ${copied ? 'bg-green-50 border-green-300 text-green-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700'}`}
+      title={`Copy a link to ${code}`}
+    >
+      {copied ? '✓ Link copied' : '🔗 Share'}
+    </button>
+  );
+}
+
+/** Open an announcement straight from a shared ?ann=<id> link (once items arrive). */
+function useDeepLink(items: Announcement[], open: (a: Announcement) => void) {
+  const done = useRef('');
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('ann');
+    if (!id || done.current === id || items.length === 0) return;
+    const a = items.find((x) => x.id === id);
+    if (a) {
+      done.current = id;
+      open(a);
+      history.replaceState(null, '', '/announcements');
+    }
+  }, [items, open]);
 }
 
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
@@ -167,6 +271,8 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
   const [open, setOpen] = useState<Announcement | null>(null);
   const [files, setFiles] = useState<Attachment[]>([]);
   const [tab, setTab] = useState<EmpTab>('ALL');
+
+  useDeepLink(items, (a) => { void openDetail(a); });
 
   const needsAck = items.filter((a) => a.requiresAck && !a.acked);
   const unread = items.filter((a) => !a.read);
@@ -263,6 +369,7 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
             <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[open.priority]}`}>{nice(open.priority)}</span>
             {nice(open.category) !== nice(open.priority) && <span className="text-xs text-gray-500">{nice(open.category)}</span>}
             <span className="text-xs text-gray-400">{fmtDate(open.publishAt)}</span>
+            <span className="ml-auto"><ShareButton id={open.id} code={open.code} /></span>
           </div>
           <div className="text-sm text-gray-700 whitespace-pre-wrap rich-content" dangerouslySetInnerHTML={{ __html: open.content }} />
           <AttachmentSections files={files} />
@@ -701,10 +808,11 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
       {detailFor && (
         <Modal title={`${detailFor.code} — ${detailFor.title}`} onClose={() => setDetailFor(null)}>
           <div className="flex items-center gap-2 flex-wrap mb-3">
-            <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[detailFor.status]}`}>{detailFor.status}</span>
-            <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[detailFor.priority]}`}>{detailFor.priority}</span>
-            <span className="text-xs text-gray-500">{detailFor.category}</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[detailFor.status]}`}>{nice(detailFor.status)}</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[detailFor.priority]}`}>{nice(detailFor.priority)}</span>
+            {nice(detailFor.category) !== nice(detailFor.priority) && <span className="text-xs text-gray-500">{nice(detailFor.category)}</span>}
             <span className="text-xs text-gray-400">{fmtDate(detailFor.publishAt)}</span>
+            <span className="ml-auto"><ShareButton id={detailFor.id} code={detailFor.code} /></span>
           </div>
           <div className="text-sm text-gray-700 whitespace-pre-wrap rich-content" dangerouslySetInnerHTML={{ __html: detailFor.content }} />
           <AttachmentSections files={detailFiles} />
