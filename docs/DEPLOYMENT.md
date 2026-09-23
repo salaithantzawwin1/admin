@@ -228,3 +228,12 @@ curl -s http://127.0.0.1:3010/api/health
 - 2026-09-23 — removed a hardcoded server password from `bootstrap-server.sh` (pass `PW=` env);
   added `provision-new-server.sh` for the future physical server; documented the
   ready-to-deploy playbook (§8).
+- 2026-09-23 — announcements MVP live (migration 24/25): create/schedule/publish, targeting,
+  read/ack tracking, notifications.
+- 2026-09-23 — attachments generalized: `attachments.announcementId` (migration 26),
+  ownership-checked upload, cleanup on announcement delete; announcements E2E verify
+  script (`verify-announcements.sh`, 17 steps).
+- 2026-09-23 — **RBAC aligned with plan §5b**: `announcements.read` granted to all roles
+  including PURCHASING/FINANCE (migration 27 + boot seed); Permission Matrix screen now
+  labels all 19 codes; added `verify-rbac.sh` (guard 403/200 checks, runtime matrix edit,
+  superuser lock, audit logging).

@@ -153,6 +153,8 @@ On top of role-based checks, every API endpoint requires one or more **permissio
 | EMPLOYEE | requests.read.own, requests.create, attachments.use (3) — *org.read and fleet.read removed in v3.0.1: employees do not browse org/fleet master data, so the Fleet/Departments/Employees menus stay hidden* |
 | PURCHASING | org.read, requests.read.own, requests.create, attachments.use (4) |
 
+> **v3.0.3 (2026-09-23):** `announcements.read` (Plan §18) granted to **all roles** including PURCHASING and FINANCE — company notices are visible to every authenticated user; `announcements.manage` + `inventory.read`/`inventory.manage` remain Administration-only. Default grants ship via migration `00000000000027_rbac_announcements_all_roles` + boot-time seed (never overrides matrix edits).
+
 ---
 
 ## 6. Car Request Workflow
