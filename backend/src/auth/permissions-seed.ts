@@ -12,6 +12,8 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
   MANAGEMENT: ['inventory.read', 'announcements.read'],
   MAINTENANCE_COORDINATOR: ['inventory.read', 'announcements.read'],
+  PURCHASING: ['announcements.read'],
+  FINANCE: ['announcements.read'],
   SYSTEM_ADMIN: [], // superuser — every code is granted dynamically
 };
 
