@@ -91,6 +91,13 @@ export class AnnouncementsController {
     return this.announcements.unpublish(id, this.actor(req));
   }
 
+  /** Pin/unpin — pinned notices sort first on the admin list and every /mine. */
+  @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
+  @Post(':id/pin')
+  togglePin(@Req() req, @Param('id') id: string) {
+    return this.announcements.togglePin(id, this.actor(req));
+  }
+
   /** Target/read/unread counts (requiresAck announcements). */
   @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
   @Get(':id/read-stats')

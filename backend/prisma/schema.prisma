@@ -482,6 +482,7 @@ model Announcement {
   startAt      DateTime?            // optional visible window start (defaults to publishAt)
   endAt        DateTime?            // when it expires (auto EXPIRED after this)
   requiresAck  Boolean              @default(false) // IMPORTANT+ → admin sees target/read/unread
+  pinnedAt     DateTime?            // admin pin → sorted first on every list
   createdById  String               @db.Uuid
   createdAt    DateTime             @default(now())
   updatedAt    DateTime             @updatedAt
@@ -493,6 +494,7 @@ model Announcement {
 
   @@index([status, publishAt])
   @@index([category])
+  @@index([pinnedAt])
   @@map("announcements")
 }
 

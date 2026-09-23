@@ -224,6 +224,20 @@ export class AnnouncementsService {
     return updated;
   }
 
+  /** Toggle the pin — pinned announcements float to the top of every list. */
+  async togglePin(id: string, actor: Actor) {
+    const a = await this.prisma.announcement.findUnique({ where: { id } });
+    if (!a) throw new NotFoundException('Announcement not found');
+    const pinnedAt = a.pinnedAt ? null : new Date();
+    const updated = await this.prisma.announcement.update({ where: { id }, data: { pinnedAt } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: pinnedAt ? 'ANNOUNCEMENT_PINNED' : 'ANNOUNCEMENT_UNPINNED', module: 'ANNOUNCEMENT', recordId: id,
+      newValue: { code: a.code, pinned: !!pinnedAt },
+    });
+    return updated;
+  }
+
   async publish(id: string, actor: Actor) {
     const a = await this.prisma.announcement.findUnique({ where: { id }, include: { targets: true } });
     if (!a) throw new NotFoundException('Announcement not found');
@@ -293,11 +307,27 @@ export class AnnouncementsService {
 
   // ---------- admin views ----------
 
-  listAll() {
-    return this.prisma.announcement.findMany({
-      orderBy: [{ createdAt: 'desc' }],
+  /** Admin list — pinned first, then newest; each row carries audience-size + department member counts. */
+  async listAll() {
+    const rows = await this.prisma.announcement.findMany({
+      orderBy: [{ pinnedAt: 'desc' }, { createdAt: 'desc' }],
       include: { targets: true, createdBy: { select: { fullName: true } }, _count: { select: { reads: true } } },
     });
+    const deptCounts = await this.prisma.$queryRaw<{ departmentId: string; memberCount: number }[]>`
+      SELECT "departmentId", "memberCount" FROM "department_member_counts"`;
+    const countMap = new Map(deptCounts.map((d) => [d.departmentId, d.memberCount]));
+    const enriched = await Promise.all(rows.map(async (a) => {
+      const audience = await this.audienceIds(a.id);
+      return {
+        ...a,
+        audienceCount: audience.length,
+        targetsWithCounts: a.targets.map((t) => ({
+          ...t,
+          memberCount: t.targetType === 'DEPARTMENT' && t.targetId ? (countMap.get(t.targetId) ?? null) : null,
+        })),
+      };
+    }));
+    return enriched;
   }
 
   /** Target/read/unread for the tracking view (IMPORTANT+ only, Plan §18). */
@@ -369,6 +399,7 @@ export class AnnouncementsService {
         ],
       },
       orderBy: [
+        { pinnedAt: 'desc' },
         { publishAt: 'desc' },
       ],
       include: {

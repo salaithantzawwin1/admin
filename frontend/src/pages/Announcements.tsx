@@ -23,14 +23,18 @@ const STATUS_STYLE: Record<string, string> = {
   EXPIRED: 'bg-gray-100 text-gray-400',
 };
 
-interface Target { targetType: string; targetId: string | null; targetLabel: string }
+interface Target { targetType: string; targetId: string | null; targetLabel: string; memberCount?: number | null }
 interface Announcement {
   id: string; code: string; title: string; content: string;
   category: string; priority: string; status: string;
   publishAt: string | null; endAt: string | null; requiresAck: boolean;
+  pinnedAt?: string | null;
   createdBy?: string; targets?: Target[];
   read?: boolean; acked?: string | null;
   readCount?: number;
+  /** admin list enrichment */
+  audienceCount?: number;
+  targetsWithCounts?: Target[];
   /** photo thumbnails included in /mine responses (first 4) */
   photos?: Attachment[];
   createdAt: string;
@@ -42,6 +46,38 @@ interface ReadStats { target: number; read: number; unread: number; acked: numbe
 const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
 const isImage = (mime: string) => mime.startsWith('image/');
+
+/** Enum → human label (raw codes like EMERGENCY read harsh and shouty). */
+const FRIENDLY: Record<string, string> = {
+  GENERAL: 'General', OFFICE: 'Office', FACILITY: 'Facility', TRANSPORT: 'Transport',
+  MEETING_ROOM: 'Meeting room', MAINTENANCE: 'Maintenance', SAFETY: 'Safety',
+  HOLIDAY: 'Holiday', IT: 'IT', EMERGENCY: 'Emergency', OTHER: 'Other',
+  NORMAL: 'Normal', IMPORTANT: 'Important', URGENT: 'Urgent',
+  PUBLISHED: 'Published', DRAFT: 'Draft', SCHEDULED: 'Scheduled', EXPIRED: 'Expired',
+  ALL: 'Everyone', DEPARTMENT: 'Department', BRANCH: 'Branch', ROLE: 'Role', EMPLOYEE: 'Employee',
+};
+const nice = (s: string) => FRIENDLY[s] ?? s;
+
+/** "2h ago" relative time (full date on hover via title). */
+const relTime = (s: string | null) => {
+  if (!s) return '';
+  const min = Math.round((Date.now() - new Date(s).getTime()) / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+};
+
+/** Priority card accent — emergencies must be unmissable when scanning. */
+const PRIORITY_ACCENT: Record<string, string> = {
+  EMERGENCY: 'border-l-4 border-l-red-500 bg-red-50/40',
+  URGENT: 'border-l-4 border-l-orange-400 bg-orange-50/40',
+  IMPORTANT: 'border-l-4 border-l-amber-300',
+  NORMAL: '',
+};
 
 /** Strip tags for one-line previews (content itself is sanitized server-side). */
 const plain = (html: string) =>
@@ -103,7 +139,7 @@ function AttachmentSections({ files, className = '' }: { files: Attachment[]; cl
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
 /** Miniature photo strip for list cards — inline, lazy, click-through to the detail view. */
-function PhotoStrip({ photos, onOpen }: { photos: Attachment[]; onOpen: () => void }) {
+function PhotoStrip({ photos, onOpen, dim }: { photos: Attachment[]; onOpen: () => void; dim?: boolean }) {
   if (photos.length === 0) return null;
   return (
     <div className="mt-2 flex items-center gap-2">
@@ -114,7 +150,7 @@ function PhotoStrip({ photos, onOpen }: { photos: Attachment[]; onOpen: () => vo
             src={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
             alt={f.filename}
             loading="lazy"
-            className="w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-80"
+            className={`w-14 h-14 object-cover rounded-lg border border-gray-200 cursor-pointer transition-opacity ${dim ? 'opacity-60' : 'hover:opacity-80'}`}
             onClick={onOpen}
           />
         ))}
@@ -125,9 +161,16 @@ function PhotoStrip({ photos, onOpen }: { photos: Attachment[]; onOpen: () => vo
 }
 
 /** ============ Employee view ============ */
+type EmpTab = 'ALL' | 'UNREAD' | 'ACK';
+
 function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reload: () => void }) {
   const [open, setOpen] = useState<Announcement | null>(null);
   const [files, setFiles] = useState<Attachment[]>([]);
+  const [tab, setTab] = useState<EmpTab>('ALL');
+
+  const needsAck = items.filter((a) => a.requiresAck && !a.acked);
+  const unread = items.filter((a) => !a.read);
+  const shown = tab === 'UNREAD' ? unread : tab === 'ACK' ? needsAck : items;
 
   const openDetail = async (a: Announcement) => {
     setOpen(a);
@@ -154,22 +197,51 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
 
   if (items.length === 0) return <Empty label="No announcements right now" />;
 
+  const tabs: { key: EmpTab; label: string; count?: number }[] = [
+    { key: 'ALL', label: 'All', count: items.length },
+    { key: 'UNREAD', label: 'Unread', count: unread.length },
+    { key: 'ACK', label: 'Needs ack', count: needsAck.length },
+  ];
+
   return (
     <div className="space-y-3">
-      {items.map((a) => (
-        <Card key={a.id} className={`p-4 ${!a.read ? 'border-l-4 border-l-blue-500' : ''}`}>
+      <div className="flex gap-1.5">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+              tab === t.key ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {t.label}{t.count != null && t.count > 0 && ` · ${t.count}`}
+          </button>
+        ))}
+      </div>
+      {shown.length === 0 && <Empty label={tab === 'ACK' ? 'Nothing waiting for acknowledgement 🎉' : 'Nothing here'} />}
+      {shown.map((a) => (
+        <Card
+          key={a.id}
+          className={`p-4 ${!a.read && a.priority === 'NORMAL' ? 'border-l-4 border-l-blue-500' : ''} ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.acked ? 'opacity-75' : ''}`}
+        >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[a.priority]}`}>{a.priority}</span>
-                <span className="text-xs text-gray-400">{a.category}</span>
+                {a.priority !== 'NORMAL' && <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[a.priority]}`}>{nice(a.priority)}</span>}
+                {nice(a.category) !== nice(a.priority) && <span className="text-xs text-gray-400">{nice(a.category)}</span>}
                 <span className="text-xs text-gray-300 font-mono">{a.code}</span>
               </div>
-              <button className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700" onClick={() => openDetail(a)}>
+              <button
+                className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700 group inline-flex items-center gap-1"
+                onClick={() => openDetail(a)}
+                title="Open announcement"
+              >
                 {a.title}
+                <span className="text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
               </button>
               <div className="text-xs text-gray-400 mt-0.5">
-                {a.createdBy} · {fmtDate(a.publishAt)}{a.endAt ? ` → until ${fmtDate(a.endAt)}` : ''}
+                {a.createdBy} · <span title={fmtDate(a.publishAt)}>{relTime(a.publishAt)}</span>
+                {a.endAt ? ` → until ${fmtDate(a.endAt)}` : ''}
                 {a.requiresAck && !a.acked && <span className="text-orange-500 font-medium"> · acknowledgement needed</span>}
               </div>
             </div>
@@ -180,16 +252,16 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
                 : <Button onClick={() => ack(a)}>Acknowledge</Button>)}
             </div>
           </div>
-          <p className="text-sm text-gray-600 mt-2 line-clamp-2">{plain(a.content)}</p>
-          <PhotoStrip photos={a.photos ?? []} onOpen={() => openDetail(a)} />
+          <p className={`text-sm text-gray-600 mt-2 ${a.read ? 'line-clamp-2' : 'line-clamp-3'}`}>{plain(a.content)}</p>
+          <PhotoStrip photos={a.photos ?? []} dim={!!a.acked} onOpen={() => openDetail(a)} />
         </Card>
       ))}
 
       {open && (
         <Modal title={`${open.code} — ${open.title}`} onClose={() => setOpen(null)}>
           <div className="flex items-center gap-2 flex-wrap mb-3">
-            <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[open.priority]}`}>{open.priority}</span>
-            <span className="text-xs text-gray-500">{open.category}</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[open.priority]}`}>{nice(open.priority)}</span>
+            {nice(open.category) !== nice(open.priority) && <span className="text-xs text-gray-500">{nice(open.category)}</span>}
             <span className="text-xs text-gray-400">{fmtDate(open.publishAt)}</span>
           </div>
           <div className="text-sm text-gray-700 whitespace-pre-wrap rich-content" dangerouslySetInnerHTML={{ __html: open.content }} />
@@ -214,6 +286,10 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
   const [stats, setStats] = useState<ReadStats | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // list controls — status chips, priority filter, search
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'PUBLISHED' | 'DRAFT' | 'SCHEDULED' | 'EXPIRED'>('ALL');
+  const [priorityFilter, setPriorityFilter] = useState('ALL');
+  const [search, setSearch] = useState('');
 
   const [form, setForm] = useState({
     title: '', content: '', category: 'GENERAL', priority: 'NORMAL',
@@ -367,6 +443,34 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
     } catch { /* modal shows null state */ }
   };
 
+  const togglePin = async (a: Announcement) => {
+    try {
+      await api(`/announcements/${a.id}/pin`, { method: 'POST' });
+      toast(a.pinnedAt ? 'Unpinned' : '📌 Pinned — it will stay at the top of every list');
+      reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const filtered = items.filter((a) => {
+    if (statusFilter !== 'ALL' && a.status !== statusFilter) return false;
+    if (priorityFilter !== 'ALL' && a.priority !== priorityFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      if (!(a.title.toLowerCase().includes(q) || a.code.toLowerCase().includes(q) || plain(a.content).toLowerCase().includes(q))) return false;
+    }
+    return true;
+  });
+
+  const statusChips: { key: typeof statusFilter; label: string; count: number }[] = [
+    { key: 'ALL', label: 'All', count: items.length },
+    { key: 'PUBLISHED', label: 'Published', count: items.filter((a) => a.status === 'PUBLISHED').length },
+    { key: 'DRAFT', label: 'Drafts', count: items.filter((a) => a.status === 'DRAFT').length },
+    { key: 'SCHEDULED', label: 'Scheduled', count: items.filter((a) => a.status === 'SCHEDULED').length },
+    { key: 'EXPIRED', label: 'Expired', count: items.filter((a) => a.status === 'EXPIRED').length },
+  ];
+
   return (
     <>
       <div className="flex justify-between items-center mb-4">
@@ -376,41 +480,112 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
 
       {items.length === 0 && <Empty label="No announcements yet" />}
 
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {statusChips.map((c) => (
+            <button
+              key={c.key}
+              onClick={() => setStatusFilter(c.key)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                statusFilter === c.key ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {c.label} · {c.count}
+            </button>
+          ))}
+          <div className="ml-auto flex gap-2">
+            <Select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="!w-auto text-xs py-1.5">
+              <option value="ALL">All priorities</option>
+              {PRIORITIES.map((p) => <option key={p} value={p}>{nice(p)}</option>)}
+            </Select>
+            <Input
+              placeholder="Search title or text…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="!w-52 text-xs py-1.5"
+            />
+          </div>
+        </div>
+      )}
+
       <div className="space-y-3">
-        {items.map((a) => (
-          <Card key={a.id} className="p-4">
+        {filtered.map((a) => {
+          const audience = a.audienceCount ?? 0;
+          const pct = audience > 0 ? Math.round(((a.readCount ?? 0) / audience) * 100) : 0;
+          const emptyDept = (a.targetsWithCounts ?? []).find((t) => t.memberCount === 0);
+          return (
+          <Card key={a.id} className={`p-4 ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.status === 'EXPIRED' ? 'opacity-70' : ''}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[a.status]}`}>{a.status}</span>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[a.priority]}`}>{a.priority}</span>
-                  <span className="text-xs text-gray-400">{a.category}</span>
+                  {a.pinnedAt && <span title="Pinned" className="text-xs">📌</span>}
+                  <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[a.status]}`}>{nice(a.status)}</span>
+                  {a.priority !== 'NORMAL' && <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[a.priority]}`}>{nice(a.priority)}</span>}
+                  {nice(a.category) !== nice(a.priority) && <span className="text-xs text-gray-400">{nice(a.category)}</span>}
                   <span className="text-xs text-gray-300 font-mono">{a.code}</span>
                 </div>
-                <button className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700" onClick={() => openDetail(a)}>{a.title}</button>
+                <button
+                  className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700 group inline-flex items-center gap-1"
+                  onClick={() => openDetail(a)}
+                  title="Open announcement"
+                >
+                  {a.title}
+                  <span className="text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
+                </button>
                 <p className="text-sm text-gray-500 mt-1 line-clamp-2">{plain(a.content)}</p>
                 <div className="text-xs text-gray-400 mt-1">
                   {(a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target'}
-                  {' · '}{fmtDate(a.publishAt)}{a.endAt ? ` → ${fmtDate(a.endAt)}` : ''}
-                  {a.readCount != null && ` · ${a.readCount} read`}
+                  {' · '}<span title={fmtDate(a.publishAt)}>{relTime(a.publishAt)}</span>
+                  {a.endAt ? ` → ${fmtDate(a.endAt)}` : ''}
                 </div>
+                {emptyDept && (
+                  <div className="text-xs text-orange-600 bg-orange-50 rounded px-2 py-1 mt-1.5 inline-block">
+                    ⚠ "{emptyDept.targetLabel}" has no members — nobody will receive this
+                  </div>
+                )}
+                {audience > 0 && (
+                  <button className="flex items-center gap-2 mt-2 group/stats" onClick={() => showStats(a)} title="Open read stats">
+                    <div className="w-28 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${pct >= 80 ? 'bg-green-500' : pct >= 40 ? 'bg-blue-500' : 'bg-orange-400'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-gray-400 group-hover/stats:text-blue-600 transition-colors">
+                      {a.readCount ?? 0}/{audience} read
+                    </span>
+                  </button>
+                )}
               </div>
               <div className="flex flex-col gap-1 items-end shrink-0">
                 {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && <Button onClick={() => publish(a)}>Publish</Button>}
                 {a.status === 'PUBLISHED' && (
                   <Button variant="ghost" onClick={() => unpublish(a)}>Unpublish</Button>
                 )}
-                <div className="flex gap-1">
+                <div className="flex gap-1 items-center">
+                  <button
+                    className={`text-xs hover:underline ${a.pinnedAt ? 'text-gray-900 font-semibold' : 'text-gray-400 hover:text-gray-700'}`}
+                    onClick={() => togglePin(a)}
+                    title={a.pinnedAt ? 'Unpin' : 'Pin to top'}
+                  >
+                    {a.pinnedAt ? '📌 Unpin' : '📌 Pin'}
+                  </button>
+                  {a.status !== 'EXPIRED' && <span className="text-gray-200">·</span>}
                   {a.status !== 'EXPIRED' && <button className="text-xs text-blue-600 hover:underline" onClick={() => openEdit(a)}>Edit</button>}
+                  <span className="text-gray-200">·</span>
                   <button className="text-xs text-blue-600 hover:underline" onClick={() => showStats(a)}>Read stats</button>
                   {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && (
-                    <button className="text-xs text-red-600 hover:underline" onClick={() => setDeleteFor(a)}>Delete</button>
+                    <>
+                      <span className="text-gray-200">·</span>
+                      <button className="text-xs text-red-600 hover:underline" onClick={() => setDeleteFor(a)}>Delete</button>
+                    </>
                   )}
                 </div>
               </div>
             </div>
           </Card>
-        ))}
+          );
+        })}
       </div>
 
       {/* create / edit modal */}
@@ -425,10 +600,10 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
             </div>
             <div className="grid grid-cols-2 gap-3">
               <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                {CATEGORIES.map((c) => <option key={c} value={c}>{nice(c)}</option>)}
               </Select>
               <Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
+                {PRIORITIES.map((p) => <option key={p} value={p}>{nice(p)}{p !== 'NORMAL' ? ' — requires ack' : ''}</option>)}
               </Select>
             </div>
             {!editing && (
@@ -456,7 +631,7 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
                   )}
                   {form.targetType === 'ROLE' && (
                     <Select value={form.roleId} onChange={(e) => setForm({ ...form, roleId: e.target.value })}>
-                      {['ADMINISTRATION', 'MANAGEMENT', 'DEPARTMENT_HEAD', 'EMPLOYEE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'].map((r) => <option key={r} value={r}>{r}</option>)}
+                      {['ADMINISTRATION', 'MANAGEMENT', 'DEPARTMENT_HEAD', 'EMPLOYEE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'].map((r) => <option key={r} value={r}>{r.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase())}</option>)}
                     </Select>
                   )}
                   {form.targetType === 'EMPLOYEE' && (
