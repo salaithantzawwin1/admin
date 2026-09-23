@@ -1,4 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 
@@ -1105,6 +1107,70 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   /** Raw HTML message with an arbitrary keyboard — used by the Telegram-approval flow. */
   async sendRaw(chatId: string, text: string, extra: Record<string, unknown> = {}) {
     await this.call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra });
+  }
+
+  /**
+   * Send up to 10 local image files as ONE Telegram photo album (sendMediaGroup,
+   * multipart upload) — announcement photos arrive as real viewable photos, not
+   * links. Caption rides on the first item. Silent no-op when disabled/unbound;
+   * never throws (notifications must not break on Telegram hiccups).
+   */
+  async sendPhotoAlbum(chatId: string, files: string[], caption = ''): Promise<Array<{ message_id: number }> | null> {
+    const paths = files
+      .filter((p) => p && fs.existsSync(p) && fs.statSync(p).size <= 10 * 1024 * 1024)
+      .slice(0, 10);
+    if (paths.length === 0) return null;
+    const { token, enabled } = await this.config();
+    if (!token || !enabled) return null;
+    try {
+      if (paths.length === 1) {
+        const one = await this.uploadMedia('sendPhoto', chatId, paths[0], caption ? { caption, parse_mode: 'HTML' } : {});
+        return one ? [one] : null;
+      }
+      const fd = new FormData();
+      fd.append('chat_id', chatId);
+      fd.append('media', JSON.stringify(paths.map((p, i) => ({
+        type: 'photo',
+        media: `attach://photo${i}`,
+        ...(i === 0 && caption ? { caption, parse_mode: 'HTML' } : {}),
+      }))));
+      paths.forEach((p, i) => fd.append(`photo${i}`, new Blob([fs.readFileSync(p)]), path.basename(p)));
+      const res = await fetch(API(token, 'sendMediaGroup'), { method: 'POST', body: fd });
+      const json = (await res.json()) as { ok: boolean; result?: Array<{ message_id: number }>; description?: string };
+      if (!json.ok) {
+        this.logger.warn(`Telegram sendMediaGroup failed: ${json.description ?? res.status}`);
+        return null;
+      }
+      return json.result ?? null;
+    } catch (err) {
+      this.logger.warn(`Telegram sendMediaGroup error: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Upload one local file as a photo/document via multipart — never throws. */
+  async uploadMedia(method: 'sendPhoto' | 'sendDocument', chatId: string, filePath: string, extra: Record<string, unknown> = {}): Promise<{ message_id: number } | null> {
+    const { token, enabled } = await this.config();
+    if (!token || !enabled) return null;
+    if (!fs.existsSync(filePath)) return null;
+    try {
+      const fd = new FormData();
+      fd.append('chat_id', chatId);
+      for (const [k, v] of Object.entries(extra)) {
+        if (v !== undefined && v !== null) fd.append(k, String(v));
+      }
+      fd.append(method === 'sendPhoto' ? 'photo' : 'document', new Blob([fs.readFileSync(filePath)]), path.basename(filePath));
+      const res = await fetch(API(token, method), { method: 'POST', body: fd });
+      const json = (await res.json()) as { ok: boolean; result?: { message_id: number }; description?: string };
+      if (!json.ok) {
+        this.logger.warn(`Telegram ${method} failed: ${json.description ?? res.status}`);
+        return null;
+      }
+      return json.result ?? null;
+    } catch (err) {
+      this.logger.warn(`Telegram ${method} error: ${(err as Error).message}`);
+      return null;
+    }
   }
 
   /** Acknowledge a callback query (toast in the Telegram UI). */

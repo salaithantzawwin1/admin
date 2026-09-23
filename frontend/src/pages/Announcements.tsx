@@ -36,7 +36,8 @@ interface Announcement {
   createdAt: string;
 }
 interface Attachment { id: string; filename: string; size: number; mimeType: string }
-interface ReadStats { target: number; read: number; unread: number; acked: number; requiresAck: boolean }
+interface DeptReadRow { departmentId: string | null; name: string; target: number; read: number; acked: number }
+interface ReadStats { target: number; read: number; unread: number; acked: number; requiresAck: boolean; departments?: DeptReadRow[] }
 
 const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
@@ -535,15 +536,41 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
         </Modal>
       )}
 
-      {/* read stats modal */}
+      {/* read stats modal — totals + per-department breakdown */}
       {statsFor && (
         <Modal title={`Read stats — ${statsFor.code}`} onClose={() => setStatsFor(null)}>
           {stats ? (
-            <div className="grid grid-cols-4 gap-3 text-center">
-              <div><div className="text-2xl font-bold text-gray-800">{stats.target}</div><div className="text-xs text-gray-400">Target</div></div>
-              <div><div className="text-2xl font-bold text-blue-600">{stats.read}</div><div className="text-xs text-gray-400">Read</div></div>
-              <div><div className="text-2xl font-bold text-gray-500">{stats.unread}</div><div className="text-xs text-gray-400">Unread</div></div>
-              <div><div className="text-2xl font-bold text-green-600">{stats.acked}</div><div className="text-xs text-gray-400">Acked</div></div>
+            <div>
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div><div className="text-2xl font-bold text-gray-800">{stats.target}</div><div className="text-xs text-gray-400">Target</div></div>
+                <div><div className="text-2xl font-bold text-blue-600">{stats.read}</div><div className="text-xs text-gray-400">Read</div></div>
+                <div><div className="text-2xl font-bold text-gray-500">{stats.unread}</div><div className="text-xs text-gray-400">Unread</div></div>
+                <div><div className="text-2xl font-bold text-green-600">{stats.acked}</div><div className="text-xs text-gray-400">Acked</div></div>
+              </div>
+              {(stats.departments?.length ?? 0) > 0 && (
+                <div className="mt-4 border-t border-gray-100 pt-3">
+                  <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">By department</div>
+                  <div className="space-y-2">
+                    {stats.departments!.map((d) => {
+                      const pct = d.target > 0 ? Math.round((d.read / d.target) * 100) : 0;
+                      return (
+                        <div key={d.departmentId ?? 'none'}>
+                          <div className="flex items-center justify-between text-sm mb-0.5">
+                            <span className="font-medium text-gray-700">{d.name}</span>
+                            <span className="text-xs text-gray-400">{d.read}/{d.target} read · {pct}%{stats.requiresAck ? ` · ${d.acked} acked` : ''}</span>
+                          </div>
+                          <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${pct >= 80 ? 'bg-green-500' : pct >= 40 ? 'bg-blue-500' : 'bg-orange-400'}`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-gray-400">Loading…</div>

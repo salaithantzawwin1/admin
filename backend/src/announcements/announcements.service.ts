@@ -7,11 +7,15 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
+import { TelegramService } from '../telegram/telegram.service';
 import { Actor } from '../org/org.service';
 import { htmlToText, sanitizeHtml } from './sanitize-html';
 
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'] as const;
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'] as const;
+
+/** Escape a plain string for Telegram's HTML parse mode. */
+const escapeTgHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export interface TargetInput {
   targetType: 'ALL' | 'DEPARTMENT' | 'ROLE' | 'EMPLOYEE' | 'BRANCH';
@@ -27,6 +31,7 @@ export class AnnouncementsService {
     private numbering: NumberingService,
     private notifications: NotificationsService,
     private audit: AuditService,
+    private telegram: TelegramService,
   ) {}
 
   // ---------- helpers ----------
@@ -232,20 +237,54 @@ export class AnnouncementsService {
     });
 
     // notify the target audience (in-app + Telegram mirror)
-    const userIds = await this.audienceIds(id);
-    await this.notifications.notifyMany([...new Set(userIds)], {
+    const userIds = [...new Set(await this.audienceIds(id))];
+    const notifBody = htmlToText(a.content).slice(0, 300) || a.title;
+    await this.notifications.notifyMany(userIds, {
       type: 'ANNOUNCEMENT',
       title: `${a.priority === 'NORMAL' ? 'Announcement' : a.priority} — ${a.title}`,
       // Telegram/notification channels take plain text — strip the rich-text markup
-      body: htmlToText(a.content).slice(0, 300) || a.title,
+      body: notifBody,
       link: '/announcements',
     });
+    // photos ride along as a real Telegram album (sendMediaGroup) for anyone bound to the bot
+    await this.sendPhotosToAudience(id, userIds, a, notifBody);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ANNOUNCEMENT_PUBLISHED', module: 'ANNOUNCEMENT', recordId: id,
       newValue: { code: a.code, audience: userIds.length },
     });
     return updated;
+  }
+
+  /**
+   * After publish, push the announcement's photos to every audience member's
+   * Telegram chat as an album (single upload per photo, per user) — best-effort,
+   * never blocks the publish. Includes a practical cap so a huge audience +
+   * many photos can't flood the bot.
+   */
+  private async sendPhotosToAudience(announcementId: string, userIds: string[], a: { code: string; title: string; priority: string }, body: string) {
+    try {
+      const photos = await this.prisma.attachment.findMany({
+        where: { announcementId, mimeType: { startsWith: 'image/' } },
+        orderBy: { createdAt: 'asc' },
+        take: 10,
+      });
+      if (photos.length === 0) return;
+      const files = photos.map((p) => path.join(this.uploadRoot, p.storedName));
+      const caption = `🖼 <b>${a.priority === 'NORMAL' ? 'Announcement' : a.priority} — ${escapeTgHtml(a.title)}</b> (${a.code})\n${escapeTgHtml(body.slice(0, 300))}`;
+      const recipients = userIds.slice(0, 100);
+      for (const userId of recipients) {
+        const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { telegramChatId: true } });
+        if (!u?.telegramChatId) continue;
+        await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption).catch(() => undefined);
+      }
+      await this.audit.log({
+        action: 'ANNOUNCEMENT_PHOTOS_TELEGRAM', module: 'ANNOUNCEMENT', recordId: announcementId,
+        newValue: { code: a.code, photos: photos.length, recipients: recipients.length },
+      });
+    } catch {
+      /* photos-in-Telegram is a bonus — never fail the publish */
+    }
   }
 
   // ---------- admin views ----------
@@ -263,14 +302,37 @@ export class AnnouncementsService {
     if (!a) throw new NotFoundException('Announcement not found');
     const audience = await this.audienceIds(id);
     const reads = await this.prisma.announcementRead.findMany({ where: { announcementId: id } });
-    const readUserIds = new Set(reads.filter((r) => r.ackAt).map((r) => r.userId));
+    const ackedSet = new Set(reads.filter((r) => r.ackAt).map((r) => r.userId));
     const readSet = new Set(reads.map((r) => r.userId));
+
+    // per-department breakdown (users without a department ride under "—")
+    const members = await this.prisma.user.findMany({
+      where: { id: { in: audience }, status: 'ACTIVE' },
+      select: { id: true, employee: { select: { department: { select: { id: true, name: true } } } } },
+    });
+    const byDept = new Map<string, { departmentId: string | null; name: string; target: number; read: number; acked: number }>();
+    for (const m of members) {
+      const key = m.employee?.department?.id ?? 'none';
+      if (!byDept.has(key)) {
+        byDept.set(key, {
+          departmentId: m.employee?.department?.id ?? null,
+          name: m.employee?.department?.name ?? 'No department',
+          target: 0, read: 0, acked: 0,
+        });
+      }
+      const row = byDept.get(key)!;
+      row.target += 1;
+      if (readSet.has(m.id)) row.read += 1;
+      if (ackedSet.has(m.id)) row.acked += 1;
+    }
+
     return {
       target: audience.length,
       read: audience.filter((u) => readSet.has(u)).length,
       unread: audience.filter((u) => !readSet.has(u)).length,
-      acked: audience.filter((u) => readUserIds.has(u)).length,
+      acked: audience.filter((u) => ackedSet.has(u)).length,
       requiresAck: a.requiresAck,
+      departments: [...byDept.values()].sort((x, y) => y.target - x.target),
       readRows: reads.map((r) => ({ userId: r.userId, readAt: r.readAt, ackAt: r.ackAt })),
     };
   }
