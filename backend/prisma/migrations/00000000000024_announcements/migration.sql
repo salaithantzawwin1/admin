@@ -2,14 +2,19 @@
 -- Phase: Administration Announcements (Plan v3.0 §18)
 -- =============================================================
 
+CREATE TYPE "AnnouncementCategory" AS ENUM ('GENERAL','OFFICE','FACILITY','TRANSPORT','MEETING_ROOM','MAINTENANCE','SAFETY','HOLIDAY','IT','EMERGENCY','OTHER');
+CREATE TYPE "AnnouncementPriority" AS ENUM ('NORMAL','IMPORTANT','URGENT','EMERGENCY');
+CREATE TYPE "AnnouncementStatus" AS ENUM ('DRAFT','SCHEDULED','PUBLISHED','EXPIRED');
+CREATE TYPE "AnnouncementTargetType" AS ENUM ('ALL','DEPARTMENT','ROLE','EMPLOYEE','BRANCH');
+
 CREATE TABLE "announcements" (
     "id" UUID NOT NULL,
     "code" TEXT NOT NULL,
     "title" TEXT NOT NULL,
     "content" TEXT NOT NULL,
-    "category" TEXT NOT NULL DEFAULT 'GENERAL',
-    "priority" TEXT NOT NULL DEFAULT 'NORMAL',
-    "status" TEXT NOT NULL DEFAULT 'DRAFT',
+    "category" "AnnouncementCategory" NOT NULL DEFAULT 'GENERAL',
+    "priority" "AnnouncementPriority" NOT NULL DEFAULT 'NORMAL',
+    "status" "AnnouncementStatus" NOT NULL DEFAULT 'DRAFT',
     "publishAt" TIMESTAMP(3),
     "startAt" TIMESTAMP(3),
     "endAt" TIMESTAMP(3),
@@ -24,7 +29,7 @@ CREATE TABLE "announcements" (
 CREATE TABLE "announcement_targets" (
     "id" UUID NOT NULL,
     "announcementId" UUID NOT NULL,
-    "targetType" TEXT NOT NULL,
+    "targetType" "AnnouncementTargetType" NOT NULL,
     "targetId" TEXT,
     "targetLabel" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -52,11 +57,3 @@ ALTER TABLE "announcements" ADD CONSTRAINT "announcements_createdById_fkey" FORE
 ALTER TABLE "announcement_targets" ADD CONSTRAINT "announcement_targets_announcementId_fkey" FOREIGN KEY ("announcementId") REFERENCES "announcements"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "announcement_reads" ADD CONSTRAINT "announcement_reads_announcementId_fkey" FOREIGN KEY ("announcementId") REFERENCES "announcements"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "announcement_reads" ADD CONSTRAINT "announcement_reads_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
--- Plan §18: tracking is for important notices
-ALTER TABLE "announcements" ADD CONSTRAINT "announcements_priority_check"
-  CHECK ("priority" IN ('NORMAL','IMPORTANT','URGENT','EMERGENCY'));
-ALTER TABLE "announcements" ADD CONSTRAINT "announcements_category_check"
-  CHECK ("category" IN ('GENERAL','OFFICE','FACILITY','TRANSPORT','MEETING_ROOM','MAINTENANCE','SAFETY','HOLIDAY','IT','EMERGENCY','OTHER'));
-ALTER TABLE "announcement_targets" ADD CONSTRAINT "announcement_targets_type_check"
-  CHECK ("targetType" IN ('ALL','DEPARTMENT','ROLE','EMPLOYEE','BRANCH'));
