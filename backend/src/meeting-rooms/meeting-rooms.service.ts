@@ -459,13 +459,26 @@ export class MeetingRoomsService {
 
   // ---------- facility master data (Plan §7) ----------
 
-  listFacilities() {
-    return this.prisma.facilityMaster.findMany({ orderBy: { name: 'asc' } });
+  /** Exact-token CSV check — "TV" must NOT match a room storing "Apple TV". */
+  private facilityCsvHas(csv: string | null | undefined, name: string): boolean {
+    return (csv ?? '').split(',').map((x) => x.trim()).includes(name);
+  }
+
+  /** Facilities + how many rooms use each (UI shows the count, warns before delete). */
+  async listFacilities() {
+    const [facilities, rooms] = await Promise.all([
+      this.prisma.facilityMaster.findMany({ orderBy: [{ active: 'desc' }, { name: 'asc' }] }),
+      this.prisma.meetingRoom.findMany({ select: { facilities: true } }),
+    ]);
+    return facilities.map((f) => ({
+      ...f,
+      roomCount: rooms.filter((r) => this.facilityCsvHas(r.facilities, f.name)).length,
+    }));
   }
 
   async createFacility(name: string, active: boolean | undefined, actor: Actor) {
-    const exists = await this.prisma.facilityMaster.findUnique({ where: { name } });
-    if (exists) throw new ConflictException(`Facility "${name}" already exists`);
+    const exists = await this.prisma.facilityMaster.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
+    if (exists) throw new ConflictException(`Facility "${exists.name}" already exists`);
     const facility = await this.prisma.facilityMaster.create({ data: { name, active } });
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -496,9 +509,9 @@ export class MeetingRoomsService {
   async deleteFacility(id: string, actor: Actor) {
     const facility = await this.prisma.facilityMaster.findUnique({ where: { id } });
     if (!facility) throw new NotFoundException('Facility not found');
-    const used = await this.prisma.meetingRoom.count({
-      where: { facilities: { contains: facility.name } },
-    });
+    // exact-token match — a plain contains() would wrongly block "TV" because of "Apple TV"
+    const rooms = await this.prisma.meetingRoom.findMany({ select: { facilities: true } });
+    const used = rooms.filter((r) => this.facilityCsvHas(r.facilities, facility.name)).length;
     if (used > 0) {
       throw new ConflictException(`Cannot delete "${facility.name}": ${used} room(s) use it — deactivate it instead`);
     }
@@ -512,8 +525,11 @@ export class MeetingRoomsService {
   }
 
   async createRoom(data: { name: string; location?: string; capacity?: number; facilities?: string }, actor: Actor) {
-    const exists = await this.prisma.meetingRoom.findUnique({ where: { name: data.name } });
-    if (exists) throw new ConflictException(`Room "${data.name}" already exists`);
+    const name = data.name?.trim() ?? '';
+    if (name.length < 2 || name.length > 100) throw new BadRequestException('Room name must be 2–100 characters');
+    if (data.capacity != null && (data.capacity < 1 || data.capacity > 9999)) throw new BadRequestException('Capacity must be between 1 and 9999');
+    const exists = await this.prisma.meetingRoom.findFirst({ where: { name: { equals: name, mode: 'insensitive' } } });
+    if (exists) throw new ConflictException(`Room "${exists.name}" already exists`);
     const room = await this.prisma.meetingRoom.create({
       data: {
         name: data.name,
@@ -531,11 +547,16 @@ export class MeetingRoomsService {
   }
 
   async updateRoom(id: string, data: { name?: string; location?: string; capacity?: number; facilities?: string; status?: string }, actor: Actor) {
+    if (data.name != null) {
+      data.name = data.name.trim();
+      if (data.name.length < 2 || data.name.length > 100) throw new BadRequestException('Room name must be 2–100 characters');
+    }
+    if (data.capacity != null && (data.capacity < 1 || data.capacity > 9999)) throw new BadRequestException('Capacity must be between 1 and 9999');
     const room = await this.prisma.meetingRoom.findUnique({ where: { id } });
     if (!room) throw new NotFoundException('Room not found');
     if (data.name && data.name !== room.name) {
-      const dup = await this.prisma.meetingRoom.findUnique({ where: { name: data.name } });
-      if (dup) throw new ConflictException(`Room "${data.name}" already exists`);
+      const dup = await this.prisma.meetingRoom.findFirst({ where: { name: { equals: data.name, mode: 'insensitive' } } });
+      if (dup) throw new ConflictException(`Room "${dup.name}" already exists`);
     }
     const updated = await this.prisma.meetingRoom.update({
       where: { id },
