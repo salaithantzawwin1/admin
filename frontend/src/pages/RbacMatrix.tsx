@@ -20,6 +20,11 @@ const PERM_LABELS: Record<string, string> = {
   'fleet.read': 'View fleet',
   'fleet.manage': 'Manage fleet',
   'cars.assign': 'Assign vehicles/trips',
+  'meeting-rooms.assign': 'Assign meeting rooms',
+  'inventory.read': 'View inventory',
+  'inventory.manage': 'Manage inventory & suppliers',
+  'announcements.read': 'View announcements',
+  'announcements.manage': 'Create & publish announcements',
   'audit.read': 'View audit logs',
   'attachments.use': 'Use attachments',
 };
