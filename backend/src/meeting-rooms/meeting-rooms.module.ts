@@ -1,11 +1,12 @@
 import { Module, OnModuleInit } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { WorkflowModule, WorkflowService } from '../workflow/workflow.module';
+import { TelegramModule } from '../telegram/telegram.module';
 import { MeetingRoomsController } from './meeting-rooms.controller';
 import { MeetingRoomsService } from './meeting-rooms.service';
 
 @Module({
-  imports: [AuthModule, WorkflowModule],
+  imports: [AuthModule, WorkflowModule, TelegramModule],
   controllers: [MeetingRoomsController],
   providers: [MeetingRoomsService],
 })

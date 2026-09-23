@@ -30,8 +30,8 @@ export class MeetingRoomsController {
   }
 
   @Get('availability/conflicts')
-  conflicts(@Query('startTime') startTime?: string, @Query('endTime') endTime?: string) {
-    return this.rooms.checkWindowConflicts(startTime!, endTime!);
+  conflicts(@Query('startTime') startTime?: string, @Query('endTime') endTime?: string, @Query('attendees') attendees?: string) {
+    return this.rooms.checkWindowConflicts(startTime!, endTime!, attendees ? Number(attendees) : undefined);
   }
 
   @Get('rooms-overview')

@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
+import { TelegramService } from '../telegram/telegram.service';
 import { Actor } from '../org/org.service';
 
 const ACTIVE: WorkflowStatus[] = ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
@@ -18,6 +19,7 @@ export class MeetingRoomsService {
     private numbering: NumberingService,
     private notifications: NotificationsService,
     private audit: AuditService,
+    private telegram: TelegramService,
   ) {}
 
   /** Create a meeting room request (DRAFT) — requester then submits it. */
@@ -178,7 +180,7 @@ export class MeetingRoomsService {
   }
 
   /** Clash preview for a time window (before submitting). */
-  async checkWindowConflicts(startTime: string, endTime: string) {
+  async checkWindowConflicts(startTime: string, endTime: string, attendees?: number) {
     const start = new Date(startTime);
     const end = new Date(endTime);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
@@ -199,14 +201,82 @@ export class MeetingRoomsService {
       orderBy: { startTime: 'asc' },
       take: 10,
     });
-    return { conflicts };
+
+    // suggested rooms: right size, available status, free in the window —
+    // ordered best-fit first (smallest room that still seats everyone)
+    const rooms = await this.prisma.meetingRoom.findMany({
+      where: { status: { notIn: ['OUT_OF_SERVICE', 'UNDER_MAINTENANCE'] } },
+      select: { id: true, name: true, location: true, capacity: true },
+    });
+    const busy = new Set(conflicts.map((c) => c.room?.name).filter(Boolean));
+    const busyRoomIds = new Set(
+      (
+        await this.prisma.meetingRoomRequest.findMany({
+          where: {
+            status: { in: ACTIVE },
+            roomId: { not: null },
+            startTime: { lt: end },
+            endTime: { gt: start },
+          },
+          select: { roomId: true },
+        })
+      ).map((b) => b.roomId!),
+    );
+    const pax = Math.max(1, attendees ?? 1);
+    const fits = rooms
+      .filter((r) => r.capacity >= pax && !busyRoomIds.has(r.id))
+      .sort((a, b) => a.capacity - b.capacity);
+    const tooSmall = rooms.filter((r) => r.capacity < pax).length;
+    const suggestions = fits.slice(0, 3).map((r) => ({
+      id: r.id, name: r.name, location: r.location, capacity: r.capacity,
+      label: `Room ${r.name} fits ${pax} pax`,
+    }));
+
+    return {
+      conflicts,
+      suggestions,
+      /** true when every room is either too small or booked in this window */
+      noneAvailable: rooms.length > 0 && fits.length === 0,
+      tooSmallCount: tooSmall,
+    };
+  }
+
+  /** Google Calendar "add event" link — dates in UTC basic format (yyyymmddTHHMMSSZ). */
+  private calendarLink(title: string, details: string, start: Date, end: Date): string {
+    const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    const params = new URLSearchParams({
+      action: 'TEMPLATE', text: title, details,
+      dates: `${fmt(start)}/${fmt(end)}`,
+    });
+    return `https://calendar.google.com/calendar/render?${params.toString()}`;
+  }
+
+  /** Telegram HTML card for a room assignment — details + Add-to-calendar button. */
+  private meetingCalendarCard(
+    request: { docNumber: string; requester: { telegramChatId: string | null } },
+    mr: { title: string; startTime: Date; endTime: Date; attendees: number },
+    room: { name: string; location: string | null },
+  ): string {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const when = `${mr.startTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })} → ${mr.endTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}`;
+    const details = `Room ${room.name}${room.location ? ` (${room.location})` : ''} · ${mr.attendees} pax · ${request.docNumber}`;
+    const link = this.calendarLink(`${mr.title} — ${room.name}`, details, mr.startTime, mr.endTime);
+    return [
+      `<b>📅 Meeting room assigned — ${esc(mr.title)}</b>`,
+      ``,
+      `🏢 ${esc(room.name)}${room.location ? ` · ${esc(room.location)}` : ''}`,
+      `🕐 ${esc(when)}`,
+      `👥 ${mr.attendees} attendees`,
+      ``,
+      `<a href="${link}">📅 Add to calendar</a>`,
+    ].join('\n');
   }
 
   /** Administration assigns a room to an APPROVED meeting request. */
   async assign(requestId: string, roomId: string | undefined, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
-      include: { meetingRequest: true },
+      include: { meetingRequest: true, requester: { select: { telegramChatId: true } } },
     });
     if (!request || !request.meetingRequest) throw new NotFoundException('Meeting request not found');
     if (request.status !== 'APPROVED') {
@@ -259,6 +329,11 @@ export class MeetingRoomsService {
       body: `${room.name}${room.location ? ` (${room.location})` : ''} has been booked for your meeting.`,
       link: `/requests/${requestId}`, requestId,
     });
+
+    // Telegram card gets a one-tap "Add to calendar" button — fewer no-shows
+    await this.telegram
+      .sendRaw(request.requester.telegramChatId ?? '', this.meetingCalendarCard(request, mr, room))
+      .catch(() => undefined);
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -392,6 +467,51 @@ export class MeetingRoomsService {
   async autoCompleteEndedCron() {
     const done = await this.autoCompleteEnded();
     if (done > 0) this.logger.log(`auto-completed ${done} ended meeting(s)`);
+  }
+
+  /**
+   * Daily 08:30 — approved meetings still without a room 24h+ after submission
+   * (and still upcoming) → one consolidated reminder to Administration,
+   * with Telegram mirror via notifyMany.
+   */
+  @Cron('0 30 8 * * *')
+  async unassignedMeetingReminderCron() {
+    const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
+    const rows = await this.prisma.requestDocument.findMany({
+      where: {
+        status: 'APPROVED',
+        submittedAt: { lt: cutoff },
+        meetingRequest: { roomId: null, startTime: { gt: new Date() } },
+      },
+      select: {
+        docNumber: true, title: true,
+        meetingRequest: { select: { startTime: true, attendees: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 20,
+    });
+    if (rows.length === 0) return;
+    const admins = await this.prisma.userRole.findMany({
+      where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE' } },
+      select: { userId: true },
+    });
+    const userIds = [...new Set(admins.map((r) => r.userId))];
+    if (userIds.length === 0) return;
+    const list = rows
+      .map((r) => {
+        const when = r.meetingRequest?.startTime
+          ? new Date(r.meetingRequest.startTime).toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })
+          : '?';
+        return `• ${r.docNumber} — ${r.title} (${when}, ${r.meetingRequest?.attendees ?? 1} pax)`;
+      })
+      .join('\n');
+    await this.notifications.notifyMany(userIds, {
+      type: 'REMINDER',
+      title: `⏰ ${rows.length} approved meeting(s) still waiting for a room`,
+      body: `Waiting more than 24h without a room assignment:\n${list}`,
+      link: '/meeting-rooms?tab=requests',
+    });
+    this.logger.log(`unassigned-meeting reminder sent for ${rows.length} request(s) to ${userIds.length} admin(s)`);
   }
 
   /** Administration cancels a live meeting request (frees the room). */
