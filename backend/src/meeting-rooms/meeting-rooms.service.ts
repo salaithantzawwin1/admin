@@ -571,6 +571,85 @@ export class MeetingRoomsService {
     });
   }
 
+  /**
+   * Fired when a meeting request reaches FINAL approval — the moment
+   * Administration starts arranging the room. Tells the support teams:
+   * - "IT assist needed" → every active user account in the IT department
+   *   (in-app + Telegram mirror via notifyMany)
+   * - "Reserved driver needed" → all drivers with a linked Telegram chat
+   */
+  async notifySupportTeams(requestId: string) {
+    const request = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      include: {
+        meetingRequest: true,
+        requester: { select: { fullName: true, employee: { select: { phone: true } } } },
+      },
+    });
+    const mr = request?.meetingRequest;
+    if (!request || !mr) return;
+    const when = `${mr.startTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })} → ${mr.endTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}`;
+
+    if (mr.itAssist) {
+      const itEmployees = await this.prisma.employee.findMany({
+        where: { department: { code: 'IT' }, user: { status: 'ACTIVE' } },
+        select: { userId: true },
+      });
+      const userIds = [...new Set(itEmployees.map((e) => e.userId).filter((id): id is string => !!id))];
+      if (userIds.length > 0) {
+        await this.notifications.notifyMany(userIds, {
+          type: 'REMINDER',
+          title: `🖥 IT assist needed — ${request.docNumber}`,
+          body: `"${mr.title}" on ${when} (${mr.attendees} pax) needs IT presentation support. Administration is arranging the room — please stand by to assist.`,
+          link: `/requests/${requestId}`,
+          requestId,
+        });
+        await this.audit.log({
+          action: 'MEETING_IT_ASSIST_NOTIFIED', module: 'MEETING_ROOMS', recordId: requestId,
+          newValue: { notified: userIds.length },
+        });
+      }
+    }
+
+    if (mr.reservedDriver) {
+      const drivers = await this.prisma.driver.findMany({
+        where: { telegramChatId: { not: null }, status: { not: 'INACTIVE' } },
+        select: { name: true, telegramChatId: true },
+      });
+      for (const d of drivers) {
+        await this.telegram
+          .sendRaw(d.telegramChatId!, this.driverRequestCard(request, mr, d.name))
+          .catch(() => undefined);
+      }
+      if (drivers.length > 0) {
+        await this.audit.log({
+          action: 'MEETING_DRIVER_REQUEST_NOTIFIED', module: 'MEETING_ROOMS', recordId: requestId,
+          newValue: { drivers: drivers.length },
+        });
+      }
+    }
+  }
+
+  /** Telegram HTML card telling a driver a meeting needs a reserved driver. */
+  private driverRequestCard(
+    request: { docNumber: string; requester: { fullName: string; employee?: { phone: string | null } | null } },
+    mr: { title: string; startTime: Date; endTime: Date; attendees: number },
+    driverName: string,
+  ): string {
+    const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const when = `${mr.startTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })} → ${mr.endTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}`;
+    const phone = request.requester.employee?.phone;
+    return [
+      `<b>🚘 Driver request — ${esc(mr.title)}</b>`,
+      ``,
+      `📅 ${esc(when)}`,
+      `👥 ${mr.attendees} attendees`,
+      `👤 Requester: ${esc(request.requester.fullName)}${phone ? ` (${esc(phone)})` : ''}`,
+      ``,
+      `Hi ${esc(driverName)} — Administration will assign the trip shortly. You may receive the assignment here — tap ✓ Noted when it arrives.`,
+    ].join('\n');
+  }
+
   // ---------- room setup CRUD (Administration) ----------
 
   listRooms() {

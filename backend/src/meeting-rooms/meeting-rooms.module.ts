@@ -18,5 +18,9 @@ export class MeetingRoomsModule implements OnModuleInit {
     this.workflow.registerCancelHook('MEETING_ROOM_REQUEST', (requestId, actor) =>
       this.rooms.adminCancel(requestId, 'Cancelled by requester', actor),
     );
+    // final approval → tell IT (itAssist) and drivers (reservedDriver) they are needed
+    this.workflow.registerFinalApproveHook('MEETING_ROOM_REQUEST', (requestId) =>
+      this.rooms.notifySupportTeams(requestId),
+    );
   }
 }
