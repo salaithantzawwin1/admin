@@ -45,6 +45,21 @@ interface Clash {
   endTime: string;
 }
 
+interface RoomSuggestion {
+  id: string;
+  name: string;
+  location?: string | null;
+  capacity: number;
+  label: string;
+}
+
+interface ConflictsResponse {
+  conflicts: Clash[];
+  suggestions: RoomSuggestion[];
+  noneAvailable: boolean;
+  tooSmallCount: number;
+}
+
 interface SetupRoom {
   id: string;
   name: string;
@@ -101,6 +116,7 @@ export default function MeetingRooms() {
     itAssist: false, reservedDriver: false, services: '',
   });
   const [clashes, setClashes] = useState<Clash[] | null>(null);
+  const [roomHints, setRoomHints] = useState<ConflictsResponse | null>(null);
 
   // room setup CRUD state (Administration)
   const [setup, setSetup] = useState<SetupRoom[]>([]);
@@ -166,18 +182,24 @@ export default function MeetingRooms() {
     return () => clearInterval(t);
   }, [load]);
 
-  // clash preview once both times are picked
+  // clash preview + fitting-room suggestions once both times are picked
   useEffect(() => {
     if (!form.startTime || !form.endTime) return;
     const t = setTimeout(() => {
-      api<{ conflicts: Clash[] }>(
-        `/meeting-rooms/availability/conflicts?startTime=${encodeURIComponent(new Date(form.startTime).toISOString())}&endTime=${encodeURIComponent(new Date(form.endTime).toISOString())}`,
+      api<ConflictsResponse>(
+        `/meeting-rooms/availability/conflicts?startTime=${encodeURIComponent(new Date(form.startTime).toISOString())}&endTime=${encodeURIComponent(new Date(form.endTime).toISOString())}&attendees=${form.attendees || 1}`,
       )
-        .then((r) => setClashes(r.conflicts))
-        .catch(() => setClashes(null));
+        .then((r) => {
+          setClashes(r.conflicts);
+          setRoomHints(r);
+        })
+        .catch(() => {
+          setClashes(null);
+          setRoomHints(null);
+        });
     }, 300);
     return () => clearTimeout(t);
-  }, [form.startTime, form.endTime]);
+  }, [form.startTime, form.endTime, form.attendees]);
 
   const valid = form.title.trim().length >= 3 && form.startTime && form.endTime && new Date(form.endTime) > new Date(form.startTime);
 
@@ -217,6 +239,7 @@ export default function MeetingRooms() {
         itAssist: false, reservedDriver: false, services: '',
       });
       setClashes(null);
+      setRoomHints(null);
       setShowForm(false);
       setSlotHint('');
       load();
@@ -464,6 +487,26 @@ export default function MeetingRooms() {
                     </div>
                   ))}
                   <div className="mt-1 text-orange-600">You can still submit — Administration will check room availability when assigning.</div>
+                </div>
+              )}
+
+              {/* suggested rooms — right size + free in this window (best fit first) */}
+              {roomHints && roomHints.suggestions.length > 0 && (
+                <div className="mt-3 text-xs text-green-800 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                  <div className="font-medium mb-1">Suggested rooms for {form.attendees} attendee{form.attendees === 1 ? '' : 's'} — free in this window:</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {roomHints.suggestions.map((s) => (
+                      <span key={s.id} className="border border-green-300 rounded-full px-2 py-0.5 bg-white">
+                        🏢 {s.name} · seats {s.capacity}{s.location ? ` · ${s.location}` : ''}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-1 text-green-700">Administration makes the final assignment after approval.</div>
+                </div>
+              )}
+              {roomHints?.noneAvailable && (
+                <div className="mt-3 text-xs text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+                  No room is free (or large enough) in this window — you can still submit; Administration may shift the time or find an alternative.
                 </div>
               )}
 

@@ -105,6 +105,12 @@ export function MeetingMonthCalendar({ onBookSlot }: { onBookSlot?: (slot: Prefi
   const [holidays, setHolidays] = useState<Holiday[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState('');
+  // focus on one room ('' = all rooms)
+  const [roomFilter, setRoomFilter] = useState('');
+  const visibleRooms = useMemo(
+    () => (data && roomFilter ? data.rooms.filter((r) => r.id === roomFilter) : data?.rooms) ?? [],
+    [data, roomFilter],
+  );
 
   const load = useCallback(() => {
     const start = new Date(Date.UTC(year, month, 1));
@@ -155,15 +161,17 @@ export function MeetingMonthCalendar({ onBookSlot }: { onBookSlot?: (slot: Prefi
     setSelected(next);
     if (!next || !onBookSlot || !data) return;
     // click-to-book: offer the first bookable room (AVAILABLE/IN_USE), prefill 09:00→10:00 Yangon
-    const room = data.rooms.find((r) => r.status === 'AVAILABLE' || r.status === 'IN_USE') ?? data.rooms[0];
+    const pool = visibleRooms.length > 0 ? visibleRooms : data.rooms;
+    const room = pool.find((r) => r.status === 'AVAILABLE' || r.status === 'IN_USE') ?? pool[0];
     if (!room) return;
     onBookSlot({ dateKey: key, roomId: room.id, roomName: room.name, startLocal: yangonLocalInput(yangonToUtc(key, 9)), endLocal: yangonLocalInput(yangonToUtc(key, 10)) });
   };
 
   const selectedDayBookings = useMemo(() => {
     if (!data || !selected) return [];
-    return data.rooms.map((r) => ({ room: r, items: bookingsOn(r, selected) })).filter((x) => x.items.length > 0);
-  }, [data, selected]);
+    return visibleRooms.map((r) => ({ room: r, items: bookingsOn(r, selected) })).filter((x) => x.items.length > 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, selected, visibleRooms]);
   const selectedDayHoliday = selected ? holidayMap[selected] : undefined;
 
   return (
@@ -177,15 +185,30 @@ export function MeetingMonthCalendar({ onBookSlot }: { onBookSlot?: (slot: Prefi
           {!isCurrentMonth && <Button variant="ghost" onClick={thisMonth}>Today</Button>}
         </div>
       </div>
-      <p className="text-xs text-gray-400 mb-3">
-        Times in Myanmar (Yangon). Chip color by request status:
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-200 mx-1 align-middle" /> pending
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-green-200 mx-1 align-middle" /> approved
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-200 mx-1 align-middle" /> in use.
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-orange-100 border border-orange-200 mx-1 ml-2 align-middle" /> weekend
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-red-100 border border-red-200 mx-1 align-middle" /> public holiday.
-        Click a day to inspect — on a free day, the request form opens pre-filled.
-      </p>
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <p className="text-xs text-gray-400">
+          Times in Myanmar (Yangon). Chip color by request status:
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-200 mx-1 align-middle" /> pending
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-green-200 mx-1 align-middle" /> approved
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-200 mx-1 align-middle" /> in use.
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-orange-100 border border-orange-200 mx-1 ml-2 align-middle" /> weekend
+          <span className="inline-block w-2.5 h-2.5 rounded-sm bg-red-100 border border-red-200 mx-1 align-middle" /> public holiday.
+          Click a day to inspect — on a free day, the request form opens pre-filled.
+        </p>
+        <label className="flex items-center gap-2 text-xs text-gray-500 shrink-0">
+          Room
+          <select
+            className="border border-gray-300 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60"
+            value={roomFilter}
+            onChange={(e) => setRoomFilter(e.target.value)}
+          >
+            <option value="">All rooms</option>
+            {(data?.rooms ?? []).map((r) => (
+              <option key={r.id} value={r.id}>{r.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
@@ -210,11 +233,12 @@ export function MeetingMonthCalendar({ onBookSlot }: { onBookSlot?: (slot: Prefi
                   {week === 0 && (
                     <td rowSpan={Math.ceil(days.length / 7)} className="sticky left-0 z-10 bg-white align-top pr-2">
                       <div className="flex flex-col gap-2">
-                        {data.rooms.map((r) => (
+                        {visibleRooms.map((r) => (
                           <div key={r.id} className="flex items-center gap-1.5 h-20">
                             <Badge color={ROOM_STATUS[r.status] ?? 'gray'}>{r.name}</Badge>
                           </div>
                         ))}
+                        {visibleRooms.length === 0 && <span className="text-xs text-gray-400">—</span>}
                       </div>
                     </td>
                   )}
@@ -244,7 +268,7 @@ export function MeetingMonthCalendar({ onBookSlot }: { onBookSlot?: (slot: Prefi
                           </div>
                         )}
                         <div className="px-1 pt-1 space-y-0.5">
-                          {data.rooms.flatMap((r) =>
+                          {visibleRooms.flatMap((r) =>
                             bookingsOn(r, c.key)
                               .slice(0, 2)
                               .map((b) => (
