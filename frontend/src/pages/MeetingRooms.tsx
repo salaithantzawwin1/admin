@@ -58,6 +58,7 @@ interface FacilityRow {
   id: string;
   name: string;
   active: boolean;
+  roomCount?: number; // rooms using this facility (backend computes)
 }
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
@@ -110,6 +111,7 @@ export default function MeetingRooms() {
   // facility master data (Plan §7) — checkbox picker source
   const [facilities, setFacilities] = useState<FacilityRow[]>([]);
   const [newFacility, setNewFacility] = useState('');
+  const [deletingFacility, setDeletingFacility] = useState<FacilityRow | null>(null);
 
   // public holidays for the selected start-date year (weekend/holiday warning)
   const [holidays, setHolidays] = useState<Holiday[]>([]);
@@ -315,15 +317,17 @@ export default function MeetingRooms() {
     }
   };
 
-  const deleteFacility = async (f: FacilityRow) => {
-    if (!window.confirm(`Delete facility ${f.name}?`)) return;
+  /** Actual delete — only reached through the ConfirmDialog (informed by roomCount). */
+  const doDeleteFacility = async (f: FacilityRow): Promise<boolean> => {
     setError('');
     try {
       await api(`/meeting-rooms/facilities/${f.id}`, { method: 'DELETE' });
       toast(`Facility ${f.name} deleted`);
       loadSetup();
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete facility — deactivate it instead if rooms use it');
+      return false;
     }
   };
 
@@ -355,8 +359,12 @@ export default function MeetingRooms() {
         actions={
           <Button
             onClick={() => {
-              setShowForm(!showForm);
-              setTab('requests');
+              if (showForm && tab === 'requests') {
+                setShowForm(false);
+              } else {
+                setShowForm(true);
+                setTab('requests');
+              }
             }}
           >
             {showForm && tab === 'requests' ? 'Close' : '+ New Meeting Request'}
@@ -595,32 +603,64 @@ export default function MeetingRooms() {
         <Card className="mb-6 p-5">
           <div className="mb-3">
             <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Facilities</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Master data for the room Facilities checkboxes (Plan §7). A facility that rooms already use cannot be deleted — deactivate it to hide it from the picker.</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Master data for the room Facilities checkboxes (Plan §7). Hide a facility to remove it from the room
+              form picker; delete only works when no room uses it.
+            </p>
           </div>
-          <div className="flex gap-2 mb-4">
+          <div className="flex gap-2 mb-4 max-w-md">
             <Input
               placeholder="New facility e.g. Whiteboard"
               value={newFacility}
+              maxLength={40}
               onChange={(e) => setNewFacility(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') createFacility(); }}
             />
             <Button onClick={createFacility} disabled={!newFacility.trim()}>Add facility</Button>
           </div>
+          {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
           {facilities.length === 0 ? (
             <Empty label="No facilities yet — add the ones your rooms offer" />
           ) : (
-            <div className="flex flex-wrap gap-2">
-              {facilities.map((f) => (
-                <div key={f.id} className="flex items-center gap-2 border border-gray-200 rounded-full px-3 py-1.5 text-sm">
-                  <span className={f.active ? 'text-gray-800' : 'text-gray-400 line-through'}>{f.name}</span>
-                  <Badge color={f.active ? 'green' : 'gray'}>{f.active ? 'ACTIVE' : 'HIDDEN'}</Badge>
-                  <button className="text-blue-600 hover:underline text-xs" onClick={() => toggleFacilityRow(f)}>{f.active ? 'Hide' : 'Show'}</button>
-                  <button className="text-red-600 hover:underline text-xs" onClick={() => deleteFacility(f)}>Delete</button>
-                </div>
-              ))}
-            </div>
+            <>
+              {/* Active — offered in the room form picker */}
+              <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">
+                Active ({facilities.filter((f) => f.active).length})
+              </div>
+              <div className="flex flex-wrap gap-2 mb-5">
+                {facilities.filter((f) => f.active).map((f) => <FacilityChip key={f.id} f={f} onToggle={toggleFacilityRow} onDelete={setDeletingFacility} />)}
+                {facilities.filter((f) => f.active).length === 0 && <span className="text-xs text-gray-400">None active — rooms see no facility checkboxes</span>}
+              </div>
+              {/* Hidden — kept for room history, not offered */}
+              {facilities.some((f) => !f.active) && (
+                <>
+                  <div className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">Hidden ({facilities.filter((f) => !f.active).length})</div>
+                  <div className="flex flex-wrap gap-2">
+                    {facilities.filter((f) => !f.active).map((f) => <FacilityChip key={f.id} f={f} onToggle={toggleFacilityRow} onDelete={setDeletingFacility} />)}
+                  </div>
+                </>
+              )}
+            </>
           )}
         </Card>
+      )}
+
+      {deletingFacility && (
+        <ConfirmDialog
+          title={`Delete facility "${deletingFacility.name}"?`}
+          description={
+            (deletingFacility.roomCount ?? 0) > 0
+              ? `${deletingFacility.roomCount} room(s) use this facility — deletion will be refused. Hide it instead.`
+              : 'No room uses this facility. This cannot be undone.'
+          }
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={async () => {
+            const ok = await doDeleteFacility(deletingFacility);
+            if (ok) setDeletingFacility(null);
+          }}
+          onClose={() => setDeletingFacility(null)}
+        />
       )}
 
       {/* ---------- Tab: Room setup (Administration only) ---------- */}
@@ -712,15 +752,26 @@ export default function MeetingRooms() {
                       <td className="px-3 py-2 font-medium">{room.name}</td>
                       <td className="px-3 py-2">{room.location ?? '—'}</td>
                       <td className="px-3 py-2">{room.capacity}</td>
-                      <td className="px-3 py-2 text-gray-500">{room.facilities ?? '—'}</td>
+                      <td className="px-3 py-2">
+                        <div className="flex flex-wrap gap-1 max-w-xs">
+                          {(room.facilities ?? '').split(',').map((x) => x.trim()).filter(Boolean).map((name) => {
+                            const known = facilities.find((f) => f.name === name);
+                            return known && !known.active
+                              ? <span key={name} className="text-xs border border-gray-200 rounded-full px-2 py-0.5 text-gray-400 line-through" title="Facility hidden from the picker">{name}</span>
+                              : <span key={name} className="text-xs border border-gray-200 rounded-full px-2 py-0.5 text-gray-600">{name}</span>;
+                          })}
+                          {(room.facilities ?? '').trim() === '' && <span className="text-gray-400">—</span>}
+                        </div>
+                      </td>
                       <td className="px-3 py-2"><Badge color={ROOM_STATUS_BADGES[room.status] ?? 'gray'}>{room.status}</Badge></td>
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         <button
                           className="text-blue-600 hover:underline mr-3"
                           onClick={() => {
+                            setShowRoomForm(true); // open BEFORE editing so the modal mounts in edit mode
                             setEditingRoom(room);
-                            setShowRoomForm(true);
                             setRoomForm({ name: room.name, location: room.location ?? '', capacity: room.capacity, facilities: room.facilities ?? '', status: room.status });
+                            setModalError('');
                             window.scrollTo({ top: 0, behavior: 'smooth' });
                           }}
                         >
@@ -760,3 +811,28 @@ const ROOM_STATUS_BADGES: Record<string, 'green' | 'blue' | 'yellow' | 'red'> = 
   UNDER_MAINTENANCE: 'yellow',
   OUT_OF_SERVICE: 'red',
 };
+
+/** One facility chip in the Facilities tab — name, usage count, Hide/Show + Delete. */
+function FacilityChip({
+  f,
+  onToggle,
+  onDelete,
+}: {
+  f: FacilityRow;
+  onToggle: (f: FacilityRow) => void;
+  onDelete: (f: FacilityRow) => void;
+}) {
+  return (
+    <div className={`flex items-center gap-2 border rounded-full px-3 py-1.5 text-sm ${f.active ? 'border-gray-200 bg-white' : 'border-gray-200 bg-gray-50'}`}>
+      <span className={f.active ? 'text-gray-800' : 'text-gray-400 line-through'}>{f.name}</span>
+      <span
+        className="text-xs text-gray-400"
+        title={f.roomCount ? `${f.roomCount} room(s) use this facility` : 'Not used by any room yet'}
+      >
+        · {f.roomCount ?? 0} room{(f.roomCount ?? 0) === 1 ? '' : 's'}
+      </span>
+      <button className="text-blue-600 hover:underline text-xs" onClick={() => onToggle(f)}>{f.active ? 'Hide' : 'Show'}</button>
+      <button className="text-red-600 hover:underline text-xs" onClick={() => onDelete(f)}>Delete</button>
+    </div>
+  );
+}
