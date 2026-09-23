@@ -402,7 +402,7 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
                 )}
                 <div className="flex gap-1">
                   {a.status !== 'EXPIRED' && <button className="text-xs text-blue-600 hover:underline" onClick={() => openEdit(a)}>Edit</button>}
-                  {a.requiresAck && <button className="text-xs text-blue-600 hover:underline" onClick={() => showStats(a)}>Read stats</button>}
+                  <button className="text-xs text-blue-600 hover:underline" onClick={() => showStats(a)}>Read stats</button>
                   {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && (
                     <button className="text-xs text-red-600 hover:underline" onClick={() => setDeleteFor(a)}>Delete</button>
                   )}
