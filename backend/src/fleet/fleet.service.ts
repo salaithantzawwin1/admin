@@ -53,18 +53,26 @@ export class FleetService {
   }
 
   async updateVehicle(id: string, data: {
-    brandModel?: string; capacity?: number; driverId?: string; status?: string;
+    brandModel?: string; capacity?: number; driverId?: string | null; status?: string;
     registrationExpiry?: string; insuranceExpiry?: string; notes?: string; currentMileage?: number;
   }, actor: Actor) {
-    const old = await this.prisma.vehicle.findUnique({ where: { id } });
+    const old = await this.prisma.vehicle.findUnique({ where: { id }, include: { driver: { select: { name: true } } } });
     if (!old) throw new NotFoundException('Vehicle not found');
+
+    // driverId: null or "" = clear ("blank"), undefined = unchanged, string = reassign (must exist)
+    let driverId: string | null | undefined = data.driverId === null || data.driverId === '' ? null : data.driverId;
+    if (driverId) {
+      const driver = await this.prisma.driver.findUnique({ where: { id: driverId }, select: { id: true } });
+      if (!driver) throw new BadRequestException('Driver not found');
+    }
 
     const vehicle = await this.prisma.vehicle.update({
       where: { id },
+      include: { driver: { select: { name: true } } },
       data: {
         brandModel: data.brandModel,
         capacity: data.capacity,
-        driverId: data.driverId,
+        driverId,
         status: data.status as VehicleStatus | undefined,
         registrationExpiry: data.registrationExpiry ? new Date(data.registrationExpiry) : undefined,
         insuranceExpiry: data.insuranceExpiry ? new Date(data.insuranceExpiry) : undefined,
@@ -75,8 +83,8 @@ export class FleetService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'VEHICLE_UPDATED', module: 'FLEET', recordId: id,
-      oldValue: { status: old.status, currentMileage: old.currentMileage },
-      newValue: { status: vehicle.status, currentMileage: vehicle.currentMileage },
+      oldValue: { status: old.status, currentMileage: old.currentMileage, driver: old.driver?.name ?? null },
+      newValue: { status: vehicle.status, currentMileage: vehicle.currentMileage, driver: vehicle.driver?.name ?? null },
     });
     return vehicle;
   }
@@ -166,7 +174,7 @@ export class FleetService {
   }
 
   async updateDriver(id: string, data: {
-    name?: string; phone?: string; licenseNo?: string; licenseExpiry?: string;
+    name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string;
     status?: string; notes?: string;
   }, actor: Actor) {
     return this.updateDriverCore(id, data, actor);
@@ -261,7 +269,7 @@ export class FleetService {
   }
 
   private async updateDriverCore(id: string, data: {
-    name?: string; phone?: string; licenseNo?: string; licenseExpiry?: string;
+    name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string;
     status?: string; notes?: string;
   }, actor: Actor) {
     const driver = await this.prisma.driver.findUnique({ where: { id } });
@@ -271,8 +279,9 @@ export class FleetService {
       where: { id },
       data: {
         name: data.name,
-        phone: data.phone,
-        licenseNo: data.licenseNo,
+        // null clears ("blank"), undefined leaves unchanged
+        phone: data.phone === null ? null : data.phone,
+        licenseNo: data.licenseNo === null ? null : data.licenseNo,
         licenseExpiry: data.licenseExpiry ? new Date(data.licenseExpiry) : undefined,
         status: data.status as DriverStatus | undefined,
         notes: data.notes,

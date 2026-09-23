@@ -22,7 +22,8 @@ class VehicleDto {
 class VehicleUpdateDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(64) brandModel?: string;
   @IsOptional() @IsInt() @Min(1) @Max(60) capacity?: number;
-  @IsOptional() @IsString() driverId?: string;
+  /** null clears the default driver ("blank"); undefined leaves it unchanged. */
+  @IsOptional() @IsString() driverId?: string | null;
   @IsOptional() @IsIn(Object.values(VehicleStatus)) status?: VehicleStatus;
   @IsOptional() @IsDateString() registrationExpiry?: string;
   @IsOptional() @IsDateString() insuranceExpiry?: string;
@@ -47,8 +48,9 @@ class AbsenceDto {
 
 class DriverUpdateDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(128) name?: string;
-  @IsOptional() @IsString() @MaxLength(32) phone?: string;
-  @IsOptional() @IsString() @MaxLength(64) licenseNo?: string;
+  /** null clears the field ("blank"); undefined leaves it unchanged. */
+  @IsOptional() @IsString() @MaxLength(32) phone?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) licenseNo?: string | null;
   @IsOptional() @IsDateString() licenseExpiry?: string;
   @IsOptional() @IsIn(Object.values(DriverStatus)) status?: DriverStatus;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
