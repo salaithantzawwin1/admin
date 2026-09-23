@@ -53,6 +53,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     /** true while this chat owes a rejection reason (next text = the reason). */
     hasPending(chatId: string): boolean;
   };
+  /** AnnouncementsService (wired by AnnouncementsModule) — audience checks for ack buttons. */
+  announcementsRef?: { listMine(actor: { userId: string; username: string }): Promise<Array<{ id: string }>> };
   private polling = false;
   private loop: Promise<void> | null = null;
   private lastConfigCheck = 0;
@@ -95,6 +97,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.lastConfigCheck = 0;
   }
 
+  /** At most one deleteWebhook attempt per 10 minutes (conflict self-heal). */
+  private lastWebhookDrop = 0;
+
+  private async dropForeignWebhook() {
+    if (Date.now() - this.lastWebhookDrop < 10 * 60_000) return;
+    this.lastWebhookDrop = Date.now();
+    const { token } = await this.config();
+    if (!token) return;
+    try {
+      const res = await fetch(API(token, 'deleteWebhook'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ drop_pending_updates: false }),
+      });
+      const json = (await res.json()) as { ok: boolean; description?: string };
+      this.logger.log(`self-heal: dropped foreign webhook (${json.ok ? 'ok' : json.description})`);
+      await this.audit.log({ action: 'TELEGRAM_WEBHOOK_DROPPED', module: 'SETTINGS', newValue: { reason: 'getUpdates conflict' } });
+    } catch {
+      /* retried on the next conflict */
+    }
+  }
+
   private async call<T = unknown>(method: string, payload?: Record<string, unknown>): Promise<T | null> {
     const { token, enabled } = await this.config();
     if (!token || !enabled) return null;
@@ -107,6 +131,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const json = (await res.json()) as { ok: boolean; result?: T; description?: string };
       if (!json.ok) {
         this.logger.warn(`Telegram ${method} failed: ${json.description ?? res.status}`);
+        // another host re-registered a webhook — drop it (throttled) so the
+        // poll loop recovers without a human (button acks/commands die otherwise)
+        if (json.description?.includes('webhook is active')) await this.dropForeignWebhook();
         return null;
       }
       return json.result ?? null;
@@ -173,6 +200,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       // Telegram-approval flow (wfa:*) first — driver acks and others fall through
       if (u.callback_query.data.startsWith('wfa:')) {
         await this.approvals?.handleAction(u.callback_query.data, String(u.callback_query.from.id), u.callback_query.id).catch(() => undefined);
+        return;
+      }
+      // announcement acknowledge buttons (anack:<announcementId>)
+      if (u.callback_query.data.startsWith('anack:')) {
+        await this.handleAnnouncementAck(u.callback_query.data.slice('anack:'.length), String(u.callback_query.from.id), u.callback_query.id).catch((err) =>
+          this.logger.warn(`announcement ack failed: ${(err as Error).message}`),
+        );
         return;
       }
       await this.handleCallback(u.callback_query.data, String(u.callback_query.from.id), u.callback_query.id);
@@ -691,6 +725,69 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   // -------------------------------------------------------------- callbacks
 
+  /**
+   * Acknowledge an announcement straight from the Telegram button. The chat
+   * must be bound to a user who is in the announcement's audience — upserts
+   * the ack timestamp, repaints the button, and tells Administration in-app.
+   */
+  private async handleAnnouncementAck(announcementId: string, fromChatId: string, callbackId: string) {
+    const user = await this.prisma.user.findFirst({ where: { telegramChatId: fromChatId }, select: { id: true, fullName: true } });
+    if (!user) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'This AMS chat is not linked to a user account' });
+      return;
+    }
+    const a = await this.prisma.announcement.findUnique({ where: { id: announcementId }, select: { id: true, code: true, title: true, requiresAck: true, status: true } });
+    if (!a || a.status !== 'PUBLISHED' || !a.requiresAck) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'This announcement no longer accepts acknowledgements' });
+      return;
+    }
+    // a bound user who was never targeted is told politely (no ack is recorded)
+    const targeted = await this.isTargeted(announcementId, user.id);
+    if (!targeted) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'This announcement was not addressed to you' });
+      return;
+    }
+    const read = await this.prisma.announcementRead.findUnique({
+      where: { announcementId_userId: { announcementId, userId: user.id } },
+    });
+    if (read?.ackAt) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: '✓ Already acknowledged' });
+      return;
+    }
+    await this.prisma.announcementRead.upsert({
+      where: { announcementId_userId: { announcementId, userId: user.id } },
+      update: { ackAt: new Date(), readAt: read?.readAt ?? new Date() },
+      create: { announcementId, userId: user.id, readAt: new Date(), ackAt: new Date() },
+    });
+    await this.audit.log({
+      userId: user.id, username: user.fullName,
+      action: 'ANNOUNCEMENT_ACKED', module: 'ANNOUNCEMENT', recordId: announcementId,
+      newValue: { code: a.code, via: 'telegram' },
+    });
+    // repaint the message button as done
+    const msgId = this.callbackMessages.get(`${fromChatId}:${callbackId}`);
+    if (msgId) {
+      await this.call('editMessageReplyMarkup', {
+        chat_id: fromChatId,
+        message_id: msgId,
+        reply_markup: { inline_keyboard: [[{ text: '✅ Acknowledged', callback_data: 'noop' }]] },
+      }).catch(() => undefined);
+    }
+    await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: `✓ Acknowledged — thank you, ${user.fullName}` });
+  }
+
+  /** Reuse AnnouncementsService targeting logic for the Telegram ack guard. */
+  private async isTargeted(announcementId: string, userId: string): Promise<boolean> {
+    const svc = this.announcementsRef;
+    if (!svc) return true; // unwired (tests) — permissive
+    try {
+      const mine = await svc.listMine({ userId, username: 'telegram' });
+      return mine.some((a: { id: string }) => a.id === announcementId);
+    } catch {
+      return false;
+    }
+  }
+
   private async handleCallback(data: string, fromChatId: string, callbackId: string) {
     const [action, assignmentId] = data.split(':');
     if (!assignmentId) return;
@@ -1146,6 +1243,31 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(`Telegram sendMediaGroup error: ${(err as Error).message}`);
       return null;
     }
+  }
+
+  /**
+   * Announcement card — IMPORTANT+ notices get a ✓ Acknowledge button right in
+   * the chat (callback `anack:<id>`); NORMAL ones just get the album + text.
+   * Only called for users in the audience, after the photo album.
+   */
+  async sendAnnouncementCard(chatId: string, a: { id: string; code: string; title: string; priority: string; requiresAck: boolean }, body: string) {
+    const lines = [
+      `${a.priority === 'NORMAL' ? '📢' : '🚨'} <b>${escapeHtml(a.priority === 'NORMAL' ? 'Announcement' : a.priority)} — ${escapeHtml(a.title)}</b>`,
+      `🏷 ${escapeHtml(a.code)}`,
+    ];
+    if (body) lines.push(escapeHtml(body));
+    const { webUrl } = await this.webUrl();
+    const openRow = webUrl ? [{ text: 'Open in AMS', url: `${webUrl.replace(/\/$/, '')}/announcements` }] : [];
+    const rows = a.requiresAck
+      ? [[{ text: '✓ Acknowledge', callback_data: `anack:${a.id}` }], openRow]
+      : [openRow];
+    await this.call('sendMessage', {
+      chat_id: chatId,
+      text: lines.join('\n'),
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: rows.filter((r) => r.length > 0) },
+    });
   }
 
   /** Upload one local file as a photo/document via multipart — never throws. */

@@ -246,8 +246,10 @@ export class AnnouncementsService {
       body: notifBody,
       link: '/announcements',
     });
-    // photos ride along as a real Telegram album (sendMediaGroup) for anyone bound to the bot
-    await this.sendPhotosToAudience(id, userIds, a, notifBody);
+    // photos + card (ack button on IMPORTANT+) ride along for anyone bound to the bot
+    await this.sendPhotosToAudience(id, userIds, {
+      id: a.id, code: a.code, title: a.title, priority: a.priority, requiresAck: a.requiresAck,
+    }, notifBody);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ANNOUNCEMENT_PUBLISHED', module: 'ANNOUNCEMENT', recordId: id,
@@ -257,30 +259,32 @@ export class AnnouncementsService {
   }
 
   /**
-   * After publish, push the announcement's photos to every audience member's
-   * Telegram chat as an album (single upload per photo, per user) — best-effort,
-   * never blocks the publish. Includes a practical cap so a huge audience +
-   * many photos can't flood the bot.
+   * After publish, push the announcement to every audience member's Telegram
+   * chat — photos as a real album, then a text card; IMPORTANT+ notices carry
+   * a ✓ Acknowledge button (callback anack:<id>) that records the ack without
+   * opening AMS. Best-effort, never blocks the publish.
    */
-  private async sendPhotosToAudience(announcementId: string, userIds: string[], a: { code: string; title: string; priority: string }, body: string) {
+  private async sendPhotosToAudience(announcementId: string, userIds: string[], a: { id: string; code: string; title: string; priority: string; requiresAck: boolean }, body: string) {
     try {
       const photos = await this.prisma.attachment.findMany({
         where: { announcementId, mimeType: { startsWith: 'image/' } },
         orderBy: { createdAt: 'asc' },
         take: 10,
       });
-      if (photos.length === 0) return;
       const files = photos.map((p) => path.join(this.uploadRoot, p.storedName));
       const caption = `🖼 <b>${a.priority === 'NORMAL' ? 'Announcement' : a.priority} — ${escapeTgHtml(a.title)}</b> (${a.code})\n${escapeTgHtml(body.slice(0, 300))}`;
       const recipients = userIds.slice(0, 100);
+      let sent = 0;
       for (const userId of recipients) {
         const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { telegramChatId: true } });
         if (!u?.telegramChatId) continue;
-        await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption).catch(() => undefined);
+        if (files.length > 0) await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption).catch(() => undefined);
+        await this.telegram.sendAnnouncementCard(u.telegramChatId, a, body).catch(() => undefined);
+        sent += 1;
       }
       await this.audit.log({
         action: 'ANNOUNCEMENT_PHOTOS_TELEGRAM', module: 'ANNOUNCEMENT', recordId: announcementId,
-        newValue: { code: a.code, photos: photos.length, recipients: recipients.length },
+        newValue: { code: a.code, photos: files.length, recipients: sent, ackButton: a.requiresAck },
       });
     } catch {
       /* photos-in-Telegram is a bonus — never fail the publish */
