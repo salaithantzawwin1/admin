@@ -6,3 +6,10 @@ services:
   backend:
     environment:
       APP_ENV: testing
+
+  frontend:
+    # appended to the base "8080:80" mapping — port 80 is the plain default
+    # (http://192.168.100.110) while :8080 keeps working for old bookmarks.
+    # If another service already owns port 80, remove the "80:80" line.
+    ports:
+      - "80:80"
