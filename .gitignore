@@ -1,0 +1,29 @@
+# ============ secrets — NEVER commit ============
+.env
+.env.local
+.env.test
+.env.prod
+.env.*.local
+!.env.prod.example
+!.env.test.example
+env/.env.*.local
+
+# ============ dependencies ============
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# ============ build output ============
+backend/dist/
+frontend/dist/
+
+# ============ logs / temp ============
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# ============ editor / tooling ============
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,817 @@
+// AMS Phase 1+2 — Foundation + Workflow schema
+// (later phases extend this file: purchasing, assets, maintenance...)
+
+generator client {
+  provider = "prisma-client-js"
+  // runtime = node:20-bookworm (Debian, OpenSSL 3) → native debian engines
+  binaryTargets = ["native"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------- Enums ----------------
+
+enum RoleName {
+  SYSTEM_ADMIN
+  ADMINISTRATION
+  DEPARTMENT_HEAD
+  PURCHASING
+  FINANCE
+  MANAGEMENT
+  MAINTENANCE_COORDINATOR
+  EMPLOYEE
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+  LOCKED
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+// ---------------- Auth & RBAC ----------------
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  username     String     @unique
+  email        String?    @unique
+  passwordHash String
+  fullName     String
+  status       UserStatus @default(ACTIVE)
+  authSource   String     @default("LOCAL")
+  lastLoginAt  DateTime?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  userRoles       UserRole[]
+  auditLogs       AuditLog[]
+  employee        Employee?
+  actions         ApprovalAction[]     @relation("ApprovalActions")
+  delegationsFrom ApprovalDelegation[] @relation("DelegationsFrom")
+  delegationsTo   ApprovalDelegation[] @relation("DelegationsTo")
+  notifications   Notification[]       @relation("Notifications")
+  attachments     Attachment[]         @relation("Attachments")
+  requestDocs     RequestDocument[]    @relation("RequestDocuments")
+  carExpenses     CarExpense[]         @relation("CarExpenseCreator")
+  stockTxns       StockTransaction[]   @relation("StockTransactions")
+  telegramChatId    String? @unique // linked Telegram chat (bind via /start USR-<code>)
+  telegramBindCode  String? @unique
+  telegramUsername  String?
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        RoleName @unique
+  description String?
+
+  userRoles UserRole[]
+
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model UserRole {
+  userId     String   @db.Uuid
+  roleId     String   @db.Uuid
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ---------------- RBAC: fine-grained permissions (Plan §4/§5) ----------------
+
+model Permission {
+  id          String @id @default(uuid()) @db.Uuid
+  code        String @unique
+  description String?
+
+  rolePerms RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @db.Uuid
+  permissionId String @db.Uuid
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ---------------- Organization ----------------
+
+model Branch {
+  id        String  @id @default(uuid()) @db.Uuid
+  code      String  @unique
+  name      String
+  address   String?
+  phone     String?
+  isActive  Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  departments Department[]
+  employees   Employee[]
+
+  @@map("branches")
+}
+
+model Department {
+  id             String  @id @default(uuid()) @db.Uuid
+  code           String  @unique
+  name           String
+  branchId       String? @db.Uuid
+  headEmployeeId String? @db.Uuid
+  isActive       Boolean @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch       Branch?           @relation(fields: [branchId], references: [id])
+  headEmployee Employee?         @relation("DeptHead", fields: [headEmployeeId], references: [id])
+  employees    Employee[]        @relation("DeptEmployees")
+  requestDocs  RequestDocument[]
+
+  @@map("departments")
+}
+
+model Employee {
+  id           String         @id @default(uuid()) @db.Uuid
+  employeeNo   String         @unique
+  fullName     String
+  email        String?
+  phone        String?
+  position     String?
+  status       EmployeeStatus @default(ACTIVE)
+  hiredAt      DateTime?
+  departmentId String?        @db.Uuid
+  branchId     String?        @db.Uuid
+  userId       String?        @db.Uuid @unique
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  department        Department?  @relation("DeptEmployees", fields: [departmentId], references: [id])
+  branch            Branch?      @relation(fields: [branchId], references: [id])
+  user              User?        @relation(fields: [userId], references: [id])
+  headedDepartments Department[] @relation("DeptHead")
+  drivers           Driver[]     @relation("DriverEmployee")
+
+  @@map("employees")
+}
+
+// ---------------- Audit (append-only, Plan §21) ----------------
+
+model SystemSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+// Telegram users who started the bot but are not yet approved —
+// Administration approves and picks the AMS user/driver to bind (Plan: join → draft → approve).
+model TelegramJoinRequest {
+  id          String    @id @default(uuid()) @db.Uuid
+  chatId      String    @unique
+  tgUsername  String?
+  displayName String?
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  boundUserId   String? @db.Uuid
+  boundDriverId String? @db.Uuid
+  decidedById String?   @db.Uuid
+  decidedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@map("telegram_join_requests")
+}
+
+model AuditLog {
+  id        String        @id @default(uuid()) @db.Uuid
+  userId    String?       @db.Uuid
+  username  String?
+  action    String
+  module    String
+  recordId  String?
+  oldValue  Json?
+  newValue  Json?
+  ipAddress String?
+  userAgent String?
+  severity  AuditSeverity @default(INFO)
+  createdAt DateTime      @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([module, createdAt])
+  @@index([username])
+  @@map("audit_logs")
+}
+
+// ---------------- Workflow (Plan v3.0 §5, Phase 2) ----------------
+
+enum WorkflowStatus {
+  DRAFT
+  SUBMITTED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+  ON_HOLD
+  IN_PROGRESS
+  COMPLETED
+  CLOSED
+}
+
+enum ApprovalActionType {
+  SUBMIT
+  APPROVE
+  REJECT
+  RETURN
+  FINAL_APPROVE
+}
+
+enum DelegationStatus {
+  ACTIVE
+  ENDED
+  CANCELLED
+}
+
+enum NotificationType {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  RETURNED
+  FINAL_APPROVED
+  DELEGATED
+  ESCALATED
+  REMINDER
+  CAR_ASSIGNED
+  TRIP_STARTED
+  TRIP_COMPLETED
+  MEETING_ROOM_ASSIGNED
+  MEETING_COMPLETED
+  LOW_STOCK
+  CAR_DRIVER_NOTED
+  CAR_DRIVER_ARRIVED
+  CAR_DRIVER_RETURNED
+  TELEGRAM_JOIN_REQUESTED
+  CANCELLED
+}
+
+enum RequestDocType {
+  GENERIC_REQUEST
+  CAR_REQUEST
+  MEETING_ROOM_REQUEST
+  PURCHASE_REQUEST
+  OFFICE_SUPPLY_REQUEST
+  TRAVEL_REQUEST
+  MAINTENANCE_REQUEST
+}
+
+model ApprovalWorkflow {
+  id        String   @id @default(uuid()) @db.Uuid
+  module    String   @unique
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  steps ApprovalStep[]
+
+  @@map("approval_workflows")
+}
+
+model ApprovalStep {
+  id           String   @id @default(uuid()) @db.Uuid
+  workflowId   String   @db.Uuid
+  level        Int
+  roleName     RoleName
+  minApprovals Int      @default(1)
+  createdAt    DateTime @default(now())
+
+  workflow ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@unique([workflowId, level])
+  @@map("approval_steps")
+}
+
+model RequestDocument {
+  id           String         @id @default(uuid()) @db.Uuid
+  docNumber    String         @unique
+  docType      RequestDocType @default(GENERIC_REQUEST)
+  title        String
+  description  String?
+  status       WorkflowStatus @default(DRAFT)
+  requesterId  String         @db.Uuid
+  departmentId String?        @db.Uuid
+  currentLevel Int            @default(0)
+  totalLevels  Int            @default(0)
+  escalated    Boolean        @default(false)
+  submittedAt  DateTime?
+  archivedAt   DateTime?      // soft archive — cancelled >30d are hidden from default lists
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  requester      User              @relation("RequestDocuments", fields: [requesterId], references: [id])
+  department     Department?       @relation(fields: [departmentId], references: [id])
+  actions        ApprovalAction[]
+  attachments    Attachment[]
+  carRequest     CarRequest?
+  carAssignment  CarAssignment?
+  meetingRequest MeetingRoomRequest?
+  supplyRequest  OfficeSupplyRequest? @relation("SupplyRequest")
+  stockTxns      StockTransaction[]   @relation("StockTxRequest")
+
+  @@index([status])
+  @@index([requesterId])
+  @@map("request_documents")
+}
+
+model ApprovalAction {
+  id             String             @id @default(uuid()) @db.Uuid
+  requestId      String             @db.Uuid
+  level          Int
+  approverId     String             @db.Uuid
+  action         ApprovalActionType
+  comment        String?
+  previousStatus WorkflowStatus
+  newStatus      WorkflowStatus
+  createdAt      DateTime           @default(now())
+
+  request  RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  approver User            @relation("ApprovalActions", fields: [approverId], references: [id])
+
+  @@index([requestId])
+  @@map("approval_actions")
+}
+
+model ApprovalDelegation {
+  id         String           @id @default(uuid()) @db.Uuid
+  fromUserId String           @db.Uuid
+  toUserId   String           @db.Uuid
+  startAt    DateTime
+  endAt      DateTime
+  status     DelegationStatus @default(ACTIVE)
+  reason     String?
+  createdAt  DateTime         @default(now())
+
+  fromUser User @relation("DelegationsFrom", fields: [fromUserId], references: [id])
+  toUser   User @relation("DelegationsTo", fields: [toUserId], references: [id])
+
+  @@index([fromUserId, status])
+  @@index([toUserId, status])
+  @@map("approval_delegations")
+}
+
+model Notification {
+  id         String                 @id @default(uuid()) @db.Uuid
+  userId     String                 @db.Uuid
+  type       NotificationType
+  title      String
+  body       String?
+  link       String?
+  requestId  String?
+  readStatus NotificationReadStatus @default(UNREAD)
+  createdAt  DateTime               @default(now())
+
+  user User @relation("Notifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readStatus])
+  @@map("notifications")
+}
+
+enum NotificationReadStatus {
+  UNREAD
+  READ
+}
+
+model Attachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  requestId    String?  @db.Uuid
+  filename     String
+  storedName   String   @unique
+  mimeType     String
+  size         Int
+  uploadedById String   @db.Uuid
+  createdAt    DateTime @default(now())
+
+  request    RequestDocument? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  uploadedBy User             @relation("Attachments", fields: [uploadedById], references: [id])
+
+  @@index([requestId])
+  @@map("attachments")
+}
+
+// ---------------- Document numbering (Plan v3.0 §8) ----------------
+
+model DocumentSequence {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  counter   Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@map("document_sequences")
+}
+
+// ---------------- Fleet & Car Requests (Plan v3.0 §6, Phase 3) ----------------
+
+enum VehicleStatus {
+  AVAILABLE
+  IN_USE
+  UNDER_MAINTENANCE
+  OUT_OF_SERVICE
+}
+
+enum VehicleType {
+  SEDAN
+  SUV
+  PICKUP
+  VAN
+  BUS
+  TRUCK
+  OTHER
+}
+
+enum DriverStatus {
+  AVAILABLE
+  ON_TRIP
+  ON_LEAVE
+  INACTIVE
+}
+
+enum CarRequestTimeSlot {
+  FULL_DAY
+  HALF_DAY_AM
+  HALF_DAY_PM
+  CUSTOM_HOURS
+}
+
+enum TripStatus {
+  NOT_STARTED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
+enum CarExpenseType {
+  FUEL
+  TOLL
+  PARKING
+  REPAIR
+  OTHER
+}
+
+enum MeetingRoomStatus {
+  AVAILABLE
+  IN_USE
+  UNDER_MAINTENANCE
+  OUT_OF_SERVICE
+}
+
+enum MeetingType {
+  INTERNAL
+  EXTERNAL
+}
+
+model MeetingRoom {
+  id         String            @id @default(uuid()) @db.Uuid
+  name       String            @unique
+  location   String?
+  capacity   Int               @default(8)
+  facilities String?
+  status     MeetingRoomStatus @default(AVAILABLE)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+
+  bookings MeetingRoomRequest[]
+
+  @@map("meeting_rooms")
+}
+
+model MeetingRoomRequest {
+  id             String             @id @default(uuid()) @db.Uuid
+  requestId      String             @unique @db.Uuid // link to RequestDocument
+  title          String
+  attendees      Int                @default(1)
+  roomId         String?            @db.Uuid
+  status         WorkflowStatus     @default(DRAFT)
+  startTime      DateTime
+  endTime        DateTime
+  // requirement fields (Plan §7)
+  meetingType    MeetingType        @default(INTERNAL)
+  externalCompanies String?
+  attendeeNames  String?
+  itAssist       Boolean            @default(false)
+  reservedDriver Boolean            @default(false)
+  services       String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  completedAt    DateTime?
+
+  request RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  room    MeetingRoom?    @relation(fields: [roomId], references: [id])
+
+  @@index([startTime, endTime])
+  @@map("meeting_room_requests")
+}
+
+// =============================================================
+// Inventory / Store (Plan §12)
+// =============================================================
+
+enum ItemCategory {
+  STATIONERY
+  BOOKS
+  PAPER
+  ELECTRONICS
+  CLEANING
+  KITCHEN
+  FURNITURE
+  IT_SUPPLIES
+  OTHER
+}
+
+enum StockTxType {
+  PURCHASE
+  ISSUE
+  RETURN
+  ADJUSTMENT
+}
+
+enum SupplyLineStatus {
+  PENDING
+  FULFILLED
+  OUT_OF_STOCK
+  REJECTED
+}
+
+model InventoryItem {
+  id          String       @id @default(uuid()) @db.Uuid
+  code        String       @unique // e.g. ITM-0001 (human-readable)
+  name        String
+  category    ItemCategory @default(STATIONERY)
+  unit        String       @default("pcs") // pcs, box, ream, bottle…
+  balance     Int          @default(0) // current stock quantity (never edited directly — only via transactions)
+  minStock    Int          @default(0) // low-stock alert threshold
+  description String?
+  isActive    Boolean      @default(true) // soft-disable instead of delete when history exists
+  imageStoredName String?  // item photo (stored in the shared uploads volume, served publicly)
+  lastUnitPrice   Decimal? @db.Decimal(12, 2) // most recent PURCHASE unit price (spending estimate fallback)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  transactions StockTransaction[]
+  requestLines SupplyRequestLine[]
+
+  @@index([category])
+  @@index([isActive])
+  @@map("inventory_items")
+}
+
+// ---------- purchase suppliers (master data) ----------
+model Supplier {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  phone     String?
+  address   String?
+  note      String?
+  isActive  Boolean  @default(true) // hide from the picker without losing history
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stockTransactions StockTransaction[] @relation("StockTxSupplier")
+
+  @@map("suppliers")
+}
+
+model StockTransaction {
+  id        String        @id @default(uuid()) @db.Uuid
+  itemId    String        @db.Uuid
+  type      StockTxType
+  quantity  Int // positive for IN (PURCHASE/RETURN/ADJUSTMENT up), negative for OUT (ISSUE)
+  balanceAfter Int // balance after this transaction (immutable audit trail)
+  reference String? // OSR doc number, purchase reference, remark
+  supplier  String? // legacy free-text purchase source (kept for old entries)
+  supplierId String? @db.Uuid // link to the Supplier master (new purchases)
+  unitPrice Decimal? @db.Decimal(12, 2) // price per unit for PURCHASE entries (spending report)
+  requestId  String?      @db.Uuid // link to the supply request that caused an ISSUE
+  createdById String       @db.Uuid
+  createdAt DateTime      @default(now())
+
+  item      InventoryItem  @relation(fields: [itemId], references: [id])
+  supplierRef Supplier?    @relation("StockTxSupplier", fields: [supplierId], references: [id])
+  createdBy User            @relation("StockTransactions", fields: [createdById], references: [id])
+  request   RequestDocument? @relation("StockTxRequest", fields: [requestId], references: [id])
+
+  @@index([itemId, createdAt])
+  @@index([requestId])
+  @@map("stock_transactions")
+}
+
+model OfficeSupplyRequest {
+  id          String   @id @default(uuid()) @db.Uuid
+  requestId   String   @unique @db.Uuid // link to RequestDocument (workflow engine)
+  note        String?
+  status      String   @default("PENDING") // PENDING / FULFILLED / REJECTED (mirror of doc status + fulfillment)
+  fulfilledAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  request RequestDocument      @relation("SupplyRequest", fields: [requestId], references: [id], onDelete: Cascade)
+  lines   SupplyRequestLine[]
+
+  @@map("office_supply_requests")
+}
+
+model SupplyRequestLine {
+  id             String          @id @default(uuid()) @db.Uuid
+  supplyRequestId String         @db.Uuid
+  itemId         String          @db.Uuid
+  quantity       Int
+  status         SupplyLineStatus @default(PENDING)
+  fulfilledQty   Int             @default(0)
+  createdAt      DateTime        @default(now())
+
+  supplyRequest OfficeSupplyRequest @relation(fields: [supplyRequestId], references: [id], onDelete: Cascade)
+  item          InventoryItem       @relation(fields: [itemId], references: [id])
+
+  @@index([supplyRequestId])
+  @@index([itemId])
+  @@map("office_supply_request_lines")
+}
+
+model Vehicle {
+  id               String        @id @default(uuid()) @db.Uuid
+  vehicleNo        String        @unique
+  vehicleType      VehicleType   @default(SEDAN)
+  brandModel       String
+  capacity         Int           @default(4)
+  driverId         String?       @db.Uuid
+  currentMileage   Int           @default(0)
+  status           VehicleStatus @default(AVAILABLE)
+  registrationExpiry DateTime?
+  insuranceExpiry  DateTime?
+  notes            String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  driver        Driver?        @relation(fields: [driverId], references: [id])
+  assignments   CarAssignment[]
+  expenses      CarExpense[]
+  carRequests   CarRequest[]
+
+  @@map("vehicles")
+}
+
+model Driver {
+  id        String       @id @default(uuid()) @db.Uuid
+  name      String
+  phone     String?
+  licenseNo String?
+  licenseExpiry DateTime?
+  status    DriverStatus @default(AVAILABLE)
+  notes     String?
+  telegramChatId   String?
+  telegramBindCode String?   @unique
+  telegramUsername String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  vehicles       Vehicle[]
+  carRequests    CarRequest[]
+  carAssignments CarAssignment[]
+  employee       Employee?  @relation("DriverEmployee", fields: [employeeId], references: [id])
+  employeeId     String?    @db.Uuid
+  absences       DriverAbsence[]
+
+  @@map("drivers")
+}
+
+/// Planned non-availability of a driver (leave, training, sickness…).
+/// Assign flows must skip drivers with an absence overlapping the trip window;
+/// a cron flips status to ON_LEAVE/AVAILABLE automatically at the boundaries.
+model DriverAbsence {
+  id        String   @id @default(uuid()) @db.Uuid
+  driverId  String   @db.Uuid
+  driver    Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime // exclusive end (e.g. leave ends 25th 00:00 → last full day is the 24th)
+  reason    String?
+  status    String   @default("ACTIVE") // ACTIVE | CANCELLED
+  createdById String @db.Uuid
+  createdAt DateTime @default(now())
+
+  @@index([driverId, startsAt, endsAt])
+  @@map("driver_absences")
+}
+
+model CarRequest {
+  id          String             @id @default(uuid()) @db.Uuid
+  requestId   String             @unique @db.Uuid // link to RequestDocument
+  vehicleTypeRequired VehicleType?
+  passengers  Int                @default(1)
+  destination String
+  purpose     String?
+  startDate   DateTime
+  endDate     DateTime
+  timeSlot    CarRequestTimeSlot @default(FULL_DAY)
+  pickupLocation String?
+  status      WorkflowStatus     @default(DRAFT)
+  vehicleId   String?            @db.Uuid
+  driverId    String?            @db.Uuid
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  vehicle    Vehicle?        @relation(fields: [vehicleId], references: [id])
+  driver     Driver?         @relation(fields: [driverId], references: [id])
+  assignment CarAssignment?
+
+  @@index([startDate, endDate])
+  @@index([vehicleId])
+  @@map("car_requests")
+}
+
+model CarAssignment {
+  id           String    @id @default(uuid()) @db.Uuid
+  requestId    String    @unique @db.Uuid
+  carRequestId String?   @unique @db.Uuid
+  vehicleId    String    @db.Uuid
+  driverId     String?   @db.Uuid
+  assignedById String    @db.Uuid
+  assignedAt   DateTime  @default(now())
+  releasedAt   DateTime?
+  driverNotedAt       DateTime? // driver acknowledged the assignment (Telegram "Noted")
+  driverArrivedAt     DateTime? // driver signalled car is ready for the requester
+  driverBackAtOfficeAt DateTime? // driver back at office — vehicle free again
+  telegramMessageId    String?   // Telegram message carrying the ack buttons (for stage edits)
+
+  request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  carRequest CarRequest?     @relation(fields: [carRequestId], references: [id])
+  vehicle    Vehicle         @relation(fields: [vehicleId], references: [id])
+  driver     Driver?         @relation(fields: [driverId], references: [id])
+  trip       CarTrip?
+
+  @@index([vehicleId])
+  @@map("car_assignments")
+}
+
+model CarTrip {
+  id            String      @id @default(uuid()) @db.Uuid
+  assignmentId  String      @unique @db.Uuid
+  status        TripStatus  @default(NOT_STARTED)
+  startMileage  Int?
+  endMileage    Int?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  remarks       String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  assignment CarAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  expenses   CarExpense[]
+
+  @@map("car_trips")
+}
+
+model CarExpense {
+  id         String          @id @default(uuid()) @db.Uuid
+  tripId     String          @db.Uuid
+  vehicleId  String          @db.Uuid
+  type       CarExpenseType
+  description String?
+  amount     Decimal         @db.Decimal(12, 2)
+  expenseDate DateTime       @default(now())
+  createdById String         @db.Uuid
+  createdAt  DateTime        @default(now())
+
+  trip    CarTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicle Vehicle  @relation(fields: [vehicleId], references: [id])
+  createdBy User    @relation("CarExpenseCreator", fields: [createdById], references: [id])
+
+  @@map("car_expenses")
+}

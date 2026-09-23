@@ -1,0 +1,15 @@
+# =============================================================
+# AMS — Production environment overrides (Real Production Server)
+# Usage: docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod up -d
+# =============================================================
+services:
+  backend:
+    environment:
+      APP_ENV: production
+      SEED_PASSWORD: ${SEED_PASSWORD:?SEED_PASSWORD required — sysadmin initial password}
+
+  frontend:
+    # Production serves the UI on :3000 (testing keeps :8080) — avoids port
+    # clash if both environments ever share a network/host.
+    ports:
+      - "3000:80"

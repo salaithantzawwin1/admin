@@ -1,0 +1,8 @@
+# =============================================================
+# AMS — Testing environment overrides (Testing Server)
+# Usage: docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build
+# =============================================================
+services:
+  backend:
+    environment:
+      APP_ENV: testing

@@ -1,0 +1,61 @@
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UseGuards } from '@nestjs/common';
+import { RequirePermissions } from '../auth/permissions.guard';
+import { PERMISSIONS } from '../auth/permissions';
+import { SuppliersService } from './suppliers.service';
+import { Actor } from '../org/org.service';
+
+export class SupplierDto {
+  @IsString() @MinLength(2) @MaxLength(128) name!: string;
+  @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @IsOptional() @IsString() @MaxLength(500) address?: string;
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+}
+
+export class UpdateSupplierDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(128) name?: string;
+  @IsOptional() @IsString() @MaxLength(32) phone?: string;
+  @IsOptional() @IsString() @MaxLength(500) address?: string;
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+  @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+@ApiTags('suppliers')
+@ApiBearerAuth()
+@UseGuards(JwtAuthGuard)
+@Controller('suppliers')
+export class SuppliersController {
+  constructor(private suppliers: SuppliersService) {}
+
+  private actor(req): Actor {
+    return { userId: req.user.id, username: req.user.username };
+  }
+
+  /** Supplier master list — active only by default, ?all=1 includes deactivated. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_READ)
+  @Get()
+  list(@Query('all') all?: string) {
+    return this.suppliers.list(all === '1');
+  }
+
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post()
+  async create(@Req() req, @Body() dto: SupplierDto) {
+    return this.suppliers.create(dto, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Patch(':id')
+  async update(@Req() req, @Param('id') id: string, @Body() dto: UpdateSupplierDto) {
+    return this.suppliers.update(id, dto, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Delete(':id')
+  async remove(@Req() req, @Param('id') id: string) {
+    return this.suppliers.remove(id, this.actor(req));
+  }
+}
