@@ -40,6 +40,20 @@ async function main() {
     return;
   }
 
+  // =============================================================
+  // Demo/master data runs ONCE per database. Everything in the
+  // demo block below is deletable from the UI (drivers, vehicles,
+  // rooms, inventory items…), so re-seeding on every boot would
+  // resurrect deleted rows. The seed.demo_data_v1 flag marks the
+  // database as seeded. To re-seed demo data deliberately, delete
+  // the row: DELETE FROM system_settings WHERE key='seed.demo_data_v1';
+  // Roles/users/workflows above/below stay idempotent every boot.
+  // =============================================================
+  const DEMO_FLAG_KEY = 'seed.demo_data_v1';
+  const demoFlag = await prisma.systemSetting.findUnique({ where: { key: DEMO_FLAG_KEY } });
+  if (demoFlag) {
+    console.log('Demo data already seeded (seed.demo_data_v1) — skipping demo block.');
+  } else {
   const users = IS_PROD ? [
     { username: 'sysadmin', fullName: 'System Administrator', roles: ['SYSTEM_ADMIN'] },
   ] : [
@@ -142,6 +156,7 @@ async function main() {
     });
     console.log('MEETING_ROOM_REQUEST workflow seeded (L1 ADMINISTRATION).');
   }
+
 
   // ----- Office Supply (Inventory) workflow: single-step approval by ADMINISTRATION (Plan §12) -----
   const osrWf = await prisma.approvalWorkflow.upsert({
@@ -247,6 +262,11 @@ async function main() {
     await prisma.meetingRoom.upsert({ where: { name: r.name }, update: {}, create: r });
   }
   console.log('Meeting rooms seeded.');
+
+  // mark demo data as seeded — see the note at the top of this block
+  await prisma.systemSetting.create({ data: { key: DEMO_FLAG_KEY, value: 'done' } });
+  console.log('Demo data flag set (seed.demo_data_v1).');
+  }
 }
 
 main()
