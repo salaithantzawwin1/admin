@@ -278,7 +278,11 @@ export default function MeetingRooms() {
           status: roomForm.status,
         },
       });
+      // close the modal fully — clearing editingRoom alone would flip the open
+      // dialog back into "Add room" mode (the reported Edit→Save bug)
       setEditingRoom(null);
+      setShowRoomForm(false);
+      setRoomForm({ name: '', location: '', capacity: 8, facilities: [], status: 'AVAILABLE' });
       toast('Room updated');
       loadSetup();
       load();
