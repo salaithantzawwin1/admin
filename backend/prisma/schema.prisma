@@ -554,6 +554,38 @@ enum VehicleType {
   BUS
   TRUCK
   OTHER
+  MINIVAN
+  MINIBUS
+  LIMOUSINE
+  STAFF_BUS
+  VAN_CARGO
+}
+
+/// Editable master data for vehicle types (Administration / System Admin).
+/// The Prisma enum stays the source of truth for what a vehicleType value can
+/// be; this table drives the UI pickers and can be extended at runtime by
+/// adding enum values via migration.
+model VehicleTypeMaster {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("vehicle_types")
+}
+
+/// Editable master data for meeting-room facilities (Administration /
+/// System Admin). Rooms store facilities as a CSV of names; this table
+/// drives the checkbox picker in Room setup.
+model FacilityMaster {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("facilities")
 }
 
 enum DriverStatus {

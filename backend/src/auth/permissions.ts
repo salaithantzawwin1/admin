@@ -14,6 +14,8 @@ export const PERMISSIONS = {
   FLEET_MANAGE: 'fleet.manage',
   CARS_ASSIGN: 'cars.assign',
   MEETING_ROOMS_ASSIGN: 'meeting-rooms.assign',
+  FLEET_TYPES_MANAGE: 'fleet.types.manage',
+  MEETING_ROOMS_FACILITIES_MANAGE: 'meeting-rooms.facilities.manage',
   INVENTORY_READ: 'inventory.read',
   INVENTORY_MANAGE: 'inventory.manage',
   ANNOUNCEMENTS_READ: 'announcements.read',
