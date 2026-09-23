@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getToken, hasPermission } from '../api';
-import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
+import { RichTextEditor } from '../components/RichTextEditor';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
@@ -36,6 +37,65 @@ interface Attachment { id: string; filename: string; size: number; mimeType: str
 interface ReadStats { target: number; read: number; unread: number; acked: number; requiresAck: boolean }
 
 const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
+
+const isImage = (mime: string) => mime.startsWith('image/');
+
+/** Strip tags for one-line previews (content itself is sanitized server-side). */
+const plain = (html: string) =>
+  (html || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const splitFiles = (files: Attachment[]) => ({
+  photos: files.filter((f) => isImage(f.mimeType)),
+  docs: files.filter((f) => !isImage(f.mimeType)),
+});
+
+/** Photos first (grid), then text, then document links — Plan §18 attachments. */
+function AttachmentSections({ files, className = '' }: { files: Attachment[]; className?: string }) {
+  const { photos, docs } = splitFiles(files);
+  const [zoom, setZoom] = useState<Attachment | null>(null);
+  if (files.length === 0) return null;
+  return (
+    <div className={className}>
+      {photos.length > 0 && (
+        <div className="ann-gallery mt-3">
+          {photos.map((f) => (
+            <img
+              key={f.id}
+              src={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
+              alt={f.filename}
+              onClick={() => setZoom(f)}
+            />
+          ))}
+        </div>
+      )}
+      {docs.length > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3">
+          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Attachments</div>
+          <div className="space-y-1">
+            {docs.map((f) => (
+              <a
+                key={f.id}
+                href={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
+                className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
+              >
+                📎 {f.filename} <span className="text-xs text-gray-400">({fmtSize(f.size)})</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+      {zoom && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setZoom(null)}>
+          <img src={`/api/attachments/${zoom.id}/download?token=${encodeURIComponent(getToken() ?? '')}`} alt={zoom.filename} className="max-w-full max-h-full rounded-lg shadow-2xl" />
+        </div>
+      )}
+    </div>
+  );
+}
 
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
@@ -95,7 +155,7 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
                 : <Button onClick={() => ack(a)}>Acknowledge</Button>)}
             </div>
           </div>
-          <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap line-clamp-2">{a.content}</p>
+          <p className="text-sm text-gray-600 mt-2 line-clamp-2">{plain(a.content)}</p>
         </Card>
       ))}
 
@@ -106,23 +166,8 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
             <span className="text-xs text-gray-500">{open.category}</span>
             <span className="text-xs text-gray-400">{fmtDate(open.publishAt)}</span>
           </div>
-          <p className="text-sm text-gray-700 whitespace-pre-wrap">{open.content}</p>
-          {files.length > 0 && (
-            <div className="mt-4 border-t border-gray-100 pt-3">
-              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Attachments</div>
-              <div className="space-y-1">
-                {files.map((f) => (
-                  <a
-                    key={f.id}
-                    href={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
-                    className="flex items-center gap-2 text-sm text-blue-600 hover:underline"
-                  >
-                    📎 {f.filename} <span className="text-xs text-gray-400">({fmtSize(f.size)})</span>
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
+          <div className="text-sm text-gray-700 whitespace-pre-wrap rich-content" dangerouslySetInnerHTML={{ __html: open.content }} />
+          <AttachmentSections files={files} />
           {open.requiresAck && !open.acked && (
             <div className="mt-4 flex justify-end">
               <Button onClick={() => ack(open)}>I acknowledge this notice</Button>
@@ -156,6 +201,13 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
   });
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploadIds, setUploadIds] = useState<Announcement['id'][]>([]);
+  // files already on the announcement (edit modal) / detail view
+  const [existingFiles, setExistingFiles] = useState<Attachment[]>([]);
+  const [detailFor, setDetailFor] = useState<Announcement | null>(null);
+  const [detailFiles, setDetailFiles] = useState<Attachment[]>([]);
+
+  const loadFiles = (id: string) =>
+    api<Attachment[]>(`/attachments/announcement/${id}`).then(setDetailFiles).catch(() => setDetailFiles([]));
 
   const loadOrg = useCallback(() => {
     api<{ id: string; name: string }[]>('/departments').then((r) => setOrg((o) => ({ ...o, departments: r }))).catch(() => {});
@@ -169,6 +221,7 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
     setEditing(null);
     setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userId: '', branchId: '' });
     setPendingFiles([]);
+    setExistingFiles([]);
     setError('');
     setFormOpen(true);
   };
@@ -196,8 +249,18 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
       publishAt: '', endAt: a.endAt ? a.endAt.slice(0, 16) : '',
       targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userId: '', branchId: '',
     });
+    setPendingFiles([]);
+    setExistingFiles([]);
+    api<Attachment[]>(`/attachments/announcement/${a.id}`).then(setExistingFiles).catch(() => {});
     setError('');
     setFormOpen(true);
+  };
+
+  /** Admin detail view — same layout as the employee one (photos first). */
+  const openDetail = (a: Announcement) => {
+    setDetailFor(a);
+    setDetailFiles([]);
+    loadFiles(a.id);
   };
 
   const submit = async () => {
@@ -246,6 +309,16 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
     }
   };
 
+  const unpublish = async (a: Announcement) => {
+    try {
+      await api(`/announcements/${a.id}/unpublish`, { method: 'POST' });
+      toast(`Unpublished — ${a.code} is back to draft`);
+      reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
   const doDelete = async () => {
     if (!deleteFor) return;
     try {
@@ -287,8 +360,8 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
                   <span className="text-xs text-gray-400">{a.category}</span>
                   <span className="text-xs text-gray-300 font-mono">{a.code}</span>
                 </div>
-                <div className="font-semibold text-gray-800 mt-1">{a.title}</div>
-                <p className="text-sm text-gray-500 mt-1 whitespace-pre-wrap line-clamp-2">{a.content}</p>
+                <button className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700" onClick={() => openDetail(a)}>{a.title}</button>
+                <p className="text-sm text-gray-500 mt-1 line-clamp-2">{plain(a.content)}</p>
                 <div className="text-xs text-gray-400 mt-1">
                   {(a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target'}
                   {' · '}{fmtDate(a.publishAt)}{a.endAt ? ` → ${fmtDate(a.endAt)}` : ''}
@@ -297,6 +370,9 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
               </div>
               <div className="flex flex-col gap-1 items-end shrink-0">
                 {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && <Button onClick={() => publish(a)}>Publish</Button>}
+                {a.status === 'PUBLISHED' && (
+                  <Button variant="ghost" onClick={() => unpublish(a)}>Unpublish</Button>
+                )}
                 <div className="flex gap-1">
                   {a.status !== 'EXPIRED' && <button className="text-xs text-blue-600 hover:underline" onClick={() => openEdit(a)}>Edit</button>}
                   {a.requiresAck && <button className="text-xs text-blue-600 hover:underline" onClick={() => showStats(a)}>Read stats</button>}
@@ -315,7 +391,11 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
         <Modal title={editing ? `Edit ${editing.code}` : 'New announcement'} onClose={() => setFormOpen(false)} error={error}>
           <div className="space-y-3">
             <Input placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-            <Textarea placeholder="Content" rows={6} value={form.content} onChange={(e) => setForm({ ...form, content: e.target.value })} />
+            <div>
+              <div className="text-xs text-gray-500 mb-1">Message *</div>
+              <RichTextEditor value={form.content} onChange={(html) => setForm((f) => ({ ...f, content: html }))} />
+              <div className="text-xs text-gray-400 mt-1">Bold, italic, underline, headings, lists, and alignment are supported — Telegram shows plain text.</div>
+            </div>
             <div className="grid grid-cols-2 gap-3">
               <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
                 {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -375,23 +455,57 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
             </div>
             {!editing && (
               <div>
-                <label className="text-xs text-gray-500">Attachments (optional, max 10 MB each)</label>
+                <label className="text-xs text-gray-500">Photos &amp; documents (optional, up to 10 — images show in the announcement, PDFs ride along as download cards; max 10 MB each)</label>
                 <input
                   type="file"
                   multiple
+                  accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
                   className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-gray-100 file:text-gray-700 file:cursor-pointer hover:file:bg-gray-200"
-                  onChange={(e) => setPendingFiles(Array.from(e.target.files ?? []))}
+                  onChange={(e) => {
+                    const picked = Array.from(e.target.files ?? []);
+                    if (picked.length + pendingFiles.length > 10) {
+                      toast('Up to 10 files per announcement');
+                      e.target.value = '';
+                      return;
+                    }
+                    setPendingFiles((prev) => [...prev, ...picked]);
+                    e.target.value = '';
+                  }}
                 />
                 {pendingFiles.length > 0 && (
-                  <div className="text-xs text-gray-400 mt-1">{pendingFiles.map((f) => f.name).join(', ')}</div>
+                  <div className="mt-2 space-y-1">
+                    {pendingFiles.map((f, i) => (
+                      <div key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 text-xs bg-gray-50 rounded px-2 py-1">
+                        <span className="truncate">{isImage(f.type) ? '🖼' : '📄'} {f.name} <span className="text-gray-400">({fmtSize(f.size)})</span></span>
+                        <button type="button" className="text-red-500 hover:underline shrink-0" onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}>remove</button>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             )}
+            {editing && existingFiles.length > 0 && (
+              <AttachmentSections files={existingFiles} className="border-t border-gray-100 pt-3" />
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
-              <Button disabled={busy || !form.title || !form.content} onClick={submit}>{editing ? 'Save' : 'Create'}</Button>
+              <Button disabled={busy || !form.title || !plain(form.content)} onClick={submit}>{editing ? 'Save' : 'Create'}</Button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {/* admin detail modal — photos first, then text, then docs (same as employee view) */}
+      {detailFor && (
+        <Modal title={`${detailFor.code} — ${detailFor.title}`} onClose={() => setDetailFor(null)}>
+          <div className="flex items-center gap-2 flex-wrap mb-3">
+            <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[detailFor.status]}`}>{detailFor.status}</span>
+            <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[detailFor.priority]}`}>{detailFor.priority}</span>
+            <span className="text-xs text-gray-500">{detailFor.category}</span>
+            <span className="text-xs text-gray-400">{fmtDate(detailFor.publishAt)}</span>
+          </div>
+          <div className="text-sm text-gray-700 whitespace-pre-wrap rich-content" dangerouslySetInnerHTML={{ __html: detailFor.content }} />
+          <AttachmentSections files={detailFiles} />
         </Modal>
       )}
 
