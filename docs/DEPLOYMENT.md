@@ -1,103 +1,132 @@
-# AMS — Development & Deployment Guide (Phase 1)
+# AMS — Development & Deployment Guide
 
-Server: **adminsrv** — Ubuntu 22.04, 192.168.100.110 (user `glgadmin`, in `docker` group)
-Project root on server: **/opt/admin** (lowercase; Samba share = Windows drive `Y:` = `\\\\192.168.100.110\\\\admin`)
+> Last updated: 2026-09-23 (after git-based workflow migration)
+> Verified on: adminsrv (192.168.100.110, Ubuntu 22.04.5 LTS, Docker 29.8.1, Compose v5.5.1)
 
-> Note: the Windows working copy and the server directory are the same files (Samba),
-> so edits made from Windows appear on the server immediately. Only build/run on the server
-> (npm/node must run inside Docker or on Linux — Windows cannot run npm from a UNC path).
+## 1. Servers & topology
 
-## Deploy after changes (one step)
+| | Testing | Production |
+|---|---|---|
+| IP | `192.168.100.110` (adminsrv) | `192.168.100.101` |
+| User | `glgadmin` | `glgadmin` |
+| SSH | ✅ key-based (see §3) — `ssh glgadmin@192.168.100.110` | password / interactive |
+| Project root | `/opt/admin` | `/opt/admin` (created by deploy script) |
+| UI URL | `http://192.168.100.110` (port 80) **and** `:8080` | `http://192.168.100.101:3000` |
+| API | loopback-only `127.0.0.1:3000` (never exposed) | loopback-only `127.0.0.1:3010` |
+| Compose files | `compose.yaml` + `compose.test.yaml` + `.env.test` | `compose.yaml` + `compose.prod.yaml` + `.env.prod` |
 
-Whenever a change needs deploying, do it in one go (Testing stack) — no separate copy step:
+**Production server network restriction:** only HTTPS to npm/Docker Hub allowed;
+`deb.debian.org`, alpine CDN, plain HTTP:80 are blocked → backend image must stay
+on `node:20-bookworm` (do NOT switch to alpine).
+
+## 2. Samba share = the same files
+
+`\\192.168.100.110\admin` (Windows drive **Y:**) **is** `/opt/admin` on the server —
+one copy of the files. Editing from Windows edits the server copy instantly.
+
+Consequences:
+- **No copy step needed** for testing deploys. Build/run must happen on the server
+  (node/npm only run inside Docker there — the host has no node).
+- The **git repo lives on the share too** (`.git` inside Y:). One caveat: git
+  index writes over SMB can occasionally misbehave — if `git status` ever looks
+  wrong, run `git status` again / `git fsck` from Git Bash, or from a server SSH shell.
+
+## 3. SSH access (set up 2026-09-23)
+
+- Key auth is installed for `glgadmin@192.168.100.110` (ed25519 `codebuff@ams-dev`,
+  Windows dev machine). From Git Bash: `ssh glgadmin@192.168.100.110` — no password.
+- PuTTY `plink` is available on the Windows machine as a fallback.
+- Recommended hardening: switch the server to key-only auth (`sshd_config`:
+  `PasswordAuthentication no`) and change the shared password.
+
+## 4. Git workflow
+
+- Remote: `https://github.com/salaithantzawwin1/admin.git` (branch `main`)
+- Identity (repo-local): `salaithantzawwin1` / `salaithantzawwin1@users.noreply.github.com`
+- **Secrets are never committed**: `.env.test`, `.env.prod`, `.env` are gitignored;
+  only `*.example` templates are in the repo.
+
+First-time on a fresh clone/checkout:
+```bash
+git config --global --add safe.directory /opt/admin   # if "dubious ownership" error
+cp env/.env.test.example .env.test                     # then edit secrets (server only)
+```
+
+Daily flow:
+```bash
+# edit files (Y: drive or any editor)
+git add <files> && git commit -m "..." && git push
+```
+
+## 5. Deploy — Testing (192.168.100.110)
 
 ```bash
-# from the server (or via plink ssh glgadmin@192.168.100.110)
+# from the server (or ssh glgadmin@192.168.100.110)
 cd /opt/admin
 docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build
 ```
 
-- Rebuilds both images, recreates containers, auto-runs `prisma migrate deploy` + seed.
-- Verify: `curl -s http://192.168.100.110:8080/api/health` → `{status: ok, db: up}`.
-- Browser must hard-refresh (Ctrl+Shift+R) after a frontend deploy (cached old bundle).
+- `--build` needed when code changed; plain `up -d` is enough for port/env-only changes.
+- Migrations + seed run automatically on backend start (idempotent).
+- Health check:
+  ```bash
+  curl -s http://localhost:8080/api/health   # → {"status":"ok","db":"up","env":"testing"}
+  ```
+- Browser needs **Ctrl+Shift+R** after a frontend deploy (cached old bundle).
 
-## Layout (Plan v3.0 §24)
+Port layout (testing):
+| Port | Bound to | Notes |
+|---|---|---|
+| 80 | frontend | plain `http://192.168.100.110` (added 2026-09-23, `0c9540c`) |
+| 8080 | frontend | original UI port, kept for old bookmarks |
+| 3000 | backend | `127.0.0.1` only — browsers never need it (nginx proxies `/api/`) |
 
-```
-/opt/Admin/
-├── compose.yaml            # base
-├── compose.test.yaml       # testing override
-├── compose.prod.yaml       # production override
-├── env/                    # env templates (real .env.* never committed)
-├── backend/                # NestJS + Prisma API
-├── frontend/               # React + Vite + Tailwind (served by nginx)
-├── scripts/                # server + deployment scripts
-└── docs/                   # plans & guides
-```
+If port 80 is taken by another service, remove the `"80:80"` line in
+`compose.test.yaml` — `:8080` keeps everything working.
 
-## First-time server bootstrap (done 2026-09-17)
+## 6. Deploy — Production (192.168.100.101)
 
-Docker Engine 29.8.1 + Compose v5.5.1 installed via `scripts/server/bootstrap-server.sh`.
-`glgadmin` is in the `docker` group (applies on next login).
-
-## Run Testing stack
+Prod is a **different server** (no Samba) — sync from the Windows machine:
 
 ```bash
-cd /opt/Admin
-cp env/.env.test.example .env.test   # then edit secrets
-docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build
+# Windows Git Bash, from the repo root (Y:)
+bash scripts/server/deploy-prod.sh
+#   → typecheck (skipped when node/tsc missing on the host)
+#   → rsync over SSH (excludes node_modules, dist, .env.*)
+#   → docker compose up -d --build with .env.prod
+#   → health check
 ```
 
-- Frontend: http://192.168.100.110:8080
-- API (loopback only): http://127.0.0.1:3000/api
-- API docs (Swagger): http://127.0.0.1:3000/api/docs
+`SKIP_SYNC=1 bash scripts/server/deploy-prod.sh` — rebuild only (sources already on server).
 
-## Status (2026-09-17)
+`.env.prod` must already exist on the prod server (created manually from
+`env/.env.prod.example`; never synced, never committed).
 
-Phase 1 + Phase 2 deployed and verified on Testing stack:
-- Health check public: `GET /api/health` → `{status: ok, db: up, env: testing}`
-- Login + JWT, `/auth/me`, change-password working
-- Global JWT guard + `@Public()` decorator; server-side RBAC verified (employee1 → /users = 403)
-- Audit trail recording LOGIN_SUCCESS/FAILED with IP (append-only)
-- Users / Departments / Employees / Audit Logs pages live at http://192.168.100.110:8080
+Port layout (prod): frontend `0.0.0.0:3000`, backend loopback `127.0.0.1:3010`
+(remapped via `!override` in `compose.prod.yaml` to avoid the :3000 clash).
 
-**Phase 2 — Workflow Engine (verified end-to-end):**
-- Reusable approval workflow (configurable steps per module): GENERIC_REQUEST = DEPARTMENT_HEAD (L1) → MANAGEMENT (L2)
-- Request lifecycle DRAFT → PENDING_APPROVAL → APPROVED (+REJECTED/RETURN/CANCELLED)
-- Document numbering: `GEN-2026-0001` style, atomic per prefix+year
-- Approvals inbox per role, approval history immutable
-- Delegations (date-ranged, audited) — delegate approves on behalf of, verified
-- Auto-escalation cron (hourly; `ESCALATION_AFTER_HOURS` env, default 72h) for stale L1 requests
-- Notifications: bell UI, unread count, SUBMITTED/APPROVED/REJECTED/RETURNED/FINAL_APPROVED/DELEGATED/ESCALATED
-- Attachments: upload (10 MB, whitelist), download, delete; stored in `uploads_data` volume
-- Swagger: http://127.0.0.1:3000/api/docs
+## 7. Ports cheat-sheet (both stacks)
 
-**Phase 3 — Car Request Module (verified end-to-end):**
-- Fleet master: vehicles (type/brand/capacity/mileage/status) + drivers, Administration-guarded CRUD
-- Car Request: `CAR-2026-0001` numbering, destination/schedule/passengers/vehicle-type-required
-- Approval via reusable engine (L1 Head → L2 Management), then Administration assigns vehicle + driver
-- **Double-booking prevention**: transaction + overlap re-check → 409 Conflict on overlapping window (verified)
-- Trips: start odometer → complete odometer (validates monotonic, updates vehicle mileage — verified 45200→45340)
-- Expenses: FUEL/TOLL/PARKING/REPAIR/OTHER per trip
-- Vehicle status flow: AVAILABLE → IN_USE (assigned) → AVAILABLE (trip completed)
-- UI: Fleet page, Car Requests page, CarPanel on request detail (assign / trip / expenses)
+| Port | Where | What |
+|---|---|---|
+| 80 | testing host | UI (default http://192.168.100.110) |
+| 8080 | testing host | UI (legacy) |
+| 3000 | testing host loopback | backend API (internal, nginx proxies /api/) |
+| 3010 | prod host loopback | backend API (internal) |
+| 3000 | prod host | prod UI (frontend nginx) |
+| 5432 | docker network only | postgres (never published) |
 
-**RBAC Permission Matrix (verified end-to-end):**
-- DB-backed permissions (`permissions` + `role_permissions` tables) — 14-code catalog synced on every backend boot
-- Global PermissionsGuard (runs after JWT + Roles guards) — denied requests → 403
-- Login/`/auth/me` return effective permissions; frontend sidebar filters by permission
-- Permission Matrix UI at `/rbac` (users.manage required): role × permission checkbox grid, SYSTEM_ADMIN locked as superuser
-- Every matrix change audit-logged as `ROLE_PERMISSIONS_UPDATED`
-- Verified: employee1→/users 403, admin1→/users 403 (no users.read), head1→fleet write 403, matrix edit 403 for non-admin, grant/revert live without redeploy
+## 8. Health & logs
 
-**Master Data Full CRUD (verified end-to-end):**
-- Users: create, edit (name/email/roles), reset password (verified login with new password), enable/disable (self-protect), delete (blocked with 409 if user has request/approval history)
-- Branches: create, edit (name/address/phone), deactivate/activate, delete — 409 if departments/employees attached
-- Departments: create, edit, deactivate/activate, delete — 409 if employees/requests attached
-- Employees: create, edit (position/phone/email/department), activate/deactivate, delete — 409 if heads a department or has linked requests
-- All writes audit-logged; UI modals with type-to-confirm for destructive actions
+```bash
+cd /opt/admin
+docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test ps
+docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test logs -f backend
+curl -s http://127.0.0.1:3000/api/health
+curl -s http://127.0.0.1:3000/api/docs      # Swagger (server-local)
+```
 
-## Seeded users (Phase 1, password = SEED_PASSWORD)
+## 9. Seeded users (Phase 1, password = SEED_PASSWORD)
 
 | Username | Role |
 |---|---|
@@ -107,19 +136,24 @@ Phase 1 + Phase 2 deployed and verified on Testing stack:
 | manager1 | MANAGEMENT |
 | employee1 | EMPLOYEE |
 
-## Health & logs
+## 10. Troubleshooting notes (this server)
 
-```bash
-cd /opt/admin
-docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test ps
-docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test logs -f backend
-curl -s http://127.0.0.1:3000/api/health
-```
-
-## Troubleshooting notes (this server)
-
-- **Prisma on alpine:** OpenSSL detection is broken here and picks 1.1 engines → runtime crash.
-  Fix: backend uses `node:20-bookworm` (Debian, OpenSSL 3 preinstalled). Do not switch backend to alpine.
-- **Server network:** only HTTPS to npm/Docker Hub allowed; `deb.debian.org`, `dl-cdn.alpinelinux.org`,
-  plain HTTP:80 are blocked → avoid base images that need `apt-get install` at build time.
+- **Prisma on alpine:** OpenSSL detection is broken here and picks 1.1 engines → runtime
+  crash. Fix: backend uses `node:20-bookworm` (Debian, OpenSSL 3). Do not switch to alpine.
+- **Server network:** only HTTPS to npm/Docker Hub allowed; `deb.debian.org`,
+  `dl-cdn.alpinelinux.org`, plain HTTP:80 blocked → avoid apt at build time.
+- **git on SMB:** "dubious ownership" → `git config --global --add safe.directory /opt/admin`
+  (server) or the `%(prefix)///192.168.100.110/admin/` form (Windows Git Bash).
 - **Seed/migrate** run automatically on every backend container start (idempotent).
+- **Hard refresh** the browser after frontend deploys.
+
+## 11. Recent decisions log
+
+- 2026-09-23 — repo initialized on the Samba share, pushed to GitHub; `.env.*` gitignored.
+- 2026-09-23 — prod deploy fixes: pre-flight typecheck skips when host has no node/tsc;
+  prod backend loopback port 3000→3010 (`!override`) to free :3000 for the prod frontend.
+- 2026-09-23 — testing frontend now also binds port 80 (plain URL, no port in browser).
+- 2026-09-23 — inventory hardening: atomic item codes (`NumberingService.nextStable`),
+  transactional fulfill (fresh stock reads) / reject (closes doc too), item images JWT-protected
+  via `?token=` (`<img>` tags pass the token as a query param), single `ScheduleModule.forRoot()`
+  in AppModule.
