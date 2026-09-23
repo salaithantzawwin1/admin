@@ -16,6 +16,7 @@ import Fleet from './pages/Fleet';
 import CarRequests from './pages/CarRequests';
 import MeetingRooms from './pages/MeetingRooms';
 import Inventory from './pages/Inventory';
+import Announcements from './pages/Announcements';
 import Suppliers from './pages/Suppliers';
 import RbacMatrix from './pages/RbacMatrix';
 import Settings from './pages/Settings';
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="car-requests" element={<CarRequests />} />
         <Route path="meeting-rooms" element={<MeetingRooms />} />
         <Route path="inventory" element={<Inventory />} />
+        <Route path="announcements" element={<Announcements />} />
         <Route path="suppliers" element={<Suppliers />} />
         <Route path="users" element={<Users />} />
         <Route path="departments" element={<Departments />} />

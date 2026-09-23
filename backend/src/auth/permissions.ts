@@ -16,6 +16,8 @@ export const PERMISSIONS = {
   MEETING_ROOMS_ASSIGN: 'meeting-rooms.assign',
   INVENTORY_READ: 'inventory.read',
   INVENTORY_MANAGE: 'inventory.manage',
+  ANNOUNCEMENTS_READ: 'announcements.read',
+  ANNOUNCEMENTS_MANAGE: 'announcements.manage',
   AUDIT_READ: 'audit.read',
   ATTACHMENTS_USE: 'attachments.use',
 } as const;

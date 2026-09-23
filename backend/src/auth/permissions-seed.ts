@@ -7,11 +7,11 @@ import { ALL_PERMISSION_CODES, PERMISSIONS } from './permissions';
  */
 const DEFAULT_GRANTS: Record<string, string[]> = {
   // Plan §12: Administration runs the store; employees read the catalog + request
-  ADMINISTRATION: ['inventory.read', 'inventory.manage'],
-  EMPLOYEE: ['inventory.read'],
-  DEPARTMENT_HEAD: ['inventory.read'],
-  MANAGEMENT: ['inventory.read'],
-  MAINTENANCE_COORDINATOR: ['inventory.read'],
+  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'announcements.read', 'announcements.manage'],
+  EMPLOYEE: ['inventory.read', 'announcements.read'],
+  DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
+  MANAGEMENT: ['inventory.read', 'announcements.read'],
+  MAINTENANCE_COORDINATOR: ['inventory.read', 'announcements.read'],
   SYSTEM_ADMIN: [], // superuser — every code is granted dynamically
 };
 

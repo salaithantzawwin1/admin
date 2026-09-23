@@ -19,6 +19,7 @@ import { FleetModule } from './fleet/fleet.module';
 import { CarsModule } from './cars/cars.module';
 import { MeetingRoomsModule } from './meeting-rooms/meeting-rooms.module';
 import { InventoryModule } from './inventory/inventory.module';
+import { AnnouncementsModule } from './announcements/announcements.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { SettingsModule } from './settings/settings.module';
 import { HealthController } from './health/health.controller';
@@ -43,6 +44,7 @@ import { HealthController } from './health/health.controller';
     SettingsModule,
     MeetingRoomsModule,
     InventoryModule,
+    AnnouncementsModule,
     SuppliersModule,
     TelegramModule,
   ],

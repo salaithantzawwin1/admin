@@ -11,6 +11,7 @@ const nav = [
   { to: '/car-requests', label: 'Car Requests', icon: '🚗', show: () => hasPermission('requests.create') },
   { to: '/meeting-rooms', label: 'Meeting Rooms', icon: '🏢', show: () => hasPermission('requests.create') },
   { to: '/inventory', label: 'Inventory', icon: '📦', show: () => hasPermission('inventory.read') },
+  { to: '/announcements', label: 'Announcements', icon: '📢', show: () => hasPermission('announcements.read') },
   { to: '/suppliers', label: 'Suppliers', icon: '🚛', show: () => hasPermission('inventory.read') },
   { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
   { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasRole(getUser(), 'DEPARTMENT_HEAD') || hasRole(getUser(), 'MANAGEMENT') },

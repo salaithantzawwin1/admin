@@ -65,6 +65,8 @@ model User {
   notifications   Notification[]       @relation("Notifications")
   attachments     Attachment[]         @relation("Attachments")
   requestDocs     RequestDocument[]    @relation("RequestDocuments")
+  announcements   Announcement[]       @relation("Announcements")
+  announcementReads AnnouncementRead[] @relation("AnnouncementReads")
   carExpenses     CarExpense[]         @relation("CarExpenseCreator")
   stockTxns       StockTransaction[]   @relation("StockTransactions")
   telegramChatId    String? @unique // linked Telegram chat (bind via /start USR-<code>)
@@ -280,6 +282,7 @@ enum NotificationType {
   CAR_DRIVER_RETURNED
   TELEGRAM_JOIN_REQUESTED
   CANCELLED
+  ANNOUNCEMENT
 }
 
 enum RequestDocType {
@@ -424,6 +427,99 @@ model Attachment {
 
   @@index([requestId])
   @@map("attachments")
+}
+
+// ---------------- Administration Announcements (Plan v3.0 §18) ----------------
+
+enum AnnouncementCategory {
+  GENERAL
+  OFFICE
+  FACILITY
+  TRANSPORT
+  MEETING_ROOM
+  MAINTENANCE
+  SAFETY
+  HOLIDAY
+  IT
+  EMERGENCY
+  OTHER
+}
+
+enum AnnouncementPriority {
+  NORMAL
+  IMPORTANT
+  URGENT
+  EMERGENCY
+}
+
+enum AnnouncementStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  EXPIRED
+}
+
+enum AnnouncementTargetType {
+  ALL
+  DEPARTMENT
+  ROLE
+  EMPLOYEE
+  BRANCH
+}
+
+model Announcement {
+  id           String               @id @default(uuid()) @db.Uuid
+  code         String               @unique // ANN-2026-0001 (NumberingService)
+  title        String
+  content      String @db.Text
+  category     AnnouncementCategory @default(GENERAL)
+  priority     AnnouncementPriority @default(NORMAL)
+  status       AnnouncementStatus   @default(DRAFT)
+  publishAt    DateTime?            // when it becomes visible (SCHEDULED) / was published
+  startAt      DateTime?            // optional visible window start (defaults to publishAt)
+  endAt        DateTime?            // when it expires (auto EXPIRED after this)
+  requiresAck  Boolean              @default(false) // IMPORTANT+ → admin sees target/read/unread
+  createdById  String               @db.Uuid
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @updatedAt
+
+  createdBy User                  @relation("Announcements", fields: [createdById], references: [id])
+  targets   AnnouncementTarget[]
+  reads     AnnouncementRead[]
+
+  @@index([status, publishAt])
+  @@index([category])
+  @@map("announcements")
+}
+
+model AnnouncementTarget {
+  id            String                @id @default(uuid()) @db.Uuid
+  announcementId String               @db.Uuid
+  targetType    AnnouncementTargetType
+  // targetId semantics per type: DEPARTMENT→departments.id, ROLE→RoleName,
+  // EMPLOYEE→users.id, BRANCH→branches.id; ALL → null
+  targetId      String?
+  targetLabel   String // snapshot for display (dept/role/branch/employee name, "Everyone")
+  createdAt     DateTime              @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@index([announcementId])
+  @@map("announcement_targets")
+}
+
+model AnnouncementRead {
+  id            String   @id @default(uuid()) @db.Uuid
+  announcementId String  @db.Uuid
+  userId        String   @db.Uuid
+  readAt        DateTime @default(now())
+  ackAt         DateTime? // explicit "I acknowledge" (requiresAnnouncements only)
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user         User         @relation("AnnouncementReads", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@map("announcement_reads")
 }
 
 // ---------------- Document numbering (Plan v3.0 §8) ----------------

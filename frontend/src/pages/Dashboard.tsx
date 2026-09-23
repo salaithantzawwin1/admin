@@ -3,11 +3,23 @@ import { Link } from 'react-router-dom';
 import { api, getUser, hasPermission } from '../api';
 import { Card } from '../components/ui';
 
+interface AnnouncementItem {
+  id: string; code: string; title: string; priority: string;
+  requiresAck: boolean; read?: boolean; acked?: string | null;
+}
+
+const PRIORITY_BADGE: Record<string, string> = {
+  IMPORTANT: 'bg-blue-100 text-blue-700',
+  URGENT: 'bg-orange-100 text-orange-700',
+  EMERGENCY: 'bg-red-100 text-red-700',
+};
+
 export default function Dashboard() {
   const user = getUser();
   const [inboxCount, setInboxCount] = useState<number | null>(null);
   const [carQueueCount, setCarQueueCount] = useState<number | null>(null);
   const [roomQueueCount, setRoomQueueCount] = useState<number | null>(null);
+  const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
 
   const load = useCallback(() => {
     if (hasPermission('approvals.act')) {
@@ -24,6 +36,11 @@ export default function Dashboard() {
       api<unknown[]>('/meeting-rooms/requests/approved-unassigned')
         .then((r) => setRoomQueueCount(r.length))
         .catch(() => setRoomQueueCount(null));
+    }
+    if (hasPermission('announcements.read')) {
+      api<AnnouncementItem[]>('/announcements/mine')
+        .then((r) => setAnnouncements(r.slice(0, 5)))
+        .catch(() => setAnnouncements([]));
     }
   }, []);
 
@@ -102,6 +119,32 @@ export default function Dashboard() {
           </Link>
         )}
       </div>
+
+      {/* Announcements (Plan §18) — visible to anyone with announcements.read */}
+      {hasPermission('announcements.read') && announcements.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">📢 Announcements</h2>
+            <Link to="/announcements" className="text-xs text-blue-600 hover:underline">View all →</Link>
+          </div>
+          <div className="space-y-2">
+            {announcements.map((a) => (
+              <Link key={a.id} to="/announcements" className="block">
+                <Card className={`px-4 py-3 hover:border-blue-300 transition-colors ${!a.read ? 'border-l-4 border-l-blue-500' : ''}`}>
+                  <div className="flex items-center gap-2">
+                    {a.priority !== 'NORMAL' && (
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded shrink-0 ${PRIORITY_BADGE[a.priority] ?? ''}`}>{a.priority}</span>
+                    )}
+                    <span className={`text-sm truncate ${a.read ? 'text-gray-500' : 'font-semibold text-gray-800'}`}>{a.title}</span>
+                    {a.requiresAck && !a.acked && <span className="text-xs text-orange-500 shrink-0">ack needed</span>}
+                    {!a.read && <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />}
+                  </div>
+                </Card>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
