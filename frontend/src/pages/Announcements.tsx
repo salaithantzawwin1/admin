@@ -210,8 +210,9 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
     api<Attachment[]>(`/attachments/announcement/${id}`).then(setDetailFiles).catch(() => setDetailFiles([]));
 
   const loadOrg = useCallback(() => {
-    api<{ id: string; name: string }[]>('/departments').then((r) => setOrg((o) => ({ ...o, departments: r }))).catch(() => {});
-    api<{ id: string; name: string }[]>('/branches').then((r) => setOrg((o) => ({ ...o, branches: r }))).catch(() => {});
+    // org lists live under /org/* — /departments was a 404 that silently emptied the pickers
+    api<{ id: string; name: string }[]>('/org/departments').then((r) => setOrg((o) => ({ ...o, departments: r }))).catch(() => {});
+    api<{ id: string; name: string }[]>('/org/branches').then((r) => setOrg((o) => ({ ...o, branches: r }))).catch(() => {});
     api<{ items: { id: string; fullName: string; username: string }[] }>('/users?pageSize=500')
       .then((r) => setOrg((o) => ({ ...o, users: r.items ?? [] }))).catch(() => {});
   }, []);
