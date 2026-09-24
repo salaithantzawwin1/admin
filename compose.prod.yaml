@@ -4,7 +4,7 @@
 #
 # Runs on the SAME host as the testing stack (192.168.100.110):
 #   - project name ams-prod → own network + ams-prod_* volumes (no clash with testing)
-#   - frontend UI on :3080 (testing keeps :80/:8080)
+#   - frontend UI on :3080 (testing keeps :80)
 #   - backend loopback on :3010 (testing keeps :3000)
 # =============================================================
 name: ams-prod
@@ -20,6 +20,6 @@ services:
       SEED_PASSWORD: ${SEED_PASSWORD:?SEED_PASSWORD required — sysadmin initial password}
 
   frontend:
-    # Production serves the UI on :3080 — separate from testing (:80/:8080).
+    # Production serves the UI on :3080 — separate from testing (:80).
     ports: !override
       - "3080:80"

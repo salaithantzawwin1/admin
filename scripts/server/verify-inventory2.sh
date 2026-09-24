@@ -12,6 +12,6 @@ echo "balance now = $BAL1"
 echo "--- double-fulfill guard (expect 409):"
 curl -s -X POST -H "Authorization: Bearer $ATOKEN" "$BASE/inventory/requests/$RID/fulfill" | head -c 150; echo
 echo "--- frontend bundle contains Inventory page:"
-curl -s http://127.0.0.1:8080/assets/$(curl -s http://127.0.0.1:8080/ | grep -o 'index-[^"]*\.js' | head -1) | grep -c "Inventory" || true
+curl -s http://127.0.0.1/assets/$(curl -s http://127.0.0.1/ | grep -o 'index-[^"]*\.js' | head -1) | grep -c "Inventory" || true
 echo "--- audit log:"
 docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT action, username FROM audit_logs WHERE module = '\''INVENTORY'\'' ORDER BY \"createdAt\" DESC LIMIT 6;"'

@@ -32,7 +32,7 @@ secrets that live only on servers (never in git).
 
 | Stack | Project | Compose files | UI | Backend (loopback) | Data volumes | Status |
 |---|---|---|---|---|---|---|
-| Testing | `ams` | `compose.yaml` + `compose.test.yaml` + `.env.test` | `:80` and `:8080` | `127.0.0.1:3000` | `ams_db_data`, `ams_uploads_data` | **RUNNING — the stack** |
+| Testing | `ams` | `compose.yaml` + `compose.test.yaml` + `.env.test` | `:80` | `127.0.0.1:3000` | `ams_db_data`, `ams_uploads_data` | **RUNNING — the stack** |
 | Production (VM) | `ams-prod` | `compose.yaml` + `compose.prod.yaml` + `.env.prod` | `:3080` | `127.0.0.1:3010` | `ams-prod_db_data`, `ams-prod_uploads_data` | stopped (retired until physical server) |
 
 ## 2. Samba share = the same files
@@ -149,11 +149,12 @@ docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d -
 
 - `--build` needed when code changed; plain `up -d` suffices for port/env-only changes.
 - Migrations + seed run automatically on backend start (idempotent).
-- Health: `curl -s http://localhost:8080/api/health` → `{"status":"ok","db":"up","env":"testing"}`
+- Health: `curl -s http://localhost/api/health` → `{"status":"ok","db":"up","env":"testing"}`
 - Browser needs **Ctrl+Shift+R** after a frontend deploy (cached old bundle).
 
-If port 80 is taken by another service, remove the `"80:80"` line in
-`compose.test.yaml` — `:8080` keeps everything working.
+> **The old `:8080` legacy mapping was removed (2026-09-24)** — `:80` is the one
+> and only testing URL. Update old bookmarks. If port 80 is ever taken by another
+> service, re-add a port line in `compose.test.yaml`.
 
 ## 6. Deploy — Production (NOT on this VM — see §8)
 
@@ -177,8 +178,7 @@ docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod up -d -
 
 | Port | Bound | What |
 |---|---|---|
-| 80 | `0.0.0.0` (testing frontend) | UI — plain `http://192.168.100.110` — **the** AMS URL |
-| 8080 | `0.0.0.0` (testing frontend) | UI (legacy bookmark) |
+| 80 | `0.0.0.0` (testing frontend) | UI — plain `http://192.168.100.110` — **the** AMS URL (legacy `:8080` removed 2026-09-24) |
 | 3000 | `127.0.0.1` (testing backend) | API — internal only (nginx proxies `/api/`) |
 | 3080 | — | free (prod stack retired from this VM) |
 | 3010 | — | free (prod stack retired from this VM) |
@@ -284,6 +284,9 @@ curl -s http://127.0.0.1:3010/api/health
 
 ## 12. Recent decisions log
 
+- 2026-09-24 — **removed the testing frontend's legacy `:8080` mapping** — `http://192.168.100.110/`
+  is the one and only testing URL; verify scripts, Telegram webUrl default and docs
+  updated to `:80`.
 - 2026-09-23 — repo initialized on the Samba share, pushed to GitHub; `.env.*` gitignored.
 - 2026-09-23 — prod deploy fixes: pre-flight typecheck skips when host has no node/tsc;
   backend loopback remapped to avoid the frontend :3000 clash.

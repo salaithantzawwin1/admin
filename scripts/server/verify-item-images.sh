@@ -35,4 +35,4 @@ curl -s -o /dev/null -w '%{http_code}\n' "$BASE/inventory/items/$IID/image"
 echo "--- 7) audit:"
 docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT action FROM audit_logs WHERE action LIKE '\''%IMAGE%'\'' ORDER BY \"createdAt\" DESC LIMIT 3;"'
 echo "--- 8) frontend bundle has photo UI:"
-curl -s http://127.0.0.1:8080/assets/$(curl -s http://127.0.0.1:8080/ | grep -o 'index-[^"]*\.js' | head -1) | grep -c "Item photo" || true
+curl -s http://127.0.0.1/assets/$(curl -s http://127.0.0.1/ | grep -o 'index-[^"]*\.js' | head -1) | grep -c "Item photo" || true

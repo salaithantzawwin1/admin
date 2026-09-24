@@ -32,7 +32,7 @@ curl -s -X DELETE -H "Authorization: Bearer $ETOKEN" "$BASE/users/$EMPID/telegra
 echo "audit: $(q "SELECT action||' by '||COALESCE(username,'-') FROM audit_logs WHERE action='TELEGRAM_ADMIN_UNBIND' ORDER BY \"createdAt\" DESC LIMIT 1")"
 
 echo "--- 4) web_url roundtrip:"
-curl -s -X PATCH -H "Authorization: Bearer $STOKEN" -H 'Content-Type: application/json' -d '{"webUrl":"http://192.168.100.110:8080"}' "$BASE/settings/telegram"; echo
+curl -s -X PATCH -H "Authorization: Bearer $STOKEN" -H 'Content-Type: application/json' -d '{"webUrl":"http://192.168.100.110"}' "$BASE/settings/telegram"; echo
 
 echo "--- 5) frontend bundle strings:"
 docker exec ams-frontend-1 sh -c 'grep -l "Unbind TG" /usr/share/nginx/html/assets/*.js | head -1; grep -l "AMS web URL" /usr/share/nginx/html/assets/*.js | head -1'

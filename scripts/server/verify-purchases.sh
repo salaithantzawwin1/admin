@@ -19,4 +19,4 @@ ETOKEN=$(docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); c
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $ETOKEN" "$BASE/inventory/spending.csv"
 
 echo "--- 5) frontend bundle has Purchases tab + CSV:"
-curl -s http://127.0.0.1:8080/assets/$(curl -s http://127.0.0.1:8080/ | grep -o 'index-[^"]*\.js' | head -1) | grep -o "Purchases\|Lifetime purchased" | sort | uniq -c
+curl -s http://127.0.0.1/assets/$(curl -s http://127.0.0.1/ | grep -o 'index-[^"]*\.js' | head -1) | grep -o "Purchases\|Lifetime purchased" | sort | uniq -c

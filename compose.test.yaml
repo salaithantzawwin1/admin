@@ -7,9 +7,6 @@ services:
     environment:
       APP_ENV: testing
 
-  frontend:
-    # appended to the base "8080:80" mapping — port 80 is the plain default
-    # (http://192.168.100.110) while :8080 keeps working for old bookmarks.
-    # If another service already owns port 80, remove the "80:80" line.
-    ports:
-      - "80:80"
+  # Frontend port comes from the base compose.yaml ("80:80") — the plain
+  # URL http://192.168.100.110/ is the one and only AMS address. The old
+  # :8080 legacy mapping was removed (2026-09-24): update old bookmarks.

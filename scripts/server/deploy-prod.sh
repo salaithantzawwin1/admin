@@ -36,4 +36,4 @@ sleep 6
 curl -fsS http://127.0.0.1:3010/api/health && echo
 docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod ps
 
-echo "DONE — prod UI: http://192.168.100.110:3080  (testing keeps :80/:8080)"
+echo "DONE — prod UI: http://192.168.100.110:3080  (testing keeps :80)"

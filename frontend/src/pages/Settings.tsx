@@ -861,7 +861,7 @@ export default function Settings() {
           <div className="sm:col-span-2">
             <label className="block text-xs text-gray-500 mb-1">AMS web URL (for "Open in AMS" buttons in notifications — optional)</label>
             <Input
-              placeholder="http://192.168.100.110:8080"
+              placeholder="http://192.168.100.110"
               value={tgCfg.webUrl}
               onChange={(e) => setTgCfg({ ...tgCfg, webUrl: e.target.value })}
             />
