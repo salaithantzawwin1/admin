@@ -29,7 +29,8 @@ export class TripRemindersService {
 
     const upcoming = await this.prisma.carRequest.findMany({
       where: {
-        status: { in: ['APPROVED', 'IN_PROGRESS'] as never },
+        // base document status (single source of truth) — CarRequest.status is a mirror
+        request: { status: { in: ['APPROVED', 'IN_PROGRESS'] as never } },
         startDate: { gte: now, lte: in24h },
         vehicleId: { not: null }, // assigned only — reminders start after Administration assigns a car
       },
@@ -49,10 +50,13 @@ export class TripRemindersService {
       });
       if (existing) continue;
 
+      // same-day trips start in a few hours — "Tomorrow's" would be wrong for them
+      const isSameDay = new Date(trip.startDate).toDateString() === now.toDateString();
+
       await this.notifications.notify({
         userId: trip.request.requesterId,
         type: REMINDER_TYPE,
-        title: `Tomorrow's trip — ${trip.request.docNumber}`,
+        title: `${isSameDay ? 'Today' : 'Tomorrow'}'s trip — ${trip.request.docNumber}`,
         body: `Vehicle ${trip.vehicle?.vehicleNo ?? ''} (${trip.vehicle?.brandModel ?? ''})${trip.driver ? ` with driver ${trip.driver.name}` : ''} is arranged for your trip starting ${trip.startDate.toLocaleString()}.`,
         link: `/requests/${trip.requestId}`,
         requestId: trip.requestId,
@@ -87,7 +91,10 @@ export class TripRemindersService {
       const overdue = await this.prisma.carAssignment.findMany({
         where: {
           releasedAt: null,
-          trip: null, // no CarTrip row at all == driver never acknowledged anything
+          trip: null, // no CarTrip row at all == trip never started
+          driverNotedAt: null, // the driver has not even tapped "✓ Noted" —
+          // without this filter a driver who DID acknowledge (Noted/Arrived) but
+          // has not started the trip yet got nagged + escalated every 30 minutes
           request: { carRequest: { startDate: { lte: new Date(now.getTime() - 15 * 60 * 1000), gte: windowStart } } },
         },
         include: {
@@ -101,6 +108,7 @@ export class TripRemindersService {
 
       for (const a of overdue) {
         if (!a.driver) continue; // defensive — assignment without a driver should not exist
+        if (a.driverNotedAt || a.driverArrivedAt) continue; // acknowledged late/in between runs — skip (defensive second line)
         const cr = a.request.carRequest;
         const when = cr?.startDate ? new Date(cr.startDate).toLocaleString() : 'the scheduled time';
         const pickup = cr?.pickupLocation ?? '—';

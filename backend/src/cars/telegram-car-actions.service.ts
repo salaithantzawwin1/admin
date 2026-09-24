@@ -362,7 +362,8 @@ export class TelegramCarActionsService {
     }
     const cr = request.carRequest;
     const busy = await this.prisma.carRequest.findMany({
-      where: { requestId: { not: requestId }, status: 'IN_PROGRESS', startDate: { lt: cr.endDate }, endDate: { gt: cr.startDate } },
+      // base document status — CarRequest.status is only a mirror
+      where: { requestId: { not: requestId }, request: { status: 'IN_PROGRESS' }, startDate: { lt: cr.endDate }, endDate: { gt: cr.startDate } },
       select: { vehicleId: true },
     });
     const busyIds = busy.map((b) => b.vehicleId).filter(Boolean) as string[];
@@ -428,7 +429,7 @@ export class TelegramCarActionsService {
           // already driving an overlapping IN_PROGRESS trip (not yet Back at Office)
           ...(await this.prisma.carRequest.findMany({
             where: {
-              status: 'IN_PROGRESS',
+              request: { status: 'IN_PROGRESS' }, // base document status — mirror-safe
               driverId: { not: null },
               requestId: { not: payload.requestId },
               startDate: { lt: cr.carRequest.endDate },

@@ -12,12 +12,12 @@ interface FleetVehicle {
   bookings: { docNumber?: string; startDate: string; endDate: string }[];
 }
 
+// Prisma VehicleStatus enum values (ON_LEAVE is a DriverStatus, not a vehicle one)
 const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red' | 'gray'> = {
   AVAILABLE: 'green',
   IN_USE: 'blue',
   UNDER_MAINTENANCE: 'yellow',
   OUT_OF_SERVICE: 'red',
-  ON_LEAVE: 'gray',
 };
 
 interface RequestRow {
@@ -47,15 +47,7 @@ interface QueueRow {
   } | null;
 }
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
-  DRAFT: 'gray',
-  PENDING_APPROVAL: 'yellow',
-  APPROVED: 'green',
-  REJECTED: 'red',
-  IN_PROGRESS: 'blue',
-  COMPLETED: 'green',
-  CANCELLED: 'gray',
-};
+
 
 type CarTab = 'availability' | 'requests';
 

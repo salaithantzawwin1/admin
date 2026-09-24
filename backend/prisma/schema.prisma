@@ -955,6 +955,7 @@ model CarRequest {
 
   @@index([startDate, endDate])
   @@index([vehicleId])
+  @@index([driverId]) // driver-busy / driver-overlap queries (panel picker, absences, reassign)
   @@map("car_requests")
 }
 

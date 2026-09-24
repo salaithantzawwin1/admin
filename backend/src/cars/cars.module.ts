@@ -27,6 +27,18 @@ export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
     this.workflow.registerCancelHook('CAR_REQUEST', (requestId, actor) =>
       this.cars.adminCancelApproved(requestId, 'Cancelled by requester', actor),
     );
+
+    // Status mirroring: CarRequest.status now follows request_documents.status on
+    // EVERY workflow transition (submit → PENDING_APPROVAL, approve → APPROVED,
+    // reject → REJECTED, return → DRAFT, cancel → CANCELLED). Previously the
+    // workflow engine never touched CarRequest.status, so approved bookings sat
+    // at DRAFT forever and every CarRequest.status-based query missed them.
+    // Module-specific actions (assign/release/trip/admin-cancel) keep writing both
+    // sides explicitly as before. Availability/clash/fleet-overview queries use the
+    // mirrored status — single source of truth, one place to fix.
+    this.workflow.registerStatusMirror('CAR_REQUEST', (requestId, status, tx) =>
+      tx.carRequest.update({ where: { requestId }, data: { status } }).then(() => undefined),
+    );
   }
 
   /** Telegram approve/assign surface — wires into the Telegram poll loop. */

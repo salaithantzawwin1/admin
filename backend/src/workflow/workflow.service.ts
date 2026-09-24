@@ -47,6 +47,35 @@ export class WorkflowService {
 
   private cancelHooks = new Map<RequestDocType, (requestId: string, actor: Actor) => Promise<unknown>>();
 
+  /**
+   * Module status-mirror hooks: modules with a status column of their own (e.g.
+   * CarRequest.status) register one of these and every workflow transition below
+   * mirrors request_documents.status onto the module row in the SAME transaction
+   * — one source of truth, no rows left behind at DRAFT while the document is
+   * already APPROVED.
+   */
+  registerStatusMirror(docType: RequestDocType, mirror: (requestId: string, status: WorkflowStatus, tx: Prisma.TransactionClient) => Promise<void>) {
+    this.statusMirrors.set(docType, mirror);
+  }
+
+  private statusMirrors = new Map<RequestDocType, (requestId: string, status: WorkflowStatus, tx: Prisma.TransactionClient) => Promise<void>>();
+
+  /**
+   * Fire the module status mirror (best-effort: never blocks the transition).
+   * Pass the open transaction when the caller has one (approve/reject/return) so
+   * the module row commits atomically with the document; submit/cancel have no
+   * transaction of their own and fall back to the plain client.
+   */
+  private async mirrorStatus(docType: RequestDocType, requestId: string, status: WorkflowStatus, tx?: Prisma.TransactionClient) {
+    const mirror = this.statusMirrors.get(docType);
+    if (!mirror) return;
+    try {
+      await mirror(requestId, status, tx ?? this.prisma);
+    } catch (e) {
+      this.logger.warn(`status mirror failed for ${docType} ${requestId} → ${status}: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
   // ---------- helpers ----------
 
   private async resolveDelegation(userId: string, at: Date): Promise<string[]> {
@@ -246,6 +275,9 @@ export class WorkflowService {
       },
     });
 
+    // module status mirror (e.g. CarRequest.status follows the document)
+    await this.mirrorStatus(request.docType as RequestDocType, id, 'PENDING_APPROVAL');
+
     await this.notifyApprovers(id, firstLevel, 'SUBMITTED', `New request ${request.docNumber}`, `${request.title} awaits approval`);
     // Telegram surface: bound Administration users get [Approve]/[Reject] buttons (optional hook)
     await this.onSubmittedTelegram?.(id).catch(() => undefined);
@@ -305,6 +337,8 @@ export class WorkflowService {
           comment, previousStatus: request.status, newStatus,
         },
       });
+      // module status mirror — same transaction as the document update
+      await this.mirrorStatus(request.docType as RequestDocType, id, newStatus, tx);
       return r;
     });
 
@@ -385,6 +419,8 @@ export class WorkflowService {
           action: 'REJECT', comment, previousStatus: request.status, newStatus: 'REJECTED',
         },
       });
+      // module status mirror — same transaction as the document update
+      await this.mirrorStatus(request.docType as RequestDocType, id, 'REJECTED', tx);
       return r;
     });
 
@@ -420,6 +456,8 @@ export class WorkflowService {
           action: 'RETURN', comment, previousStatus: request.status, newStatus: 'DRAFT',
         },
       });
+      // module status mirror — back to DRAFT alongside the document
+      await this.mirrorStatus(request.docType as RequestDocType, id, 'DRAFT', tx);
       return r;
     });
 
@@ -449,6 +487,8 @@ export class WorkflowService {
     const updated = await this.prisma.requestDocument.update({
       where: { id }, data: { status: 'CANCELLED' },
     });
+    // module status mirror (e.g. CarRequest.status follows the document)
+    await this.mirrorStatus(request.docType as RequestDocType, id, 'CANCELLED');
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'REQUEST_CANCELLED', module: 'WORKFLOW', recordId: id,

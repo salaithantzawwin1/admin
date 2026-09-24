@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Button, Card, Input, Select } from './ui';
@@ -27,6 +27,8 @@ export function CarRequestForm() {
   const [busy, setBusy] = useState(false);
   const [clashes, setClashes] = useState<{ request?: { docNumber: string }; startDate: string; endDate: string }[]>([]);
   const [forceSubmit, setForceSubmit] = useState(false);
+  // monotonic token for the clash-lookup effect (see effect below)
+  const clashRun = useRef(0);
   const navigate = useNavigate();
 
   // Custom hours needs an explicit end; other slots may omit it (server defaults to 17:00 same day)
@@ -44,20 +46,25 @@ export function CarRequestForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.timeSlot, form.startDate]);
 
-  // warn about same-vehicle double bookings when the window is fully known
+  // warn about same-vehicle double bookings when the window is fully known.
+  // A run-token guards against the classic race: an older slow response landing
+  // AFTER a newer one would overwrite the fresher clash list.
   useEffect(() => {
     if (!valid) return;
     const end = form.endDate || `${form.startDate.slice(0, 10)}T17:00`;
-    const ctrl = new AbortController();
+    const run = ++clashRun.current;
     api<{ conflicts: { request?: { docNumber: string }; startDate: string; endDate: string }[] }>(
       `/cars/availability/conflicts?startDate=${encodeURIComponent(new Date(form.startDate).toISOString())}&endDate=${encodeURIComponent(new Date(end).toISOString())}`,
     )
       .then((r) => {
+        if (clashRun.current !== run) return; // a newer keystroke already superseded us
         setClashes(r.conflicts ?? []);
         setForceSubmit(false);
       })
-      .catch(() => setClashes([]));
-    return () => ctrl.abort();
+      .catch(() => {
+        if (clashRun.current !== run) return;
+        setClashes([]);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.startDate, form.endDate, form.timeSlot, valid]);
 
@@ -118,7 +125,17 @@ export function CarRequestForm() {
           <option value="HALF_DAY_PM">Half day (PM)</option>
           <option value="CUSTOM_HOURS">Custom hours</option>
         </Select>
-        <Input type="number" min={1} placeholder="Passengers" value={form.passengers} onChange={(e) => setForm({ ...form, passengers: Number(e.target.value) })} />
+        <Input
+          type="number"
+          min={1}
+          placeholder="Passengers"
+          value={form.passengers}
+          onChange={(e) => {
+            // '' / NaN (cleared input) must not poison the JSON body → fall back to 1
+            const n = Number(e.target.value);
+            setForm({ ...form, passengers: Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 });
+          }}
+        />
         <Input placeholder="Purpose (optional)" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
       </div>
       <textarea
@@ -133,8 +150,8 @@ export function CarRequestForm() {
         <div className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
           <div className="font-medium">⚠ Another request already covers this time window:</div>
           <ul className="mt-1 list-disc list-inside text-xs">
-            {clashes.map((c) => (
-              <li key={c.request?.docNumber}>
+            {clashes.map((c, i) => (
+              <li key={c.request?.docNumber ?? `idx-${i}`}>
                 {c.request?.docNumber ?? '—'}: {new Date(c.startDate).toLocaleString()} → {new Date(c.endDate).toLocaleString()}
               </li>
             ))}
@@ -146,7 +163,7 @@ export function CarRequestForm() {
         </div>
       )}
 
-      <Button onClick={submit} disabled={!valid || busy || hasClash === undefined}>
+      <Button onClick={submit} disabled={!valid || busy}>
         {busy ? 'Submitting…' : 'Submit Car Request'}
       </Button>
     </Card>

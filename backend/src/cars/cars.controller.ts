@@ -8,6 +8,17 @@ import { TelegramService } from '../telegram/telegram.service';
 import { CarsService } from './cars.service';
 import { Actor } from '../org/org.service';
 
+/**
+ * Vehicle types accepted on car requests — MUST mirror the Prisma `VehicleType`
+ * enum. The old hard-coded 7-value list rejected MINIVAN/MINIBUS/LIMOUSINE/
+ * STAFF_BUS/VAN_CARGO requests with 400 even though the schema and the Fleet
+ * panel accept them.
+ */
+const VEHICLE_TYPES = [
+  'SEDAN', 'SUV', 'PICKUP', 'VAN', 'BUS', 'TRUCK', 'OTHER',
+  'MINIVAN', 'MINIBUS', 'LIMOUSINE', 'STAFF_BUS', 'VAN_CARGO',
+] as const;
+
 class CreateCarRequestDto {
   @IsString() @MinLength(2) @MaxLength(200) destination!: string;
   @IsDateString() startDate!: string;
@@ -15,7 +26,7 @@ class CreateCarRequestDto {
   @IsOptional() @IsString() @MaxLength(4000) description?: string;
   @IsOptional() @IsString() @MaxLength(500) purpose?: string;
   @IsOptional() @IsInt() @Min(1) @Max(60) passengers?: number;
-  @IsOptional() @IsIn(['SEDAN', 'SUV', 'PICKUP', 'VAN', 'BUS', 'TRUCK', 'OTHER']) vehicleTypeRequired?: string;
+  @IsOptional() @IsIn(VEHICLE_TYPES) vehicleTypeRequired?: string;
   @IsOptional() @IsIn(['FULL_DAY', 'HALF_DAY_AM', 'HALF_DAY_PM', 'CUSTOM_HOURS']) timeSlot?: string;
   @IsOptional() @IsString() @MaxLength(200) pickupLocation?: string;
 }
@@ -26,7 +37,7 @@ class UpdateCarRequestDto {
   @IsOptional() @IsDateString() startDate?: string;
   @IsOptional() @IsDateString() endDate?: string;
   @IsOptional() @IsInt() @Min(1) @Max(60) passengers?: number;
-  @IsOptional() @IsIn(['SEDAN', 'SUV', 'PICKUP', 'VAN', 'BUS', 'TRUCK', 'OTHER']) vehicleTypeRequired?: string;
+  @IsOptional() @IsIn(VEHICLE_TYPES) vehicleTypeRequired?: string;
   @IsOptional() @IsIn(['FULL_DAY', 'HALF_DAY_AM', 'HALF_DAY_PM', 'CUSTOM_HOURS']) timeSlot?: string;
   @IsOptional() @IsString() @MaxLength(200) pickupLocation?: string;
 }
@@ -68,7 +79,10 @@ export class CarsController {
     return this.cars.createCarRequest(dto, this.actor(req));
   }
 
-  /** APPROVED car requests still waiting for a vehicle assignment (Administration queue). */
+  /** APPROVED car requests still waiting for a vehicle assignment (Administration queue).
+   *  fleet.read guard: the queue carries requester names + destinations — previously
+   *  ANY logged-in user could read it (same for /assignments and /availability below). */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
   @Get('requests/approved-unassigned')
   approvedUnassigned() {
     return this.cars.listApprovedUnassigned();
@@ -108,6 +122,8 @@ export class CarsController {
     return this.cars.updateCarRequest(requestId, dto, this.actor(req));
   }
 
+  /** Vehicle availability in a window — fleet data, not personal: fleet.read. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
   @Get('availability')
   availability(
     @Query('vehicleId') vehicleId: string,
@@ -118,6 +134,8 @@ export class CarsController {
     return this.cars.checkAvailability(vehicleId, startDate, endDate, excludeRequestId);
   }
 
+  /** Assignment list carries requester names — Administration/superuser eyes only. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
   @Get('assignments')
   assignments(@Query('activeOnly') activeOnly?: string) {
     return this.cars.listAssignments(activeOnly === 'true');
@@ -180,13 +198,15 @@ export class CarsController {
     return this.cars.completeTrip(requestId, dto, this.actor(req));
   }
 
+  /** Expense access (cars.assign or the request's owner) is enforced in the service —
+   *  these endpoints previously had NO access control at all. */
   @Post('requests/:requestId/expenses')
   addExpense(@Req() req, @Param('requestId') requestId: string, @Body() dto: ExpenseDto) {
     return this.cars.addExpense(requestId, dto, this.actor(req));
   }
 
   @Get('requests/:requestId/expenses')
-  expenses(@Param('requestId') requestId: string) {
-    return this.cars.listExpenses(requestId);
+  expenses(@Req() req, @Param('requestId') requestId: string) {
+    return this.cars.listExpenses(requestId, this.actor(req));
   }
 }

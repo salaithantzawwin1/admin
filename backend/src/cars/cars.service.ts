@@ -147,7 +147,9 @@ export class CarsService {
       }),
       this.prisma.carRequest.findMany({
         where: {
-          status: { in: ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] },
+          // base document status is the single source of truth (CarRequest.status
+          // is only a mirror kept in sync by the workflow status-mirror hook)
+          request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
           startDate: { lt: in7days },
           endDate: { gt: now },
         },
@@ -181,7 +183,11 @@ export class CarsService {
     }
     const conflicts = await this.prisma.carRequest.findMany({
       where: {
-        status: { in: ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] },
+        // filter on the BASE document status, not CarRequest.status — the workflow
+        // engine writes request_documents.status while CarRequest.status can stay
+        // DRAFT forever (no mirroring), which hid every approved booking from this
+        // pre-warning. Rejected/cancelled/returned docs must not warn.
+        request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
         startDate: { lt: end },
         endDate: { gt: start },
       },
@@ -220,9 +226,16 @@ export class CarsService {
     const conflicts = await this.prisma.carRequest.findMany({
       where: {
         vehicleId,
-        id: excludeRequestId ? { not: excludeRequestId } : undefined,
-        requestId: exempt.length ? { notIn: exempt.map((b) => b.requestId) } : undefined,
-        status: { in: ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] },
+        // exclude THIS request's own booking (requestId, not the CarRequest.id —
+        // the old `id: { not: requestId }` never matched, so admin-shift kept
+        // colliding with the very booking it was shifting)
+        requestId: {
+          ...(excludeRequestId ? { not: excludeRequestId } : {}),
+          ...(exempt.length ? { notIn: exempt.map((b) => b.requestId) } : {}),
+        },
+        // base document status (SUBMITTED included — a submitted booking already
+        // plans the car) — CarRequest.status is only a mirror
+        request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
         startDate: { lt: end },
         endDate: { gt: start },
       },
@@ -287,7 +300,8 @@ export class CarsService {
         where: {
           vehicleId: data.vehicleId,
           requestId: { not: requestId, ...(exempt.length ? { notIn: exempt.map((b) => b.requestId) } : {}) },
-          status: { in: ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] },
+          // base document status (single source of truth) — CarRequest.status is a mirror
+          request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
           startDate: { lt: end },
           endDate: { gt: start },
         },
@@ -496,13 +510,22 @@ export class CarsService {
     const previousDriverId = assignment.driverId;
 
     await this.prisma.$transaction(async (tx) => {
-      // overlap re-check for the NEW vehicle (excluding this request's own booking)
-      const activeStates: WorkflowStatus[] = ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
+      // overlap re-check for the NEW vehicle (excluding this request's own booking).
+      // Same "Back at Office" exemption as assign()/overlaps(): a vehicle whose
+      // driver already signalled "Back at Office" is free again and must not
+      // block the new booking (CarAssignment.carRequestId is not reliably set,
+      // so the CarRequest.assignment relation can't be joined here).
+      const activeStates: WorkflowStatus[] = ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
+      const exempt = await tx.carAssignment.findMany({
+        where: { vehicleId: data.vehicleId, releasedAt: null, driverBackAtOfficeAt: { not: null } },
+        select: { requestId: true },
+      });
       const conflicts = await tx.carRequest.findMany({
         where: {
           vehicleId: data.vehicleId,
-          requestId: { not: requestId },
-          status: { in: activeStates },
+          requestId: { not: requestId, ...(exempt.length ? { notIn: exempt.map((b) => b.requestId) } : {}) },
+          // base document status (single source of truth) — CarRequest.status is a mirror
+          request: { status: { in: activeStates } },
           startDate: { lt: carReq.endDate },
           endDate: { gt: carReq.startDate },
         },
@@ -515,14 +538,14 @@ export class CarsService {
       // free the OLD vehicle (only when no other live booking uses it)
       if (carReq.vehicleId && carReq.vehicleId !== data.vehicleId) {
         const others = await tx.carRequest.count({
-          where: { vehicleId: carReq.vehicleId, requestId: { not: requestId }, status: { in: activeStates } },
+          where: { vehicleId: carReq.vehicleId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
         });
         if (others === 0) await tx.vehicle.update({ where: { id: carReq.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
       }
       // free the OLD driver (only when no other live booking uses them)
       if (previousDriverId && previousDriverId !== (data.driverId ?? null)) {
         const otherTrips = await tx.carRequest.count({
-          where: { driverId: previousDriverId, requestId: { not: requestId }, status: { in: activeStates } },
+          where: { driverId: previousDriverId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
         });
         if (otherTrips === 0) await tx.driver.update({ where: { id: previousDriverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
       }
@@ -642,16 +665,16 @@ export class CarsService {
 
     await this.prisma.$transaction(async (tx) => {
       // free the vehicle/driver — but only when no OTHER live booking still uses them
-      const activeStates: WorkflowStatus[] = ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
+      const activeStates: WorkflowStatus[] = ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
       if (request.carRequest?.vehicleId) {
         const others = await tx.carRequest.count({
-          where: { vehicleId: request.carRequest.vehicleId, requestId: { not: requestId }, status: { in: activeStates } },
+          where: { vehicleId: request.carRequest.vehicleId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
         });
         if (others === 0) {
           await tx.vehicle.update({ where: { id: request.carRequest.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
           if (request.carRequest.driverId) {
             const otherTrips = await tx.carRequest.count({
-              where: { driverId: request.carRequest.driverId, requestId: { not: requestId }, status: { in: activeStates } },
+              where: { driverId: request.carRequest.driverId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
             });
             if (otherTrips === 0) {
               await tx.driver.update({ where: { id: request.carRequest.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
@@ -695,8 +718,20 @@ export class CarsService {
       include: { carRequest: true },
     });
     if (!request || request.docType !== 'CAR_REQUEST') throw new NotFoundException('Car request not found');
-    if (!['APPROVED', 'PENDING_APPROVAL'].includes(request.status)) {
+    // IN_PROGRESS is allowed to match the CarPanel UI ("Shift time" shows for live
+    // requests) — but a trip the driver already started must not be teleported
+    // to another time window by a plan change.
+    if (!['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(request.status)) {
       throw new BadRequestException(`Cannot shift time from status ${request.status}`);
+    }
+    if (request.status === 'IN_PROGRESS') {
+      const assignment = await this.prisma.carAssignment.findUnique({
+        where: { requestId },
+        select: { trip: { select: { status: true } } },
+      });
+      if (assignment?.trip?.status === 'STARTED') {
+        throw new BadRequestException('Trip already started — complete or release the trip before shifting the time');
+      }
     }
 
     const start = new Date(data.startDate);
@@ -876,9 +911,27 @@ export class CarsService {
 
   // ---------- expenses ----------
 
+  /**
+   * Expense access rule: Administration (cars.assign) manages fleet spending, and
+   * the requester may add/view expenses for their OWN trip (e.g. fuel paid in cash).
+   * Everyone else is forbidden — without this guard any logged-in user could read
+   * and write expenses on ANY request by id (no controller-level guard existed).
+   */
+  private async assertExpenseAccess(requestId: string, actor: Actor) {
+    const request = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      select: { requesterId: true },
+    });
+    if (!request) throw new NotFoundException('Car request not found');
+    if (request.requesterId === actor.userId) return; // the owner always has access
+    if (await this.permissions.userHas(actor.userId, 'cars.assign')) return; // Administration
+    throw new ForbiddenException('Only Administration or the requester can access trip expenses');
+  }
+
   async addExpense(requestId: string, data: {
     type: string; amount: number; description?: string; expenseDate?: string;
   }, actor: Actor) {
+    await this.assertExpenseAccess(requestId, actor);
     const assignment = await this.prisma.carAssignment.findUnique({
       where: { requestId },
       include: { trip: true },
@@ -907,7 +960,8 @@ export class CarsService {
     return expense;
   }
 
-  async listExpenses(requestId: string) {
+  async listExpenses(requestId: string, actor: Actor) {
+    await this.assertExpenseAccess(requestId, actor);
     const assignment = await this.prisma.carAssignment.findUnique({ where: { requestId }, include: { trip: true } });
     if (!assignment?.trip) return [];
     return this.prisma.carExpense.findMany({

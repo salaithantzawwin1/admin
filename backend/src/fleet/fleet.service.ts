@@ -487,7 +487,8 @@ export class FleetService {
     if (overlap) throw new ConflictException(`Driver already has an absence ${overlap.startsAt.toISOString().slice(0, 10)} → ${overlap.endsAt.toISOString().slice(0, 10)}`);
     // future trips already assigned to this driver inside the window — warn loudly
     const trips = await this.prisma.carRequest.findMany({
-      where: { driverId: data.driverId, startDate: { lt: data.endsAt }, endDate: { gt: data.startsAt }, status: { in: ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] } },
+      // base document status (single source of truth) — CarRequest.status is a mirror
+      where: { driverId: data.driverId, startDate: { lt: data.endsAt }, endDate: { gt: data.startsAt }, request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never } } },
       select: { requestId: true, request: { select: { docNumber: true } } },
     });
 

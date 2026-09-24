@@ -41,15 +41,17 @@ interface Driver {
   absences?: { startsAt: string; endsAt: string; reason?: string | null }[];
 }
 
-/** Driver ids on an overlapping IN_PROGRESS trip (server truth, not just status label). */
-function useBusyDrivers(tripStart: Date, tripEnd: Date): string[] {
+/** Driver ids on an overlapping IN_PROGRESS trip (server truth, not just status label).
+ *  Rules of Hooks: call this ONCE, unconditionally, from the component top level —
+ *  pass enabled=false to skip the fetch instead of conditionally mounting the hook. */
+function useBusyDrivers(tripStart: Date, tripEnd: Date, enabled: boolean): string[] {
   const [busy, setBusy] = useState<string[]>([]);
   useEffect(() => {
-    if (!(tripStart instanceof Date) || Number.isNaN(tripStart.getTime())) return;
+    if (!enabled || !(tripStart instanceof Date) || Number.isNaN(tripStart.getTime())) return;
     api<string[]>(`/fleet/drivers/busy?start=${tripStart.toISOString()}&end=${tripEnd.toISOString()}`)
       .then(setBusy)
       .catch(() => setBusy([]));
-  }, [tripStart.toISOString(), tripEnd.toISOString()]);
+  }, [enabled, tripStart.toISOString(), tripEnd.toISOString()]);
   return busy;
 }
 interface Expense {
@@ -109,6 +111,14 @@ export function CarPanel({
       .then((rows) => setCanManagerAck(rows.some((r) => (r as { id: string }).id === requestId)))
       .catch(() => setCanManagerAck(false));
   }, [requestId]);
+
+  // trip window of the current request (fallbacks keep the hook call stable while loading)
+  const tripStart = car ? new Date(car.startDate) : new Date(0);
+  const tripEnd = car ? new Date(car.endDate) : new Date(8640000000000000);
+  // Rules of Hooks: ONE unconditional call — the assign/reassign blocks below only
+  // consume the result. Calling the hook inside those conditional blocks crashed the
+  // page (fewer hooks than the previous render) when the form appeared/disappeared.
+  const busyDrivers = useBusyDrivers(tripStart, tripEnd, canAssign && !!car);
 
   const act = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError('');
@@ -242,9 +252,7 @@ export function CarPanel({
       )}
 
       {showAssign && (() => {
-        const tripStart = car ? new Date(car.startDate) : new Date(0);
-        const tripEnd = car ? new Date(car.endDate) : new Date(8640000000000000);
-        const busyDrivers = useBusyDrivers(tripStart, tripEnd);
+        // tripStart/tripEnd/busyDrivers come from the unconditional top-level hook call
         return (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Assign vehicle (Administration)</div>
@@ -279,9 +287,7 @@ export function CarPanel({
       })()}
 
       {canReassign && (() => {
-        const tripStart = car ? new Date(car.startDate) : new Date(0);
-        const tripEnd = car ? new Date(car.endDate) : new Date(8640000000000000);
-        const busyDrivers = useBusyDrivers(tripStart, tripEnd);
+        // tripStart/tripEnd/busyDrivers come from the unconditional top-level hook call
         return (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Change vehicle / driver</div>
