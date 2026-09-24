@@ -22,6 +22,8 @@ export const PERMISSIONS = {
   MEETING_ROOMS_FACILITIES_MANAGE: 'meeting-rooms.facilities.manage',
   INVENTORY_READ: 'inventory.read',
   INVENTORY_MANAGE: 'inventory.manage',
+  SUPPLIERS_READ: 'suppliers.read',
+  SUPPLIERS_MANAGE: 'suppliers.manage',
   ANNOUNCEMENTS_READ: 'announcements.read',
   ANNOUNCEMENTS_MANAGE: 'announcements.manage',
   AUDIT_READ: 'audit.read',

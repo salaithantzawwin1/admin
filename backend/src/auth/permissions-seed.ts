@@ -9,14 +9,15 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   // Plan §12: Administration runs the store; employees read the catalog + request
   // org.read → department/branch pickers (announcement targeting, employee forms)
   // departments.manage → Administration owns department CRUD (Plan §3)
-  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
+  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'suppliers.read', 'suppliers.manage', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
   EMPLOYEE: ['inventory.read', 'announcements.read'],
   DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
   MANAGEMENT: ['inventory.read', 'announcements.read'],
   MAINTENANCE_COORDINATOR: ['inventory.read', 'announcements.read'],
-  // PURCHASING/FINANCE browse the catalog to raise purchase requests (Plan §6)
-  PURCHASING: ['announcements.read', 'inventory.read'],
-  FINANCE: ['announcements.read', 'inventory.read'],
+  // PURCHASING/FINANCE browse the catalog to raise purchase requests (Plan §6);
+  // PURCHASING also owns the vendor master
+  PURCHASING: ['announcements.read', 'inventory.read', 'suppliers.read', 'suppliers.manage'],
+  FINANCE: ['announcements.read', 'inventory.read', 'suppliers.read'],
   SYSTEM_ADMIN: [], // superuser — every code is granted dynamically
 };
 

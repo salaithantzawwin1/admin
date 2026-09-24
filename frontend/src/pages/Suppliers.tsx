@@ -33,7 +33,7 @@ export default function Suppliers() {
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [modalError, setModalError] = useState('');
   const [error, setError] = useState('');
-  const canManage = hasPermission('inventory.manage');
+  const canManage = hasPermission('inventory.manage') || hasPermission('suppliers.manage');
 
   const load = useCallback(() => {
     api<Supplier[]>(`/suppliers${showInactive ? '?all=1' : ''}`).then(setSuppliers).catch(() => setSuppliers([]));

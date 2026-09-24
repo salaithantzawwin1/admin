@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UseGuards } from '@nestjs/common';
-import { RequirePermissions } from '../auth/permissions.guard';
+import { AnyPermission, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { SuppliersService } from './suppliers.service';
 import { Actor } from '../org/org.service';
@@ -35,25 +35,33 @@ export class SuppliersController {
   }
 
   /** Supplier master list — active only by default, ?all=1 includes deactivated. */
-  @RequirePermissions(PERMISSIONS.INVENTORY_READ)
+  // OR: inventory.read (store view) or the dedicated suppliers.read
+  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.SUPPLIERS_READ])
   @Get()
   list(@Query('all') all?: string) {
     return this.suppliers.list(all === '1');
   }
 
-  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  /** Purchase history for one supplier (Who/When/What of their PURCHASE txs). */
+  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.SUPPLIERS_READ])
+  @Get(':id/history')
+  history(@Param('id') id: string) {
+    return this.suppliers.purchaseHistory(id);
+  }
+
+  @AnyPermission([PERMISSIONS.INVENTORY_MANAGE], [PERMISSIONS.SUPPLIERS_MANAGE])
   @Post()
   async create(@Req() req, @Body() dto: SupplierDto) {
     return this.suppliers.create(dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @AnyPermission([PERMISSIONS.INVENTORY_MANAGE], [PERMISSIONS.SUPPLIERS_MANAGE])
   @Patch(':id')
   async update(@Req() req, @Param('id') id: string, @Body() dto: UpdateSupplierDto) {
     return this.suppliers.update(id, dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @AnyPermission([PERMISSIONS.INVENTORY_MANAGE], [PERMISSIONS.SUPPLIERS_MANAGE])
   @Delete(':id')
   async remove(@Req() req, @Param('id') id: string) {
     return this.suppliers.remove(id, this.actor(req));
