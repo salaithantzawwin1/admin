@@ -22,6 +22,25 @@ body {
   }
 }
 
+/* Bell badge: one short pulse when a new notification arrives */
+@keyframes pingOnce {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.55);
+  }
+  70% {
+    transform: scale(1.15);
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+.animate-ping-once {
+  animation: pingOnce 0.7s ease-out 1;
+}
+
 /* Toast slide-in */
 @keyframes toastIn {
   from {

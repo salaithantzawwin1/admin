@@ -17,6 +17,7 @@ import CarRequests from './pages/CarRequests';
 import MeetingRooms from './pages/MeetingRooms';
 import Inventory from './pages/Inventory';
 import Announcements from './pages/Announcements';
+import Notifications from './pages/Notifications';
 import Suppliers from './pages/Suppliers';
 import RbacMatrix from './pages/RbacMatrix';
 import Settings from './pages/Settings';
@@ -43,6 +44,7 @@ export default function App() {
         <Route path="meeting-rooms" element={<MeetingRooms />} />
         <Route path="inventory" element={<Inventory />} />
         <Route path="announcements" element={<Announcements />} />
+        <Route path="notifications" element={<Notifications />} />
         <Route path="suppliers" element={<Suppliers />} />
         <Route path="users" element={<Users />} />
         <Route path="departments" element={<Departments />} />

@@ -23,7 +23,7 @@ export class NotificationsController {
 
   @Get('unread-count')
   async unreadCount(@Req() req) {
-    const [, , unread] = await this.notifications.list(req.user.id, 1, 1);
+    const unread = await this.notifications.countUnread(req.user.id);
     return { unread };
   }
 

@@ -49,6 +49,11 @@ export class NotificationsService {
     ]);
   }
 
+  /** Lightweight poll target for the bell badge — single COUNT query. */
+  countUnread(userId: string) {
+    return this.prisma.notification.count({ where: { userId, readStatus: 'UNREAD' } });
+  }
+
   async markRead(userId: string, id: string) {
     await this.prisma.notification.updateMany({
       where: { id, userId },
