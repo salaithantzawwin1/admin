@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { forwardRef } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { TelegramBindController } from './telegram-bind.controller';
 import { TelegramService } from './telegram.service';
 
@@ -11,6 +13,8 @@ import { TelegramService } from './telegram.service';
  * edited from Settings → Telegram. AuditService/PrismaService come from @Global modules.
  */
 @Module({
+  // forwardRef breaks the cycle AuthModule → SettingsModule → TelegramModule
+  imports: [forwardRef(() => AuthModule)],
   controllers: [TelegramBindController],
   providers: [TelegramService],
   exports: [TelegramService],

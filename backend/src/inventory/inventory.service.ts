@@ -9,6 +9,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
+import { PermissionsService } from '../auth/permissions.service';
 import { Actor } from '../org/org.service';
 
 const DOC_PREFIX = 'OSR';
@@ -21,6 +22,7 @@ export class InventoryService {
     private notifications: NotificationsService,
     private audit: AuditService,
     private workflow: WorkflowService,
+    private permissions: PermissionsService,
   ) {}
 
   // ---------- items master ----------
@@ -698,10 +700,8 @@ export class InventoryService {
     const items = await this.lowStock();
     let sent = 0;
     if (items.length > 0) {
-      const admins = await this.prisma.userRole.findMany({
-        where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE' } },
-        select: { userId: true },
-      });
+      // RBAC-native: whoever manages inventory gets low-stock alerts
+      const admins = await this.permissions.usersWithPermissions(['inventory.manage']);
       for (const item of items) {
         const recent = await this.prisma.notification.findFirst({
           where: { type: 'LOW_STOCK', title: `Low stock — ${item.name}`, createdAt: { gte: new Date(Date.now() - 24 * 3600 * 1000) } },
@@ -709,7 +709,7 @@ export class InventoryService {
         });
         if (recent) continue;
         const suggested = item.minStock * 3 - item.balance;
-        await this.notifications.notifyMany(admins.map((a) => a.userId), {
+        await this.notifications.notifyMany(admins, {
           type: 'LOW_STOCK',
           title: `Low stock — ${item.name}`,
           body: `${item.code} is at ${item.balance} ${item.unit} (threshold ${item.minStock}). Suggested restock: ${Math.max(suggested, item.minStock)} ${item.unit}.`,

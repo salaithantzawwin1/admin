@@ -9,7 +9,7 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   // Plan §12: Administration runs the store; employees read the catalog + request
   // org.read → department/branch pickers (announcement targeting, employee forms)
   // departments.manage → Administration owns department CRUD (Plan §3)
-  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage'],
+  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
   EMPLOYEE: ['inventory.read', 'announcements.read'],
   DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
   MANAGEMENT: ['inventory.read', 'announcements.read'],

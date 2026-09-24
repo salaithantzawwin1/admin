@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
+import { PermissionsService } from '../auth/permissions.service';
 
 const ALLOWED_MIME = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -25,7 +26,7 @@ const MAX_ANNOUNCEMENT_FILES = 10;
 export class AttachmentsService {
   private uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
 
-  constructor(private prisma: PrismaService, private audit: AuditService) {}
+  constructor(private prisma: PrismaService, private audit: AuditService, private permissions: PermissionsService) {}
 
   private ensureDir() {
     if (!fs.existsSync(this.uploadRoot)) fs.mkdirSync(this.uploadRoot, { recursive: true });
@@ -45,10 +46,8 @@ export class AttachmentsService {
       const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId } });
       if (!request) throw new NotFoundException('Request not found');
       if (request.requesterId !== userId) {
-        // only the owner (or a system admin) can attach files to a request
-        const admin = await this.prisma.userRole.findFirst({
-          where: { userId, role: { name: 'SYSTEM_ADMIN' } },
-        });
+        // only the owner (or a users.manage admin) can attach files to a request
+        const admin = await this.permissions.userHas(userId, 'users.manage');
         if (!admin) throw new ForbiddenException('Not your request');
       }
     }
@@ -56,11 +55,9 @@ export class AttachmentsService {
     if (announcementId) {
       const announcement = await this.prisma.announcement.findUnique({ where: { id: announcementId } });
       if (!announcement) throw new NotFoundException('Announcement not found');
-      // only the creator (or a system admin) may attach files to an announcement
+      // only the creator (or a users.manage admin) may attach files to an announcement
       if (announcement.createdById !== userId) {
-        const admin = await this.prisma.userRole.findFirst({
-          where: { userId, role: { name: 'SYSTEM_ADMIN' } },
-        });
+        const admin = await this.permissions.userHas(userId, 'users.manage');
         if (!admin) throw new ForbiddenException('Not your announcement');
       }
       const existing = await this.prisma.attachment.count({ where: { announcementId } });
@@ -108,13 +105,8 @@ export class AttachmentsService {
       const request = await this.prisma.requestDocument.findUnique({ where: { id: attachment.requestId } });
       if (!request) throw new NotFoundException('Request not found');
       if (request.requesterId !== userId) {
-        // approvers / admins may access; simple check: any role or same-department head
-        const privileged = await this.prisma.userRole.findFirst({
-          where: {
-            userId,
-            role: { name: { in: ['SYSTEM_ADMIN', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT'] } },
-          },
-        });
+        // RBAC-native: requester-adjacent access = requests.read.all (was hard-coded role list)
+        const privileged = await this.permissions.userHas(userId, 'requests.read.all');
         if (!privileged) throw new ForbiddenException('No access to this attachment');
       }
     }
@@ -136,12 +128,8 @@ export class AttachmentsService {
     const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId } });
     if (!request) throw new NotFoundException('Request not found');
     if (request.requesterId !== userId) {
-      const privileged = await this.prisma.userRole.findFirst({
-        where: {
-          userId,
-          role: { name: { in: ['SYSTEM_ADMIN', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT'] } },
-        },
-      });
+      // RBAC-native: requests.read.all (was hard-coded role list)
+      const privileged = await this.permissions.userHas(userId, 'requests.read.all');
       if (!privileged) throw new ForbiddenException('No access to this request');
     }
     return this.prisma.attachment.findMany({ where: { requestId }, orderBy: { createdAt: 'desc' } });
@@ -151,7 +139,8 @@ export class AttachmentsService {
     const attachment = await this.prisma.attachment.findUnique({ where: { id } });
     if (!attachment) throw new NotFoundException('Attachment not found');
 
-    const admin = await this.prisma.userRole.findFirst({ where: { userId, role: { name: 'SYSTEM_ADMIN' } } });
+    // owner, users.manage holder (admin override), or SYSTEM_ADMIN superuser
+    const admin = await this.permissions.userHas(userId, 'users.manage');
     if (attachment.uploadedById !== userId && !admin) throw new ForbiddenException('Not your attachment');
 
     const filePath = path.join(this.uploadRoot, attachment.storedName);

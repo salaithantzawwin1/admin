@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { Badge, Button, Empty, Input, PageHeader, Table, statusColor } from '../components/ui';
+import { hasPermission } from '../api';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 
@@ -56,6 +57,8 @@ export default function Employees() {
   const [allUsers, setAllUsers] = useState<{ id: string; username: string; fullName: string }[]>([]);
   const [newLogin, setNewLogin] = useState({ username: '', password: '', roles: ['EMPLOYEE'] as string[], authSource: 'LOCAL' as 'LOCAL' | 'AD' });
   const [confirmDelete, setConfirmDelete] = useState<EmployeeRow | null>(null);
+  // employees.manage (or org.manage) gates CRUD — read-only users see the directory only
+  const canManage = hasPermission('employees.manage') || hasPermission('org.manage');
   const [confirmText, setConfirmText] = useState('');
   const [error, setError] = useState('');
   const [modalError, setModalError] = useState(''); // submit errors show inside the dialog, not on the page
@@ -189,7 +192,9 @@ export default function Employees() {
       <PageHeader
         title="Employees"
         subtitle="Employee master data — departments route requests to the right approvers"
-        actions={<Button onClick={() => setShowForm(!showForm)}>{showForm ? 'Close' : '+ New Employee'}</Button>}
+        actions={
+          canManage ? <Button onClick={() => setShowForm(!showForm)}>{showForm ? 'Close' : '+ New Employee'}</Button> : undefined
+        }
       />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
@@ -294,34 +299,36 @@ export default function Employees() {
             </td>
             <td className="px-4 py-3"><Badge color={statusColor(e0.status)}>{e0.status}</Badge></td>
             <td className="px-4 py-3">
-              <div className="flex flex-wrap justify-end gap-1.5">
-                <button
-                  className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
-                  onClick={() => {
-                    setEdit({ ...e0 });
-                    setEditRoles(e0.roles ?? []);
-                    setLinkMode('none');
-                    setLinkUserId('');
-                    setNewLogin({ username: '', password: '', roles: ['EMPLOYEE'], authSource: 'LOCAL' });
-                    if (e0.user) {
-                      api<{ roles: string[] }>(`/org/employees/${e0.id}/roles`)
-                        .then((r) => setEditRoles(r.roles))
-                        .catch(() => undefined);
-                    } else {
-                      loadLinkableUsers();
-                    }
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  className={`text-xs px-2 py-1 rounded border ${e0.status === 'ACTIVE' ? 'border-yellow-300 text-yellow-700 hover:bg-yellow-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}
-                  onClick={() => toggle(e0)}
-                >
-                  {e0.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
-                </button>
-                <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => { setConfirmDelete(e0); setConfirmText(''); }}>Delete</button>
-              </div>
+              {canManage && (
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <button
+                    className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                    onClick={() => {
+                      setEdit({ ...e0 });
+                      setEditRoles(e0.roles ?? []);
+                      setLinkMode('none');
+                      setLinkUserId('');
+                      setNewLogin({ username: '', password: '', roles: ['EMPLOYEE'], authSource: 'LOCAL' });
+                      if (e0.user) {
+                        api<{ roles: string[] }>(`/org/employees/${e0.id}/roles`)
+                          .then((r) => setEditRoles(r.roles))
+                          .catch(() => undefined);
+                      } else {
+                        loadLinkableUsers();
+                      }
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className={`text-xs px-2 py-1 rounded border ${e0.status === 'ACTIVE' ? 'border-yellow-300 text-yellow-700 hover:bg-yellow-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}
+                    onClick={() => toggle(e0)}
+                  >
+                    {e0.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
+                  </button>
+                  <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => { setConfirmDelete(e0); setConfirmText(''); }}>Delete</button>
+                </div>
+              )}
             </td>
           </tr>
         ))}

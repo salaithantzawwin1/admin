@@ -6,6 +6,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { PermissionsService } from '../auth/permissions.service';
 import { Actor } from '../org/org.service';
 
 const ACTIVE: WorkflowStatus[] = ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
@@ -19,6 +20,7 @@ export class MeetingRoomsService {
     private numbering: NumberingService,
     private notifications: NotificationsService,
     private audit: AuditService,
+    private permissions: PermissionsService,
     private telegram: TelegramService,
   ) {}
 
@@ -491,11 +493,8 @@ export class MeetingRoomsService {
       take: 20,
     });
     if (rows.length === 0) return;
-    const admins = await this.prisma.userRole.findMany({
-      where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE' } },
-      select: { userId: true },
-    });
-    const userIds = [...new Set(admins.map((r) => r.userId))];
+    // RBAC-native: whoever can assign rooms gets the unassigned-meetings reminder
+    const userIds = await this.permissions.usersWithPermissions(['meeting-rooms.assign']);
     if (userIds.length === 0) return;
     const list = rows
       .map((r) => {

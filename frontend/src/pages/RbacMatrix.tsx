@@ -9,8 +9,9 @@ interface MatrixRole {
 
 /** Groups shown in the matrix — order defines display order. */
 const GROUPS: { name: string; prefix: string; description: string }[] = [
-  { name: 'Users & Org', prefix: 'users.', description: 'User accounts, branches, employees' },
+  { name: 'Users & Org', prefix: 'users.', description: 'User accounts, branches' },
   { name: 'Departments', prefix: 'departments.', description: 'Department lists and CRUD' },
+  { name: 'Employees', prefix: 'employees.', description: 'Employee directory and CRUD, login links' },
   { name: 'Requests & Workflow', prefix: 'requests.', description: 'Create, view and read requests; approval acting' },
   { name: 'Approvals', prefix: 'approvals.', description: 'Act on approval inbox' },
   { name: 'Fleet & Cars', prefix: 'fleet.', description: 'Vehicles, drivers, trips, vehicle types' },
@@ -29,6 +30,8 @@ const PERM_LABELS: Record<string, string> = {
   'org.manage': 'Manage org data',
   'departments.read': 'View departments',
   'departments.manage': 'Manage departments',
+  'employees.read': 'View employees',
+  'employees.manage': 'Manage employees',
   'requests.read.own': 'View own requests',
   'requests.read.all': 'View all requests',
   'requests.create': 'Create requests',

@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.module';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { PermissionsService } from '../auth/permissions.service';
 
 const REMINDER_TYPE = 'REMINDER' as never; // existing NotificationType enum value
 
@@ -18,6 +19,7 @@ export class TripRemindersService {
     private prisma: PrismaService,
     private notifications: NotificationsService,
     private telegram: TelegramService,
+    private permissions: PermissionsService,
   ) {}
 
   /** Send TRIP_REMINDER for APPROVED/IN_PROGRESS car requests starting within the next 24h. */
@@ -131,11 +133,8 @@ export class TripRemindersService {
         });
         if (recent) continue;
 
-        const admins = await this.prisma.userRole.findMany({
-          where: { role: { name: { in: ['ADMINISTRATION', 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
-          select: { userId: true },
-        });
-        const adminIds = [...new Set(admins.map((r) => r.userId))];
+        // RBAC-native: whoever can assign cars/trips gets the no-ack escalation
+        const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
         const title = `⏰ Driver has not acknowledged — ${a.request.docNumber}`;
         const body = `${a.driver.name} has not tapped ✓ Noted for the trip that started ${when} (vehicle ${a.vehicle?.vehicleNo ?? '—'}). ${a.driver.telegramChatId ? 'Driver was reminded on Telegram.' : 'Driver has no Telegram link — reach them directly.'}`;
         await this.notifications.notifyMany(adminIds, {

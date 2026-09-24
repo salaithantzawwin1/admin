@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
+import { PermissionsService } from '../auth/permissions.service';
 
 /**
  * Telegram driver-notification bot (Plan: Car assignment → Noted/Arrived/Back flow).
@@ -61,7 +62,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private cachedToken: string | null = null;
   private cachedEnabled = false;
 
-  constructor(private prisma: PrismaService, private audit: AuditService) {}
+  constructor(private prisma: PrismaService, private audit: AuditService, private permissions: PermissionsService) {}
 
   async onModuleInit() {
     this.polling = true;
@@ -270,11 +271,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   /** Tell Administration + sysadmins a new join draft is waiting (in-app + Telegram mirror). */
   private async notifyAdminsOfJoin(displayName: string | null, tgUsername: string | null, chatId: string) {
     try {
-      const admins = await this.prisma.userRole.findMany({
-        where: { role: { name: { in: ['ADMINISTRATION', 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
-        select: { userId: true },
-      });
-      const userIds = [...new Set(admins.map((r) => r.userId))];
+      // RBAC-native: whoever manages users gets join requests
+      const userIds = await this.permissions.usersWithPermissions(['users.manage']);
       const who = [displayName, tgUsername ? `@${tgUsername}` : null].filter(Boolean).join(' · ') || chatId;
       const title = `📨 Telegram join request — ${who}`;
       const body = `"${displayName ?? chatId}"${tgUsername ? ` (@${tgUsername})` : ''} sent /start to the bot and is waiting for approval. Open Settings → Telegram Joins to link them to a system user or driver.`;
@@ -915,16 +913,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {
     const doc = a.request.docNumber;
     const driverName = a.driver?.name ?? 'Driver';
-    const admins = await this.prisma.userRole.findMany({
-      where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE' } },
-      select: { userId: true },
-    });
+    // RBAC-native: the broadcast goes to whoever can assign cars/trips
+    const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
     const link = `/requests/${a.request.id}`;
     // The admin who MADE this assignment watches the driver's progress live in
     // their own chat (they dispatched it — Noted/Ready/Back reach the dispatcher
-    // too) — deduped against the ADMINISTRATION broadcast so a chat never gets
+    // too) — deduped against the broadcast so a chat never gets
     // the same stage message twice.
-    const adminIds = [...new Set(admins.map((r) => r.userId))];
     let assignerChatId: string | null = null;
     try {
       const assigner = await this.prisma.user.findUnique({ where: { id: a.assignedById }, select: { telegramChatId: true } });

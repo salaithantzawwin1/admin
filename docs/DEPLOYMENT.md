@@ -57,6 +57,34 @@ Consequences:
 - **The server password must never be committed** — pass it via env var to
   scripts (`PW='...' bash scripts/server/bootstrap-server.sh`).
 
+## 3b. RBAC checklist — when adding a NEW module (mandatory)
+
+Every new backend module MUST be RBAC-gated; every new capability MUST appear in
+the Permission Matrix (`/rbac`). Do not hard-code role names — add permission codes.
+
+1. **Add code(s) to the catalog** — `backend/src/auth/permissions.ts`:
+   `<module>.read` (view) and `<module>.manage` (administer) are the conventions
+   (e.g. `employees.read`, `employees.manage`, `departments.manage`, `fleet.types.manage`).
+2. **Enforce on endpoints** — in the module's controller:
+   `@RequirePermissions(PERMISSIONS.MODULE_MANAGE)` for writes; for list endpoints
+   use `@AnyPermission([ORG_READ], [MODULE_READ])`-style OR-gates so either the
+   full org view or the module-specific read grants access. Service-level checks
+   use `PermissionsService.userHas(userId, code)`.
+3. **Notification broadcasts** — never query `role: { name: 'ADMINISTRATION' }`.
+   Use `permissions.usersWithPermissions(['<module>.manage'])` (ACTIVE users only).
+4. **Default grants** — add the code to `DEFAULT_GRANTS` in
+   `backend/src/auth/permissions-seed.ts` for the roles that should have it
+   (boot seed only fills codes a role never had — matrix edits survive).
+5. **Frontend** — sidebar entry in `Layout.tsx` with
+   `hasPermission('<module>.read')`; hide action buttons with
+   `hasPermission('<module>.manage')`; add friendly labels + group in
+   `frontend/src/pages/RbacMatrix.tsx` (PERM_LABELS + GROUPS).
+6. **Verify** — matrix shows the new code sorted A→Z; 403 without grant,
+   200/201 with; E2E script under `scripts/server/verify-rbac.sh` conventions.
+
+Existing RBAC-native examples: departments (read/manage), employees (read/manage),
+announcement album/ack flows, fleet types, meeting-room facilities.
+
 ## 4. Git workflow
 
 - Remote: `https://github.com/salaithantzawwin1/admin.git` (branch `main`)

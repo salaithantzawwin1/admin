@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { api, getUser, hasPermission, hasRole, clearSession, AuthUser } from '../api';
+import { api, getUser, hasPermission, clearSession, AuthUser } from '../api';
 import { NotificationBell } from './NotificationBell';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { ToastHost } from './Toast';
@@ -14,11 +14,11 @@ const nav = [
   { to: '/announcements', label: 'Announcements', icon: '📢', show: () => hasPermission('announcements.read') },
   { to: '/suppliers', label: 'Suppliers', icon: '🚛', show: () => hasPermission('inventory.read') },
   { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
-  { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasRole(getUser(), 'DEPARTMENT_HEAD') || hasRole(getUser(), 'MANAGEMENT') },
+  { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
   { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },
   { to: '/users', label: 'Users', icon: '👥', show: () => hasPermission('users.read') },
   { to: '/departments', label: 'Departments', icon: '🏢', show: () => hasPermission('org.read') || hasPermission('departments.read') },
-  { to: '/employees', label: 'Employees', icon: '🧑‍💼', show: () => hasPermission('org.read') },
+  { to: '/employees', label: 'Employees', icon: '🧑‍💼', show: () => hasPermission('org.read') || hasPermission('employees.read') },
   { to: '/rbac', label: 'Permissions', icon: '🔐', show: () => hasPermission('users.manage') },
   { to: '/settings', label: 'Settings', icon: '⚙️', show: () => hasPermission('users.manage') },
   { to: '/audit-logs', label: 'Audit Logs', icon: '📋', show: () => hasPermission('audit.read') },

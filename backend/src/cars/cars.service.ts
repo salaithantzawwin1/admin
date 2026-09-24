@@ -88,15 +88,16 @@ export class CarsService {
     });
     if (!car || !actor) return car;
 
-    const roles = await this.prisma.userRole.findMany({
-      where: { userId: actor.userId },
-      include: { role: { select: { name: true } } },
-    });
-    const roleNames = roles.map((r) => r.role.name);
-    const isSystemAdmin = roleNames.includes('SYSTEM_ADMIN');
-    const canAssign = await this.permissions.forUser(actor.userId).then((p) => p.includes('cars.assign'));
+    // SYSTEM_ADMIN is the canonical superuser marker; other access is permission-based
+    const isSystemAdmin = await this.prisma.userRole.findFirst({
+      where: { userId: actor.userId, role: { name: 'SYSTEM_ADMIN' } },
+      select: { userId: true },
+    }).then((r) => !!r);
+    const granted = await this.permissions.forUser(actor.userId);
+    const canAssign = granted.includes('cars.assign');
     const isOwner = (await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { requesterId: true } }))?.requesterId === actor.userId;
-    const isApprover = roleNames.includes('ADMINISTRATION');
+    // RBAC-native: approver-level access = approvals.act permission (was hard-coded role ADMINISTRATION)
+    const isApprover = await this.permissions.userHas(actor.userId, 'approvals.act');
 
     if (!isOwner && !isSystemAdmin && !canAssign && !isApprover) {
       throw new ForbiddenException('No access');

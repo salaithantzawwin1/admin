@@ -144,17 +144,19 @@ export class TelegramCarActionsService {
         },
       });
       if (!request || request.status !== 'PENDING_APPROVAL' || !request.carRequest) return; // car flow only
-      const approvers = await this.prisma.userRole.findMany({
-        where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE', telegramChatId: { not: null } } },
-        select: { user: { select: { telegramChatId: true } } },
+      // RBAC-native: the approve card goes to whoever can act on approvals
+      const approverIds = await this.permissions.usersWithPermissions(['approvals.act']);
+      const approvers = await this.prisma.user.findMany({
+        where: { id: { in: approverIds }, status: 'ACTIVE', telegramChatId: { not: null } },
+        select: { telegramChatId: true },
       });
       const cr = request.carRequest;
       const when = `\n📅 ${new Date(cr.startDate).toLocaleString('en-GB')} → ${new Date(cr.endDate).toLocaleString('en-GB')}`;
       const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}`;
       const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}`;
       for (const a of approvers) {
-        if (!a.user.telegramChatId) continue;
-        await this.telegram.sendRaw(a.user.telegramChatId, text, {
+        if (!a.telegramChatId) continue;
+        await this.telegram.sendRaw(a.telegramChatId, text, {
           reply_markup: {
             inline_keyboard: [[
               { text: '✅ Approve', callback_data: `wfa:approve:${requestId}` },

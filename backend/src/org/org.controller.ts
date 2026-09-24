@@ -85,7 +85,8 @@ export class OrgController {
   }
 
   @Get('employees')
-  @RequirePermissions(PERMISSIONS.ORG_READ)
+  // OR: org.read (full org view) or the new employees.read (directory access)
+  @AnyPermission([PERMISSIONS.ORG_READ], [PERMISSIONS.EMPLOYEES_READ])
   employees(@Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('departmentId') departmentId?: string) {
     return this.org.listEmployees(Number(page || 1), Math.min(100, Number(pageSize || 25)), departmentId);
   }
@@ -115,26 +116,26 @@ export class OrgController {
     return this.org.updateDepartment(id, dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.EMPLOYEES_MANAGE])
   @Post('employees')
   createEmployee(@Req() req, @Body() dto: EmployeeDto) {
     return this.org.createEmployee(dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.EMPLOYEES_MANAGE])
   @Patch('employees/:id')
   updateEmployee(@Req() req, @Param('id') id: string, @Body() dto: EmployeeUpdateDto) {
     return this.org.updateEmployee(id, dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.EMPLOYEES_MANAGE])
   @Post('employees/:id/login')
   linkLogin(@Req() req, @Param('id') id: string, @Body() dto: { userId?: string; username?: string; password?: string; roles?: RoleName[]; authSource?: 'LOCAL' | 'AD' }) {
     return this.org.linkLogin(id, dto, this.actor(req));
   }
 
   /** Remove the employee ↔ user link (the account itself is kept on the Users page). */
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.EMPLOYEES_MANAGE])
   @Delete('employees/:id/login')
   unlinkLogin(@Req() req, @Param('id') id: string) {
     return this.org.unlinkLogin(id, this.actor(req));
@@ -164,7 +165,7 @@ export class OrgController {
     return this.org.deleteDepartment(id, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.EMPLOYEES_MANAGE])
   @Delete('employees/:id')
   deleteEmployee(@Req() req, @Param('id') id: string) {
     return this.org.deleteEmployee(id, this.actor(req));

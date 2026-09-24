@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { PermissionsService } from '../auth/permissions.service';
 import { Actor } from '../org/org.service';
 
 @Injectable()
@@ -14,6 +15,7 @@ export class FleetService {
     private audit: AuditService,
     private telegram: TelegramService,
     private notifications: NotificationsService,
+    private permissions: PermissionsService,
   ) {}
 
   // ---------- vehicle type master data (Plan §6) ----------
@@ -491,12 +493,9 @@ export class FleetService {
       newValue: { driver: driver.name, startsAt: data.startsAt, endsAt: data.endsAt, reason: data.reason ?? null },
     });
 
-    // tell Administration — especially important when future trips clash
-    const admins = await this.prisma.userRole.findMany({
-      where: { role: { name: { in: ['ADMINISTRATION', 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
-      select: { userId: true },
-    });
-    const adminIds = [...new Set(admins.map((r) => r.userId))];
+    // tell whoever manages the fleet — especially important when future trips clash
+    // (RBAC-native: fleet.manage holders, SYSTEM_ADMIN included via superuser)
+    const adminIds = await this.permissions.usersWithPermissions(['fleet.manage']);
     if (adminIds.length) {
       const clash = trips.length ? ` ⚠️ ${trips.length} assigned trip(s) fall inside this window (${trips.map((t) => t.request.docNumber).join(', ')}) — re-assign them.` : '';
       await this.notifications.notifyMany(adminIds, {

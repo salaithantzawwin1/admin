@@ -42,6 +42,26 @@ export class PermissionsService {
     return [...new Set(rows.map((r) => r.permission.code))];
   }
 
+  /** True when the user holds the given permission (used by service-level checks). */
+  async userHas(userId: string, code: string): Promise<boolean> {
+    return (await this.forUser(userId)).includes(code);
+  }
+
+  /**
+   * All ACTIVE users holding any of the given permission codes — the RBAC-native
+   * replacement for hard-coded role lookups when broadcasting notifications
+   * (e.g. the people who can manage announcements, not "role X").
+   */
+  async usersWithPermissions(codes: string[]): Promise<string[]> {
+    if (codes.length === 0) return [];
+    const roles = await this.prisma.role.findMany({
+      where: { permissions: { some: { permission: { code: { in: codes } } } } },
+      select: { userRoles: { select: { userId: true }, where: { user: { status: 'ACTIVE' } } } },
+    });
+    const userIds = roles.flatMap((r) => r.userRoles.map((u) => u.userId));
+    return [...new Set(userIds)];
+  }
+
   /** Full role→permissions matrix for the admin editor UI. */
   async matrixView(): Promise<{ role: string; permissions: string[] }[]> {
     const roles = await this.prisma.role.findMany({
