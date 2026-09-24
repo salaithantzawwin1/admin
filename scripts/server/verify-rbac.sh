@@ -61,4 +61,19 @@ curl -s -X PATCH -H "Authorization: Bearer $STOKEN" -H 'Content-Type: applicatio
 
 echo "== 12) permissions persist in DB (final state) =="
 docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT r.name||' => '||COUNT(p.code) FROM roles r JOIN \\\"role_permissions\\\" rp ON rp.\\\"roleId\\\"=r.id JOIN permissions p ON p.id=rp.\\\"permissionId\\\" WHERE r.name IN ('PURCHASING','FINANCE') GROUP BY r.name ORDER BY r.name\""
+
+echo "== 13) suppliers.read/manage — admin1 (expect 200 / 200) =="
+curl -s -o /dev/null -w 'list=%{http_code}\n' -H "Authorization: Bearer $ATOKEN" "$BASE/suppliers"
+SID=$(docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM suppliers LIMIT 1"' | tr -d '\r\n ')
+curl -s -o /dev/null -w 'history=%{http_code}\n' -H "Authorization: Bearer $ATOKEN" "$BASE/suppliers/$SID/history"
+
+echo "== 14) employee1 suppliers list (expect 403 — no suppliers.read) =="
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $ETOKEN" "$BASE/suppliers"
+
+echo "== 15) employee1 contact-log write (expect 403) =="
+curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $ETOKEN" -H 'Content-Type: application/json' \
+  -d '{"summary":"should be blocked"}' "$BASE/suppliers/$SID/contact-logs"
+
+echo "== 16) suppliers codes — seeded grants per role =="
+docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT r.name||': '||string_agg(p.code, ',' ORDER BY p.code) FROM roles r JOIN role_permissions rp ON rp.\"roleId\"=r.id JOIN permissions p ON p.id=rp.\"permissionId\" WHERE p.code LIKE 'suppliers%' GROUP BY r.name ORDER BY r.name\""
 echo "DONE"

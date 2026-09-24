@@ -3,7 +3,7 @@ import { api, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
-import { Badge, Button, Card, Empty, Input, PageHeader, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 
 interface Supplier {
   id: string;
@@ -19,8 +19,31 @@ interface HistoryData {
   supplier: { id: string; name: string };
   totalCost: number;
   items: { name: string; unit: string; qty: number; cost: number }[];
-  recent: { id: string; quantity: number; unitPrice?: string | null; reference?: string | null; createdAt: string; item: { name: string } }[];
+  recent: { id: string; quantity: number; unitPrice?: string | null; reference?: string | null; createdAt: string; item: { name: string }; recordedBy?: string }[];
 }
+
+interface ContactLog {
+  id: string;
+  contactedAt: string;
+  person: string | null;
+  channel: string;
+  summary: string;
+  followUpAt: string | null;
+  createdBy: { fullName: string };
+}
+
+interface PoDraftLine { id?: string; itemId: string; quantity: number; unitPrice?: number | null; item?: { code: string; name: string; unit: string } }
+interface PoDraft {
+  id: string;
+  status: string;
+  note: string | null;
+  createdAt: string;
+  createdBy: { fullName: string };
+  request?: { id: string; docNumber: string; status: string } | null;
+  lines: PoDraftLine[];
+}
+
+const CHANNELS = ['CALL', 'EMAIL', 'VISIT', 'TELEGRAM', 'OTHER'] as const;
 
 const fmtMoney = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -33,6 +56,18 @@ export default function Suppliers() {
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [modalError, setModalError] = useState('');
   const [error, setError] = useState('');
+  // history date range filter
+  const [histFrom, setHistFrom] = useState('');
+  const [histTo, setHistTo] = useState('');
+  // vendor management — per-supplier detail modal with tabs
+  const [vendorFor, setVendorFor] = useState<Supplier | null>(null);
+  const [vendorTab, setVendorTab] = useState<'contacts' | 'pos'>('contacts');
+  const [contacts, setContacts] = useState<ContactLog[] | null>(null);
+  const [contactForm, setContactForm] = useState({ person: '', channel: 'CALL', summary: '', followUpAt: '' });
+  const [drafts, setDrafts] = useState<PoDraft[] | null>(null);
+  const [draftForm, setDraftForm] = useState<{ note: string; lines: { itemId: string; quantity: number; unitPrice: string }[] } | null>(null);
+  // item picker for PO draft lines (catalog read is allowed for suppliers viewers)
+  const [itemsCache, setItemsCache] = useState<{ id: string; code: string; name: string }[] | null>(null);
   const canManage = hasPermission('inventory.manage') || hasPermission('suppliers.manage');
 
   const load = useCallback(() => {
@@ -72,13 +107,105 @@ export default function Suppliers() {
     }
   };
 
-  const openHistory = async (s: Supplier) => {
+  const openHistory = async (s: Supplier, from = histFrom, to = histTo) => {
     setHistoryFor(s);
     setHistory(null);
     try {
-      setHistory(await api<HistoryData>(`/suppliers/${s.id}/history`));
+      const qs = from || to ? `?${from ? `start=${from}T00:00:00.000Z&` : ''}${to ? `end=${to}T23:59:59.999Z` : ''}` : '';
+      setHistory(await api<HistoryData>(`/suppliers/${s.id}/history${qs}`));
     } catch {
       setHistoryFor(null);
+    }
+  };
+
+  /** Open the vendor-management modal (contacts + PO drafts). */
+  const openVendor = (s: Supplier) => {
+    setVendorFor(s);
+    setVendorTab('contacts');
+    setContacts(null);
+    setDrafts(null);
+    setContactForm({ person: '', channel: 'CALL', summary: '', followUpAt: '' });
+    setDraftForm(null);
+    api<ContactLog[]>(`/suppliers/${s.id}/contact-logs`).then(setContacts).catch(() => setContacts([]));
+    api<PoDraft[]>(`/suppliers/${s.id}/po-drafts`).then(setDrafts).catch(() => setDrafts([]));
+    if (itemsCache === null) {
+      api<{ id: string; code: string; name: string }[]>('/inventory/items').then(setItemsCache).catch(() => setItemsCache([]));
+    }
+  };
+
+  const addContact = async () => {
+    if (!vendorFor || !contactForm.summary.trim()) return;
+    setModalError('');
+    try {
+      await api(`/suppliers/${vendorFor.id}/contact-logs`, {
+        method: 'POST',
+        body: {
+          person: contactForm.person.trim() || undefined,
+          channel: contactForm.channel,
+          summary: contactForm.summary.trim(),
+          followUpAt: contactForm.followUpAt || undefined,
+        },
+      });
+      setContactForm({ person: '', channel: 'CALL', summary: '', followUpAt: '' });
+      setContacts(await api<ContactLog[]>(`/suppliers/${vendorFor.id}/contact-logs`));
+      toast('Contact logged');
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const removeContact = async (logId: string) => {
+    if (!vendorFor) return;
+    try {
+      await api(`/suppliers/${vendorFor.id}/contact-logs/${logId}`, { method: 'DELETE' });
+      setContacts(await api<ContactLog[]>(`/suppliers/${vendorFor.id}/contact-logs`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const saveDraft = async () => {
+    if (!vendorFor || !draftForm) return;
+    setModalError('');
+    try {
+      await api(`/suppliers/${vendorFor.id}/po-drafts`, {
+        method: 'POST',
+        body: {
+          note: draftForm.note.trim() || undefined,
+          lines: draftForm.lines.map((l) => ({
+            itemId: l.itemId,
+            quantity: Number(l.quantity),
+            unitPrice: l.unitPrice !== '' ? Number(l.unitPrice) : undefined,
+          })),
+        },
+      });
+      setDraftForm(null);
+      setDrafts(await api<PoDraft[]>(`/suppliers/${vendorFor.id}/po-drafts`));
+      toast('PO draft saved');
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const submitDraft = async (d: PoDraft) => {
+    if (!vendorFor) return;
+    setError('');
+    try {
+      const r = await api<{ docNumber: string }>(`/suppliers/${vendorFor.id}/po-drafts/${d.id}/submit`, { method: 'POST' });
+      setDrafts(await api<PoDraft[]>(`/suppliers/${vendorFor.id}/po-drafts`));
+      toast(`Submitted as ${r.docNumber} — pending approval`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const deleteDraft = async (d: PoDraft) => {
+    if (!vendorFor) return;
+    try {
+      await api(`/suppliers/${vendorFor.id}/po-drafts/${d.id}`, { method: 'DELETE' });
+      setDrafts(await api<PoDraft[]>(`/suppliers/${vendorFor.id}/po-drafts`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -133,6 +260,7 @@ export default function Suppliers() {
                     <button className="text-blue-600 hover:underline mr-3" onClick={() => openHistory(s)}>History</button>
                     {canManage && (
                       <>
+                        <button className="text-blue-600 hover:underline mr-3" title="Contacts + PO drafts" onClick={() => openVendor(s)}>Manage</button>
                         <button className="text-blue-600 hover:underline mr-3" onClick={() => { setForm({ ...s }); setModalError(''); }}>Edit</button>
                         <button className="text-red-600 hover:underline" onClick={() => setDeleting(s)}>Delete</button>
                       </>
@@ -195,8 +323,30 @@ export default function Suppliers() {
             <div className="text-sm text-gray-400 py-4">Loading…</div>
           ) : (
             <div className="space-y-4">
+              {/* date range filter */}
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs text-gray-500">From</label>
+                <input
+                  type="date"
+                  className="text-xs border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+                  value={histFrom}
+                  onChange={(e) => { setHistFrom(e.target.value); openHistory(historyFor, e.target.value, histTo); }}
+                />
+                <label className="text-xs text-gray-500">To</label>
+                <input
+                  type="date"
+                  className="text-xs border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+                  value={histTo}
+                  onChange={(e) => { setHistTo(e.target.value); openHistory(historyFor, histFrom, e.target.value); }}
+                />
+                {(histFrom || histTo) && (
+                  <button className="text-xs text-gray-400 hover:text-gray-600 underline" onClick={() => { setHistFrom(''); setHistTo(''); openHistory(historyFor, '', ''); }}>
+                    Clear
+                  </button>
+                )}
+              </div>
               <div className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-sm">
-                Lifetime purchases: <span className="font-semibold">{fmtMoney(history.totalCost)}</span> across {history.items.length} item(s)
+                {histFrom || histTo ? 'Purchases in range' : 'Lifetime purchases'}: <span className="font-semibold">{fmtMoney(history.totalCost)}</span> across {history.items.length} item(s)
               </div>
               {history.items.length > 0 && (
                 <table className="w-full text-sm">
@@ -220,14 +370,176 @@ export default function Suppliers() {
               )}
               {history.recent.length > 0 && (
                 <div>
-                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Recent purchases</h3>
-                  <div className="space-y-1 max-h-48 overflow-auto">
+                  <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Purchases (newest first)</h3>
+                  <div className="space-y-1 max-h-64 overflow-auto">
                     {history.recent.map((t) => (
-                      <div key={t.id} className="text-xs text-gray-600 bg-gray-50 rounded px-2 py-1.5 flex justify-between">
-                        <span>{t.item.name} · {t.quantity}{t.unitPrice ? ` @ ${fmtMoney(Number(t.unitPrice))}` : ''}</span>
-                        <span className="text-gray-400">{new Date(t.createdAt).toLocaleDateString()}</span>
+                      <div key={t.id} className="text-xs text-gray-600 bg-gray-50 rounded px-2 py-1.5 flex justify-between gap-2">
+                        <span>
+                          {t.item.name} · {t.quantity}{t.unitPrice ? ` @ ${fmtMoney(Number(t.unitPrice))}` : ''}
+                          {t.reference ? ` · ${t.reference}` : ''}
+                          {t.recordedBy && <span className="text-gray-400"> — recorded by {t.recordedBy}</span>}
+                        </span>
+                        <span className="text-gray-400 whitespace-nowrap">{new Date(t.createdAt).toLocaleDateString()}</span>
                       </div>
                     ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* vendor management — contacts + PO drafts */}
+      {vendorFor && (
+        <Modal
+          title={`Manage vendor — ${vendorFor.name}`}
+          error={modalError}
+          onClose={() => { setVendorFor(null); setModalError(''); }}
+        >
+          <div className="flex gap-1.5 mb-4">
+            {([
+              ['contacts', `📞 Contacts${contacts ? ` (${contacts.length})` : ''}`],
+              ['pos', `📄 PO drafts${drafts ? ` (${drafts.filter((d) => d.status === 'DRAFT').length})` : ''}`],
+            ] as const).map(([k, label]) => (
+              <button
+                key={k}
+                className={`px-3 py-1 text-xs font-medium rounded-full border transition-colors ${vendorTab === k ? 'bg-yellow-600 border-yellow-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-yellow-400'}`}
+                onClick={() => setVendorTab(k)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {vendorTab === 'contacts' && (
+            <div className="space-y-3">
+              {contacts === null ? (
+                <p className="text-sm text-gray-400">Loading…</p>
+              ) : contacts.length === 0 ? (
+                <p className="text-sm text-gray-400">No contact history yet — log the first call/visit below.</p>
+              ) : (
+                <ul className="space-y-2 max-h-64 overflow-auto">
+                  {contacts.map((c) => (
+                    <li key={c.id} className="border border-gray-100 rounded-lg px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2">
+                          <Badge color="blue">{c.channel}</Badge>
+                          {c.person && <span className="font-medium text-gray-700">{c.person}</span>}
+                        </span>
+                        <span className="flex items-center gap-2 text-xs text-gray-400 whitespace-nowrap">
+                          {new Date(c.contactedAt).toLocaleDateString()} · {c.createdBy.fullName}
+                          {canManage && (
+                            <button className="text-red-500 hover:underline" title="Delete entry" onClick={() => removeContact(c.id)}>✕</button>
+                          )}
+                        </span>
+                      </div>
+                      <p className="text-gray-600 mt-1">{c.summary}</p>
+                      {c.followUpAt && <p className="text-xs text-orange-600 mt-1">↻ Follow up: {new Date(c.followUpAt).toLocaleDateString()}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {/* log new contact */}
+              <div className="border-t border-gray-100 pt-3 space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <Input placeholder="Person (who you spoke to)" value={contactForm.person} onChange={(e) => setContactForm({ ...contactForm, person: e.target.value })} />
+                  <Select value={contactForm.channel} onChange={(e) => setContactForm({ ...contactForm, channel: e.target.value })}>
+                    {CHANNELS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </Select>
+                </div>
+                <Input placeholder="Summary — what was discussed *" value={contactForm.summary} onChange={(e) => setContactForm({ ...contactForm, summary: e.target.value })} />
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-gray-500">Follow up</label>
+                  <input
+                    type="date"
+                    className="text-xs border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+                    value={contactForm.followUpAt}
+                    onChange={(e) => setContactForm({ ...contactForm, followUpAt: e.target.value })}
+                  />
+                  <span className="ml-auto"><Button onClick={addContact} disabled={!contactForm.summary.trim()}>+ Log contact</Button></span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {vendorTab === 'pos' && (
+            <div className="space-y-3">
+              {drafts === null ? (
+                <p className="text-sm text-gray-400">Loading…</p>
+              ) : drafts.length === 0 && !draftForm ? (
+                <p className="text-sm text-gray-400">No PO drafts yet — create one (or fill from an Inventory reorder suggestion).</p>
+              ) : (
+                <ul className="space-y-2 max-h-64 overflow-auto">
+                  {drafts.map((d) => (
+                    <li key={d.id} className="border border-gray-100 rounded-lg px-3 py-2 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-2">
+                          <Badge color={d.status === 'DRAFT' ? 'yellow' : 'green'}>{d.status}</Badge>
+                          {d.request && <span className="font-mono text-xs text-gray-500">{d.request.docNumber}</span>}
+                        </span>
+                        <span className="flex items-center gap-2 text-xs text-gray-400">
+                          {new Date(d.createdAt).toLocaleDateString()} · {d.createdBy.fullName}
+                          {d.status === 'DRAFT' && canManage && (
+                            <>
+                              <button className="text-blue-600 hover:underline" onClick={() => submitDraft(d)}>Submit → approval</button>
+                              <button className="text-red-500 hover:underline" onClick={() => deleteDraft(d)}>✕</button>
+                            </>
+                          )}
+                        </span>
+                      </div>
+                      <ul className="text-xs text-gray-600 mt-1 space-y-0.5">
+                        {d.lines.map((l) => (
+                          <li key={l.id ?? `${l.itemId}-${l.quantity}`}>
+                            {l.item?.code} {l.item?.name} ×{l.quantity} {l.item?.unit}{l.unitPrice != null ? ` @ ${fmtMoney(Number(l.unitPrice))}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                      {d.note && <p className="text-xs text-gray-400 mt-1">{d.note}</p>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!draftForm ? (
+                <Button variant="ghost" onClick={() => setDraftForm({ note: '', lines: [{ itemId: '', quantity: 1, unitPrice: '' }] })}>+ New PO draft</Button>
+              ) : (
+                <div className="border-t border-gray-100 pt-3 space-y-2">
+                  {draftForm.lines.map((l, idx) => (
+                    <div key={idx} className="grid grid-cols-[1fr_80px_100px_32px] gap-2 items-center">
+                      <Select
+                        value={l.itemId}
+                        onChange={(e) => setDraftForm({ ...draftForm, lines: draftForm.lines.map((x, i) => (i === idx ? { ...x, itemId: e.target.value } : x)) })}
+                      >
+                        <option value="">— Item —</option>
+                        {(itemsCache ?? []).map((it) => <option key={it.id} value={it.id}>{it.code} — {it.name}</option>)}
+                      </Select>
+                      <Input
+                        type="number" min={1} placeholder="Qty" value={l.quantity}
+                        onChange={(e) => setDraftForm({ ...draftForm, lines: draftForm.lines.map((x, i) => (i === idx ? { ...x, quantity: Number(e.target.value) } : x)) })}
+                      />
+                      <Input
+                        type="number" min={0} step="0.01" placeholder="Price" value={l.unitPrice}
+                        onChange={(e) => setDraftForm({ ...draftForm, lines: draftForm.lines.map((x, i) => (i === idx ? { ...x, unitPrice: e.target.value } : x)) })}
+                      />
+                      <button
+                        className="text-gray-300 hover:text-red-500"
+                        title="Remove line"
+                        onClick={() => setDraftForm({ ...draftForm, lines: draftForm.lines.filter((_, i) => i !== idx) })}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    className="text-xs text-blue-600 hover:underline"
+                    onClick={() => setDraftForm({ ...draftForm, lines: [...draftForm.lines, { itemId: '', quantity: 1, unitPrice: '' }] })}
+                  >
+                    + another line
+                  </button>
+                  <Input placeholder="Note (optional)" value={draftForm.note} onChange={(e) => setDraftForm({ ...draftForm, note: e.target.value })} />
+                  <div className="flex justify-end gap-2">
+                    <Button variant="ghost" onClick={() => setDraftForm(null)}>Cancel</Button>
+                    <Button onClick={saveDraft} disabled={draftForm.lines.some((l) => !l.itemId || l.quantity <= 0)}>Save draft</Button>
                   </div>
                 </div>
               )}

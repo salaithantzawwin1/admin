@@ -63,6 +63,8 @@ model User {
   delegationsFrom ApprovalDelegation[] @relation("DelegationsFrom")
   delegationsTo   ApprovalDelegation[] @relation("DelegationsTo")
   notifications   Notification[]       @relation("Notifications")
+  supplierContactLogs SupplierContactLog[] @relation("SupplierContactLogs")
+  supplierPurchaseDrafts SupplierPurchaseDraft[] @relation("SupplierPurchaseDrafts")
   attachments     Attachment[]         @relation("Attachments")
   requestDocs     RequestDocument[]    @relation("RequestDocuments")
   announcements   Announcement[]       @relation("Announcements")
@@ -348,6 +350,7 @@ model RequestDocument {
   carAssignment  CarAssignment?
   meetingRequest MeetingRoomRequest?
   supplyRequest  OfficeSupplyRequest? @relation("SupplyRequest")
+  supplierDrafts SupplierPurchaseDraft[] @relation("SupplierDraftRequest")
   stockTxns      StockTransaction[]   @relation("StockTxRequest")
 
   @@index([status])
@@ -722,6 +725,7 @@ model InventoryItem {
 
   transactions StockTransaction[]
   requestLines SupplyRequestLine[]
+  supplierDraftLines SupplierPurchaseDraftLine[] @relation("SupplierDraftLines")
 
   @@index([category])
   @@index([isActive])
@@ -740,8 +744,63 @@ model Supplier {
   updatedAt DateTime @updatedAt
 
   stockTransactions StockTransaction[] @relation("StockTxSupplier")
+  contactLogs SupplierContactLog[]
+  purchaseDrafts SupplierPurchaseDraft[]
 
   @@map("suppliers")
+}
+
+// ---------- vendor management (Purchasing) ----------
+
+model SupplierContactLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  supplierId  String   @db.Uuid
+  contactedAt DateTime @default(now())
+  person      String? // who at the vendor was spoken to
+  channel     String   @default("CALL") // CALL / EMAIL / VISIT / TELEGRAM / OTHER
+  summary     String
+  followUpAt  DateTime? // optional reminder
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  supplier  Supplier @relation(fields: [supplierId], references: [id])
+  createdBy User     @relation("SupplierContactLogs", fields: [createdById], references: [id])
+
+  @@index([supplierId, contactedAt])
+  @@map("supplier_contact_logs")
+}
+
+model SupplierPurchaseDraft {
+  id          String   @id @default(uuid()) @db.Uuid
+  supplierId  String   @db.Uuid
+  status      String   @default("DRAFT") // DRAFT / SUBMITTED
+  note        String?
+  requestId   String?  @db.Uuid // PR document once submitted through the workflow
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  supplier  Supplier                    @relation(fields: [supplierId], references: [id])
+  request   RequestDocument?            @relation("SupplierDraftRequest", fields: [requestId], references: [id])
+  createdBy User                        @relation("SupplierPurchaseDrafts", fields: [createdById], references: [id])
+  lines     SupplierPurchaseDraftLine[]
+
+  @@index([supplierId, status])
+  @@map("supplier_purchase_drafts")
+}
+
+model SupplierPurchaseDraftLine {
+  id        String   @id @default(uuid()) @db.Uuid
+  draftId   String   @db.Uuid
+  itemId    String   @db.Uuid
+  quantity  Int
+  unitPrice Decimal? @db.Decimal(12, 2) // quoted price for this PO
+
+  draft SupplierPurchaseDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+  item  InventoryItem         @relation("SupplierDraftLines", fields: [itemId], references: [id])
+
+  @@index([draftId])
+  @@map("supplier_purchase_draft_lines")
 }
 
 model StockTransaction {
