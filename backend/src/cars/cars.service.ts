@@ -140,6 +140,15 @@ export class CarsService {
     const now = new Date();
     const in7days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
+    // Same "Back at Office" exemption as overlaps(): once the driver tapped
+    // "🏁 Back at Office" the car is physically back (vehicle shows AVAILABLE) —
+    // keeping its window in the Booked list contradicted the status badge and
+    // made requesters think the car was still taken.
+    const exempt = await this.prisma.carAssignment.findMany({
+      where: { releasedAt: null, driverBackAtOfficeAt: { not: null } },
+      select: { requestId: true },
+    });
+
     const [vehicles, bookings] = await Promise.all([
       this.prisma.vehicle.findMany({
         orderBy: { vehicleNo: 'asc' },
@@ -152,6 +161,7 @@ export class CarsService {
           request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
           startDate: { lt: in7days },
           endDate: { gt: now },
+          ...(exempt.length ? { requestId: { notIn: exempt.map((b) => b.requestId) } } : {}),
         },
         select: {
           vehicleId: true,

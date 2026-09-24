@@ -106,6 +106,31 @@ async function main() {
     assert.strictEqual(r.available, true);
   });
 
+  await test('requesterFleetOverview: Back-at-Office booking leaves the Booked list', async () => {
+    const overviewCaptured: any[] = [];
+    const prismaOv: any = {
+      carAssignment: { findMany: async () => [{ requestId: 'req-bao' }] },
+      vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: '1G/5575', brandModel: 'dd test', status: 'AVAILABLE' }] },
+      carRequest: {
+        findMany: async (args: any) => {
+          overviewCaptured.push(args);
+          // emulate the DB: honour the notIn (Back-at-Office exemption) filter
+          const notIn: string[] = args.where?.requestId?.notIn ?? [];
+          const rows = [
+            { requestId: 'req-bao', vehicleId: 'v1', startDate: new Date(), endDate: new Date(), request: { docNumber: 'CAR-202609-0004' } },
+            { requestId: 'req-live', vehicleId: 'v1', startDate: new Date(), endDate: new Date(), request: { docNumber: 'CAR-202609-0005' } },
+          ];
+          return rows.filter((r) => !notIn.includes(r.requestId));
+        },
+      },
+    };
+    const svcOv: any = new CarsService(prismaOv, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const out = await svcOv.requesterFleetOverview();
+    assert.ok(overviewCaptured[0].where.requestId.notIn.includes('req-bao'), 'Back-at-Office booking must be excluded from Booked windows');
+    assert.strictEqual(out[0].bookings.length, 1, 'only the live booking remains on the card');
+    assert.strictEqual(out[0].bookings[0].docNumber, 'CAR-202609-0005');
+  });
+
   // ------------------------------------------ 3) expense access control
   const expenseRows = [{ id: 'e1' }];
   const prismaExp: any = {
