@@ -357,6 +357,7 @@ export default function Inventory() {
       setCart({});
       setCartNote('');
       setShowCart(false);
+      toast('Supply request submitted — Administration will review it.');
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -565,37 +566,6 @@ export default function Inventory() {
       {/* ============ Tab: Catalog (everyone) ============ */}
       {tab === 'catalog' && (
         <>
-          {/* cart review */}
-          {showCart && cartLines.length > 0 && (
-            <Card className="mb-5 p-5">
-              <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Your supply request</h2>
-              <table className="w-full text-sm mb-3">
-                <tbody className="divide-y divide-gray-100">
-                  {cartLines.map(([id, q]) => {
-                    const item = items.find((i) => i.id === id);
-                    return (
-                      <tr key={id}>
-                        <td className="py-2">{item?.code} — {item?.name}</td>
-                        <td className="py-2 text-right">
-                          <Input type="number" min={1} className="!w-24" value={q}
-                            onChange={(e) => setCart({ ...cart, [id]: Math.max(1, Number(e.target.value)) })} />
-                        </td>
-                        <td className="py-2 text-right text-gray-400">{item?.unit}</td>
-                        <td className="py-2 text-right">
-                          <button className="text-red-600 hover:underline" onClick={() => setCart(({ [id]: _, ...rest }) => rest)}>Remove</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              <Textarea rows={2} placeholder="Note (optional)" value={cartNote} onChange={(e) => setCartNote(e.target.value)} />
-              <div className="mt-3 flex gap-2">
-                <Button onClick={submitCart} disabled={busy}>{busy ? 'Submitting…' : 'Submit Request'}</Button>
-                <Button variant="ghost" onClick={() => setShowCart(false)}>Keep browsing</Button>
-              </div>
-            </Card>
-          )}
 
           <div className="flex justify-end mb-3">
             <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm">
@@ -1178,6 +1148,44 @@ export default function Inventory() {
             <Textarea rows={2} placeholder="Description (optional)" value={itemForm.description ?? ''} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
           </div>
         </ConfirmDialog>
+      )}
+
+      {/* cart review — proper modal (screenshot request) */}
+      {showCart && cartLines.length > 0 && (
+        <Modal
+          title={`Your supply request — ${cartLines.length} item${cartLines.length === 1 ? '' : 's'}`}
+          error={error}
+          onClose={() => setShowCart(false)}
+        >
+          <table className="w-full text-sm mb-3">
+            <tbody className="divide-y divide-gray-100">
+              {cartLines.map(([id, q]) => {
+                const item = items.find((i) => i.id === id);
+                return (
+                  <tr key={id}>
+                    <td className="py-2">
+                      <div className="font-medium text-gray-700">{item?.name}</div>
+                      <div className="text-[11px] text-gray-400">{item?.code} · balance {item?.balance} {item?.unit}</div>
+                    </td>
+                    <td className="py-2 text-right">
+                      <Input type="number" min={1} className="!w-24" value={q}
+                        onChange={(e) => setCart({ ...cart, [id]: Math.max(1, Number(e.target.value)) })} />
+                    </td>
+                    <td className="py-2 text-right text-gray-400">{item?.unit}</td>
+                    <td className="py-2 text-right">
+                      <button className="text-red-600 hover:underline" onClick={() => setCart(({ [id]: _, ...rest }) => rest)}>Remove</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <Textarea rows={2} placeholder="Note (optional)" value={cartNote} onChange={(e) => setCartNote(e.target.value)} />
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setShowCart(false)}>Keep browsing</Button>
+            <Button onClick={submitCart} disabled={busy}>{busy ? 'Submitting…' : 'Submit Request'}</Button>
+          </div>
+        </Modal>
       )}
 
       {/* item photo preview (lightbox) */}
