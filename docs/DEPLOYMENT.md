@@ -144,7 +144,8 @@ git add <files> && git commit -m "..." && git push
 
 ```bash
 cd /opt/admin
-docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build
+bash scripts/server/deploy-testing.sh        # pull + rebuild + health + bundle-freshness check
+# NO_PULL=1 bash scripts/server/deploy-testing.sh   # deploy local edits without pulling
 ```
 
 - `--build` needed when code changed; plain `up -d` suffices for port/env-only changes.
@@ -284,6 +285,10 @@ curl -s http://127.0.0.1:3010/api/health
 
 ## 12. Recent decisions log
 
+- 2026-09-24 — **added `scripts/server/deploy-testing.sh`** after the CarPanel React #310
+  crash survived a manual deploy: a stale checkout (no `git pull`) silently re-deploys old
+  bugs. The script pulls, rebuilds, health-checks and warns when a frontend change did NOT
+  change the served bundle hash; `deploy-prod.sh` got the same pull-first pre-flight.
 - 2026-09-24 — **removed the testing frontend's legacy `:8080` mapping** — `http://192.168.100.110/`
   is the one and only testing URL; verify scripts, Telegram webUrl default and docs
   updated to `:80`.

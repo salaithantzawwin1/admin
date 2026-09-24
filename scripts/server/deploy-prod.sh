@@ -20,6 +20,15 @@ cd "$DIR"
 
 echo "== 1. Pre-flight =="
 test -f .env.prod || { echo "ERROR: .env.prod missing in $DIR — create it (see .env.prod.example)"; exit 1; }
+# stale checkout = silently re-deploying old bugs (the CarPanel #310 lesson)
+OLD_HEAD="$(git rev-parse --short HEAD)"
+if [ "${NO_PULL:-0}" = "1" ]; then
+  echo "   NO_PULL=1 — skipping git pull (deploying local checkout $OLD_HEAD)"
+else
+  git pull --ff-only origin main
+fi
+NEW_HEAD="$(git rev-parse --short HEAD)"
+echo "   checkout: $OLD_HEAD -> $NEW_HEAD"
 if command -v node >/dev/null 2>&1 && [ -f backend/node_modules/typescript/bin/tsc ]; then
   node backend/node_modules/typescript/bin/tsc --noEmit -p backend/tsconfig.json && echo "typecheck OK"
 else
@@ -36,4 +45,4 @@ sleep 6
 curl -fsS http://127.0.0.1:3010/api/health && echo
 docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod ps
 
-echo "DONE — prod UI: http://192.168.100.110:3080  (testing keeps :80)"
+echo "DONE — prod UI: http://192.168.100.110:3080  (testing keeps :80; Ctrl+Shift+R after frontend deploys)"
