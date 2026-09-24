@@ -8,7 +8,8 @@ import { ALL_PERMISSION_CODES, PERMISSIONS } from './permissions';
 const DEFAULT_GRANTS: Record<string, string[]> = {
   // Plan §12: Administration runs the store; employees read the catalog + request
   // org.read → department/branch pickers (announcement targeting, employee forms)
-  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read'],
+  // departments.manage → Administration owns department CRUD (Plan §3)
+  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage'],
   EMPLOYEE: ['inventory.read', 'announcements.read'],
   DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
   MANAGEMENT: ['inventory.read', 'announcements.read'],

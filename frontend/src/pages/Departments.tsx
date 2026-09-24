@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../api';
+import { api, hasPermission } from '../api';
 import { Badge, Button, Empty, Input, PageHeader, Table } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
@@ -30,6 +30,8 @@ type Mode =
 
 export default function Departments() {
   const [branches, setBranches] = useState<Branch[]>([]);
+  // departments.manage (or org.manage) gates the CRUD actions — read-only users see lists only
+  const canManage = hasPermission('departments.manage') || hasPermission('org.manage');
   const [depts, setDepts] = useState<DepartmentRow[]>([]);
   const [showBranchForm, setShowBranchForm] = useState(false);
   const [mode, setMode] = useState<Mode | null>(null);
@@ -135,10 +137,12 @@ export default function Departments() {
         title="Branches & Departments"
         subtitle="Branches group departments — departments group employees and route requests"
         actions={
-          <>
-            <Button onClick={() => setShowDeptForm(!showDeptForm)}>{showDeptForm ? 'Close' : '+ Department'}</Button>
-            <Button onClick={() => setShowBranchForm(!showBranchForm)}>{showBranchForm ? 'Close' : '+ Branch'}</Button>
-          </>
+          canManage ? (
+            <>
+              <Button onClick={() => setShowDeptForm(!showDeptForm)}>{showDeptForm ? 'Close' : '+ Department'}</Button>
+              <Button onClick={() => setShowBranchForm(!showBranchForm)}>{showBranchForm ? 'Close' : '+ Branch'}</Button>
+            </>
+          ) : undefined
         }
       />
 
@@ -187,12 +191,14 @@ export default function Departments() {
             <td className="px-4 py-3">{d._count?.employees ?? 0}</td>
             <td className="px-4 py-3"><Badge color={d.isActive ? 'green' : 'red'}>{d.isActive ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
             <td className="px-4 py-3">
-              <div className="flex flex-wrap justify-end gap-1.5">
-                <button className="text-xs px-2 py-1 rounded border border-yellow-300 text-yellow-700 hover:bg-yellow-50" onClick={() => toggleDept(d)}>
-                  {d.isActive ? 'Deactivate' : 'Activate'}
-                </button>
-                <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => setMode({ kind: 'delDept', row: { ...d }, reason: '' })}>Delete</button>
-              </div>
+              {canManage && (
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <button className="text-xs px-2 py-1 rounded border border-yellow-300 text-yellow-700 hover:bg-yellow-50" onClick={() => toggleDept(d)}>
+                    {d.isActive ? 'Deactivate' : 'Activate'}
+                  </button>
+                  <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => setMode({ kind: 'delDept', row: { ...d }, reason: '' })}>Delete</button>
+                </div>
+              )}
             </td>
           </tr>
         ))}
@@ -209,13 +215,15 @@ export default function Departments() {
             <td className="px-4 py-3 text-gray-500">{b.phone || '—'}</td>
             <td className="px-4 py-3"><Badge color={b.isActive ? 'green' : 'red'}>{b.isActive ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
             <td className="px-4 py-3">
-              <div className="flex flex-wrap justify-end gap-1.5">
-                <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => setMode({ kind: 'editBranch', row: { ...b } })}>Edit</button>
-                <button className="text-xs px-2 py-1 rounded border border-yellow-300 text-yellow-700 hover:bg-yellow-50" onClick={() => toggleBranch(b)}>
-                  {b.isActive ? 'Deactivate' : 'Activate'}
-                </button>
-                <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => setMode({ kind: 'delBranch', row: { ...b }, reason: '' })}>Delete</button>
-              </div>
+              {canManage && (
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => setMode({ kind: 'editBranch', row: { ...b } })}>Edit</button>
+                  <button className="text-xs px-2 py-1 rounded border border-yellow-300 text-yellow-700 hover:bg-yellow-50" onClick={() => toggleBranch(b)}>
+                    {b.isActive ? 'Deactivate' : 'Activate'}
+                  </button>
+                  <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => setMode({ kind: 'delBranch', row: { ...b }, reason: '' })}>Delete</button>
+                </div>
+              )}
             </td>
           </tr>
         ))}

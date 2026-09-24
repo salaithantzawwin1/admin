@@ -62,7 +62,7 @@ export class AuthController {
   @RequirePermissions(PERMISSIONS.USERS_READ)
   @Get('permissions/catalog')
   catalog() {
-    return ALL_PERMISSION_CODES.map((code) => ({ code, description: PERMISSIONS[code.toUpperCase().replace(/\./g, '_') as keyof typeof PERMISSIONS] }));
+    return [...ALL_PERMISSION_CODES].sort().map((code) => ({ code, description: PERMISSIONS[code.toUpperCase().replace(/\./g, '_') as keyof typeof PERMISSIONS] }));
   }
 
   @ApiBearerAuth()
@@ -71,7 +71,7 @@ export class AuthController {
   @Get('permissions/matrix')
   async matrix() {
     const roles = await this.permissionsService.matrixView();
-    return { catalog: ALL_PERMISSION_CODES, roles };
+    return { catalog: [...ALL_PERMISSION_CODES].sort(), roles };
   }
 
   @ApiBearerAuth()

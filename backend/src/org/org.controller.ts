@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsBoolean, IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { RoleName } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions } from '../auth/permissions.guard';
+import { AnyPermission, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { OrgService, Actor } from './org.service';
 
@@ -70,7 +70,7 @@ export class OrgController {
     return { userId: req.user.id, username: req.user.username };
   }
 
-  // ----- read: authenticated users with org.read -----
+  // ----- read: org.read (branches/employees) or departments.read (department lists used by pickers) -----
   @Get('branches')
   @RequirePermissions(PERMISSIONS.ORG_READ)
   branches() {
@@ -78,7 +78,8 @@ export class OrgController {
   }
 
   @Get('departments')
-  @RequirePermissions(PERMISSIONS.ORG_READ)
+  // OR: org.read (full org view) or the new departments.read (picker-only access)
+  @AnyPermission([PERMISSIONS.ORG_READ], [PERMISSIONS.DEPARTMENTS_READ])
   departments() {
     return this.org.listDepartments();
   }
@@ -102,13 +103,13 @@ export class OrgController {
     return this.org.updateBranch(id, dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.DEPARTMENTS_MANAGE])
   @Post('departments')
   createDepartment(@Req() req, @Body() dto: DepartmentDto) {
     return this.org.createDepartment(dto, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.DEPARTMENTS_MANAGE])
   @Patch('departments/:id')
   updateDepartment(@Req() req, @Param('id') id: string, @Body() dto: DepartmentUpdateDto) {
     return this.org.updateDepartment(id, dto, this.actor(req));
@@ -157,7 +158,7 @@ export class OrgController {
     return this.org.deleteBranch(id, this.actor(req));
   }
 
-  @RequirePermissions(PERMISSIONS.ORG_MANAGE)
+  @AnyPermission([PERMISSIONS.ORG_MANAGE], [PERMISSIONS.DEPARTMENTS_MANAGE])
   @Delete('departments/:id')
   deleteDepartment(@Req() req, @Param('id') id: string) {
     return this.org.deleteDepartment(id, this.actor(req));

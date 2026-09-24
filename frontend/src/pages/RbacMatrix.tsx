@@ -9,7 +9,8 @@ interface MatrixRole {
 
 /** Groups shown in the matrix — order defines display order. */
 const GROUPS: { name: string; prefix: string; description: string }[] = [
-  { name: 'Users & Org', prefix: 'users.', description: 'User accounts, departments, branches, employees' },
+  { name: 'Users & Org', prefix: 'users.', description: 'User accounts, branches, employees' },
+  { name: 'Departments', prefix: 'departments.', description: 'Department lists and CRUD' },
   { name: 'Requests & Workflow', prefix: 'requests.', description: 'Create, view and read requests; approval acting' },
   { name: 'Approvals', prefix: 'approvals.', description: 'Act on approval inbox' },
   { name: 'Fleet & Cars', prefix: 'fleet.', description: 'Vehicles, drivers, trips, vehicle types' },
@@ -26,6 +27,8 @@ const PERM_LABELS: Record<string, string> = {
   'users.manage': 'Manage users',
   'org.read': 'View org data',
   'org.manage': 'Manage org data',
+  'departments.read': 'View departments',
+  'departments.manage': 'Manage departments',
   'requests.read.own': 'View own requests',
   'requests.read.all': 'View all requests',
   'requests.create': 'Create requests',
@@ -72,7 +75,15 @@ export default function RbacMatrix() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // group collapse state persists per browser (default: all expanded)
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem('rbac-groups-collapsed');
+      return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    } catch {
+      return {};
+    }
+  });
   const [busy, setBusy] = useState(false);
 
   const canManage = hasPermission('users.manage');
@@ -143,6 +154,8 @@ export default function RbacMatrix() {
       const fleet = byGroup.get('Fleet & Cars') ?? [];
       byGroup.set('Fleet & Cars', [...fleet, ...cars]);
     }
+    // permissions sorted A→Z inside every group
+    for (const list of byGroup.values()) list.sort((a, b) => a.localeCompare(b));
     return GROUP_ORDER.filter((g) => byGroup.has(g)).map((g) => ({
       name: g,
       perms: byGroup.get(g)!,
@@ -150,7 +163,28 @@ export default function RbacMatrix() {
     }));
   }, [catalog, search, expanded]);
 
-  const toggleGroup = (g: string) => setExpanded((prev) => ({ ...prev, [g]: !(prev[g] ?? true) }));
+  const toggleGroup = (g: string) =>
+    setExpanded((prev) => {
+      const next = { ...prev, [g]: !(prev[g] ?? true) };
+      try {
+        localStorage.setItem('rbac-groups-collapsed', JSON.stringify(next));
+      } catch {
+        /* private mode — state still works for this session */
+      }
+      return next;
+    });
+
+  const allOpen = sections.every((s) => s.open);
+  const setAll = (open: boolean) => {
+    const next: Record<string, boolean> = {};
+    for (const g of GROUP_ORDER) next[g] = open;
+    setExpanded(next);
+    try {
+      localStorage.setItem('rbac-groups-collapsed', JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+  };
 
   /** One-click cleanup: revoke codes that the backend catalog no longer knows (stale legacy grants). */
   const cleanupLegacy = async () => {
@@ -199,6 +233,14 @@ export default function RbacMatrix() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
+          {sections.length > 0 && (
+            <button
+              onClick={() => setAll(!allOpen)}
+              className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 transition-colors"
+            >
+              {allOpen ? '⊟ Collapse all' : '⊞ Expand all'}
+            </button>
+          )}
           {canManage && (
             <span title="Revoke codes no longer in the catalog">
               <Button variant="ghost" onClick={cleanupLegacy} disabled={busy}>

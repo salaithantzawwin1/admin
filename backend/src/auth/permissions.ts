@@ -5,6 +5,8 @@ export const PERMISSIONS = {
   USERS_MANAGE: 'users.manage',
   ORG_READ: 'org.read',
   ORG_MANAGE: 'org.manage',
+  DEPARTMENTS_READ: 'departments.read',
+  DEPARTMENTS_MANAGE: 'departments.manage',
   REQUESTS_READ_OWN: 'requests.read.own',
   REQUESTS_READ_ALL: 'requests.read.all',
   REQUESTS_CREATE: 'requests.create',

@@ -20,15 +20,20 @@ everything is finished, deploy the same code to a **physical server** (§8).
 lives in git (GitHub `salaithantzawwin1/admin`, branch `main`) + the `.env.*`
 secrets that live only on servers (never in git).
 
-### Current stacks on 192.168.100.110 (side by side, isolated)
+### Current stacks on 192.168.100.110
 
-| Stack | Project | Compose files | UI | Backend (loopback) | Data volumes |
-|---|---|---|---|---|---|
-| Testing | `ams` | `compose.yaml` + `compose.test.yaml` + `.env.test` | `:80` and `:8080` | `127.0.0.1:3000` | `ams_db_data`, `ams_uploads_data` |
-| Production (VM) | `ams-prod` | `compose.yaml` + `compose.prod.yaml` + `.env.prod` | `:3080` | `127.0.0.1:3010` | `ams-prod_db_data`, `ams-prod_uploads_data` |
+> **✅ CURRENT POLICY (2026-09-24) — ONE stack on this server.**
+> The VM runs the **testing stack only** (`ams`, UI on `:80`). The parallel
+> production stack (`ams-prod`, UI `:3080`) is **stopped/retired until the
+> physical server exists** — running both doubled RAM/CPU for no benefit and
+> made every deploy ambiguous (which stack am I updating?). The physical
+> server (§8) becomes the single production host; until then `:80` is the one
+> and only AMS URL. The prod compose files stay in git, ready for that day.
 
-The two stacks share nothing: separate compose project names → separate networks
-and volumes. Port conflicts are impossible by design.
+| Stack | Project | Compose files | UI | Backend (loopback) | Data volumes | Status |
+|---|---|---|---|---|---|---|
+| Testing | `ams` | `compose.yaml` + `compose.test.yaml` + `.env.test` | `:80` and `:8080` | `127.0.0.1:3000` | `ams_db_data`, `ams_uploads_data` | **RUNNING — the stack** |
+| Production (VM) | `ams-prod` | `compose.yaml` + `compose.prod.yaml` + `.env.prod` | `:3080` | `127.0.0.1:3010` | `ams-prod_db_data`, `ams-prod_uploads_data` | stopped (retired until physical server) |
 
 ## 2. Samba share = the same files
 
@@ -86,7 +91,10 @@ docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d -
 If port 80 is taken by another service, remove the `"80:80"` line in
 `compose.test.yaml` — `:8080` keeps everything working.
 
-## 6. Deploy — Production (VM on 110, project `ams-prod`)
+## 6. Deploy — Production (NOT on this VM — see §8)
+
+> **Per the current policy, do NOT run the prod stack on 110.** These commands
+> apply to the future physical server only.
 
 ```bash
 cd /opt/admin
@@ -97,21 +105,19 @@ docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod up -d -
 ```
 
 - Health: `curl -s http://127.0.0.1:3010/api/health` → `{"status":"ok","env":"production","db":"up"}`
-- UI: `http://192.168.100.110:3080`
+- UI: `http://<server>:3080` (on the physical server)
 - First boot seeds the prod DB (sysadmin/admin1/head1/… with `SEED_PASSWORD` from `.env.prod`).
 - Prod DB is empty/separate from testing — set up departments/users once.
-- ⚠️ VM has 2 CPU / 3.8 GB RAM running both stacks — watch memory; if tight,
-  stop testing: `docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test down`.
 
 ## 7. Ports cheat-sheet (current VM)
 
 | Port | Bound | What |
 |---|---|---|
-| 80 | `0.0.0.0` (testing frontend) | UI — plain `http://192.168.100.110` |
+| 80 | `0.0.0.0` (testing frontend) | UI — plain `http://192.168.100.110` — **the** AMS URL |
 | 8080 | `0.0.0.0` (testing frontend) | UI (legacy bookmark) |
 | 3000 | `127.0.0.1` (testing backend) | API — internal only (nginx proxies `/api/`) |
-| 3080 | `0.0.0.0` (prod frontend) | Prod UI |
-| 3010 | `127.0.0.1` (prod backend) | Prod API — internal only |
+| 3080 | — | free (prod stack retired from this VM) |
+| 3010 | — | free (prod stack retired from this VM) |
 | 5432 | docker networks only | postgres (never published) |
 
 ## 8. Future physical server — ready-to-deploy playbook
