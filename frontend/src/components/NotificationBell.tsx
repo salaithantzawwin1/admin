@@ -12,6 +12,8 @@ interface Notification {
   createdAt: string;
 }
 
+const BASE_TITLE = 'AMS — Administration Management System';
+
 const TYPE_META: Record<string, { icon: string; cls: string }> = {
   // workflow
   SUBMITTED: { icon: '📤', cls: 'bg-blue-100 text-blue-600' },
@@ -68,6 +70,23 @@ export function NotificationBell() {
   const newestRef = useRef<string | null>(null);
   // previous badge count, for the "×N new" pulse line
   const prevCountRef = useRef(0);
+  // desktop notifications — undefined on insecure origins (plain http), guarded
+  const [perm, setPerm] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  );
+  // newest createdAt already surfaced as a desktop notification
+  const lastShownRef = useRef<string | null>(null);
+  const prevUnreadRef = useRef<number | null>(null);
+  const openRef = useRef(false);
+
+  useEffect(() => {
+    openRef.current = open;
+  }, [open]);
+
+  // (N) badge in the browser tab title
+  useEffect(() => {
+    document.title = unread > 0 ? `(${unread}) ${BASE_TITLE}` : BASE_TITLE;
+  }, [unread]);
 
   /** Badge poll — lightweight (single COUNT), runs every 15s even when closed. */
   const pollBadge = useCallback(() => {
@@ -88,6 +107,8 @@ export function NotificationBell() {
             prevCountRef.current = 0; // marker below renders instead of a number
           }
           newestRef.current = newest;
+          // rows seen while the dropdown is open must not fire desktop alerts later
+          if (newest && (openRef.current || !lastShownRef.current)) lastShownRef.current = newest;
         })
         .catch(() => {});
     },
@@ -123,6 +144,48 @@ export function NotificationBell() {
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [pollBadge]);
+
+  // Desktop-alert baseline: newest notification at login must not alert later.
+  useEffect(() => {
+    if (perm !== 'granted') return;
+    api<{ items: Notification[] }>('/notifications?pageSize=1')
+      .then((r) => {
+        if (!lastShownRef.current) lastShownRef.current = r.items[0]?.createdAt ?? null;
+      })
+      .catch(() => {});
+  }, [perm]);
+
+  // Unread count went up → fire desktop alerts for rows newer than the baseline
+  // (only when the tab is NOT focused — the in-tab bell already covers focus).
+  useEffect(() => {
+    const prev = prevUnreadRef.current;
+    prevUnreadRef.current = unread;
+    if (prev === null || unread <= prev) return;
+    if (perm !== 'granted' || document.hasFocus()) return;
+    api<{ items: Notification[] }>('/notifications?pageSize=5')
+      .then((r) => {
+        const fresh = r.items.filter((n) => !lastShownRef.current || n.createdAt > lastShownRef.current);
+        if (r.items[0]?.createdAt) lastShownRef.current = r.items[0].createdAt;
+        for (const n of fresh.slice(0, 3)) {
+          try {
+            const d = new Notification(n.title, { body: n.body || undefined, tag: n.id, icon: '/GLG.png' });
+            d.onclick = () => {
+              window.focus();
+              d.close();
+              if (n.link) navigate(n.link);
+            };
+          } catch {
+            break; // insecure context or blocked — stay silent
+          }
+        }
+      })
+      .catch(() => {});
+  }, [unread, perm, navigate]);
+
+  const requestPerm = () => {
+    if (typeof Notification === 'undefined') return;
+    Notification.requestPermission().then((p) => setPerm(p));
+  };
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -200,9 +263,20 @@ export function NotificationBell() {
                 <span className="text-[10px] font-bold bg-red-500 text-white rounded-full px-1.5 py-0.5">{unread}</span>
               )}
             </div>
-            <button className="text-xs text-gray-500 hover:text-blue-600 transition-colors disabled:opacity-40" onClick={markAll} disabled={unread === 0}>
-              Mark all read
-            </button>
+            <div className="flex items-center gap-3">
+              {perm === 'default' && (
+                <button
+                  className="text-xs text-amber-600 hover:text-amber-700 hover:underline transition-colors"
+                  onClick={requestPerm}
+                  title="Get desktop alerts when the tab is in the background"
+                >
+                  🔔 Enable desktop alerts
+                </button>
+              )}
+              <button className="text-xs text-gray-500 hover:text-blue-600 transition-colors disabled:opacity-40" onClick={markAll} disabled={unread === 0}>
+                Mark all read
+              </button>
+            </div>
           </div>
 
           {/* Unread-only toggle */}
