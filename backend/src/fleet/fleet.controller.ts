@@ -95,6 +95,18 @@ export class FleetController {
     return this.fleet.listDrivers(status);
   }
 
+  /** Driver ids busy over a window (web picker + Telegram picker exclusion list). */
+  @Get('drivers/busy')
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  busyDrivers(@Query('start') start?: string, @Query('end') end?: string) {
+    const s = start ? new Date(start) : new Date(0);
+    const e = end ? new Date(end) : new Date('9999-12-31');
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+      return [];
+    }
+    return this.fleet.busyDriverIds(s, e);
+  }
+
   // ---------- vehicle type master data (Plan §6 — no hard-coded lists) ----------
 
   /** Active types drive the pickers; managers also see inactive ones. */

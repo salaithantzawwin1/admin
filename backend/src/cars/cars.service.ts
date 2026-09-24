@@ -84,7 +84,7 @@ export class CarsService {
   async findByRequest(requestId: string, actor?: Actor) {
     const car = await this.prisma.carRequest.findUnique({
       where: { requestId },
-      include: { vehicle: true, driver: true, assignment: { include: { trip: true } } },
+      include: { vehicle: true, driver: true, managerAckBy: { select: { fullName: true } }, assignment: { include: { trip: true } } },
     });
     if (!car || !actor) return car;
 
@@ -364,6 +364,82 @@ export class CarsService {
     return assignment;
   }
 
+  /**
+   * Department managers allowed to ack a car request: every DEPARTMENT_HEAD
+   * (or users.manage holder) of ANY department the requester's employee belongs
+   * to — one employee can head several departments. SYSTEM_ADMIN always passes.
+   */
+  async managerAckUserIds(requestId: string): Promise<string[]> {
+    const doc = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      select: { requester: { select: { employee: { select: { departmentId: true, headedDepartments: { select: { id: true } } } } } } },
+    });
+    const employee = doc?.requester?.employee;
+    if (!employee) return [];
+    // departments the requester belongs to + departments they head (either counts)
+    const deptIds = [...new Set([employee.departmentId, ...employee.headedDepartments.map((d) => d.id)].filter(Boolean) as string[])];
+    if (deptIds.length === 0) return [];
+    const heads = await this.prisma.userRole.findMany({
+      where: {
+        role: { name: 'DEPARTMENT_HEAD' },
+        user: { status: 'ACTIVE', employee: { OR: [{ departmentId: { in: deptIds } }, { headedDepartments: { some: { id: { in: deptIds } } } }] } },
+      },
+      select: { userId: true },
+    });
+    return [...new Set(heads.map((h) => h.userId))];
+  }
+
+  /**
+   * OPTIONAL manager acknowledgement of a car request — pure FYI for the
+   * department manager, never blocks the workflow or the assignment.
+   */
+  async managerAck(requestId: string, actor: Actor) {
+    const allowed = await this.managerAckUserIds(requestId);
+    const isSuper = await this.prisma.userRole.findFirst({ where: { userId: actor.userId, role: { name: 'SYSTEM_ADMIN' } } });
+    if (!isSuper && !allowed.includes(actor.userId)) {
+      throw new ForbiddenException('Only a department manager of the requester can acknowledge');
+    }
+    const car = await this.prisma.carRequest.findUnique({ where: { requestId } });
+    if (!car) throw new NotFoundException('Car request not found');
+    if (car.managerAckAt) throw new ConflictException('Already acknowledged');
+    const updated = await this.prisma.carRequest.update({
+      where: { requestId },
+      data: { managerAckAt: new Date(), managerAckById: actor.userId },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'CAR_MANAGER_ACK', module: 'CARS', recordId: requestId,
+    });
+    return updated;
+  }
+
+  /** Pending manager acks — the requester's department(s) I manage (bell inbox helper). */
+  async myPendingManagerAcks(userId: string) {
+    const employee = await this.prisma.employee.findFirst({ where: { userId }, select: { departmentId: true, headedDepartments: { select: { id: true } } } });
+    if (!employee) return [];
+    const deptIds = [...new Set([employee.departmentId, ...employee.headedDepartments.map((d) => d.id)].filter(Boolean) as string[])];
+    if (deptIds.length === 0) return [];
+    return this.prisma.requestDocument.findMany({
+      where: {
+        docType: 'CAR_REQUEST',
+        status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] },
+        carRequest: { managerAckAt: null },
+        OR: [
+          { requester: { employee: { departmentId: { in: deptIds } } } },
+          { requester: { employee: { headedDepartments: { some: { id: { in: deptIds } } } } } },
+        ],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true, docNumber: true, title: true, status: true, createdAt: true,
+        requester: { select: { fullName: true } },
+        department: { select: { name: true } },
+        carRequest: { select: { destination: true, startDate: true, endDate: true, managerAckAt: true } },
+      },
+    });
+  }
+
   /** Release assignment (e.g. trip cancelled). */
   /**
    * Change the assigned vehicle/driver of a live assignment (fleet plan change).
@@ -375,7 +451,9 @@ export class CarsService {
   async reassign(requestId: string, data: { vehicleId: string; driverId?: string }, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
-      include: { carRequest: { include: { assignment: { include: { trip: true, driver: true, vehicle: true } } } } },
+      include: {
+        carRequest: { include: { assignment: { include: { trip: true, driver: true, vehicle: true } }, vehicle: true } },
+      },
     });
     if (!request || !request.carRequest) throw new NotFoundException('Car request not found');
     const carReq = request.carRequest;
@@ -479,13 +557,34 @@ export class CarsService {
       await this.telegram.notifyDriverOfReassign(requestId, request.docNumber, previousDriverId, `${vehicle.vehicleNo} (${vehicle.brandModel})`).catch(() => undefined);
     }
     await this.telegram.sendAssignment(assignment.id).catch(() => undefined);
+    const prevVehicleLabel = `${carReq.vehicle?.vehicleNo ?? ''}${carReq.vehicle?.brandModel ? ` (${carReq.vehicle.brandModel})` : ''}`.trim() || 'previous vehicle';
+    const vehicleChanged = data.vehicleId !== assignment.vehicleId;
+    const driverChanged = (data.driverId ?? null) !== (assignment.driverId ?? null);
     await this.notifications.notify({
       userId: request.requesterId,
       type: 'CAR_ASSIGNED',
-      title: `Vehicle changed for ${request.docNumber}`,
-      body: `${vehicle.vehicleNo} (${vehicle.brandModel}) is now assigned for your trip.${data.driverId ? ' The driver has been updated as well.' : ''}`,
+      title: `Assignment changed for ${request.docNumber}`,
+      body: [
+        vehicleChanged ? `Vehicle: ${prevVehicleLabel} → ${vehicle.vehicleNo} (${vehicle.brandModel})` : null,
+        driverChanged ? 'Driver has been updated.' : null,
+        `Schedule: ${carReq.startDate.toLocaleString('en-GB')} → ${carReq.endDate.toLocaleString('en-GB')} (unchanged unless you were told otherwise).`,
+      ].filter(Boolean).join(' · '),
       link: `/requests/${requestId}`, requestId,
     });
+    // NEW driver holds an AMS account in some setups — mirror a bell notification too
+    if (driverChanged && data.driverId) {
+      const driverUser = await this.prisma.driver.findUnique({ where: { id: data.driverId }, select: { employee: { select: { user: { select: { id: true } } } } } });
+      const newDriverUserId = driverUser?.employee?.user?.id;
+      if (newDriverUserId) {
+        await this.notifications.notify({
+          userId: newDriverUserId,
+          type: 'CAR_ASSIGNED',
+          title: `You are the driver for ${request.docNumber}`,
+          body: `${vehicle.vehicleNo} (${vehicle.brandModel}) · ${carReq.startDate.toLocaleString('en-GB')} → ${carReq.endDate.toLocaleString('en-GB')} · pickup ${carReq.pickupLocation ?? '—'} → ${carReq.destination}.`,
+          link: `/requests/${requestId}`, requestId,
+        });
+      }
+    }
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -630,6 +729,10 @@ export class CarsService {
       body: `New schedule: ${start.toLocaleString()} → ${end.toLocaleString()}.${data.comment ? ` Note: ${data.comment}` : ''}`,
       link: `/requests/${requestId}`, requestId,
     });
+    // the assigned driver holds no AMS account — tell them on Telegram directly
+    if (request.carRequest?.driverId) {
+      await this.telegram.notifyDriverOfTimeChange(requestId, request.docNumber, request.carRequest.driverId, start, end, data.comment).catch(() => undefined);
+    }
     return { success: true };
   }
 

@@ -67,6 +67,7 @@ model User {
   supplierPurchaseDrafts SupplierPurchaseDraft[] @relation("SupplierPurchaseDrafts")
   attachments     Attachment[]         @relation("Attachments")
   requestDocs     RequestDocument[]    @relation("RequestDocuments")
+  carManagerAcks  CarRequest[]         @relation("CarManagerAcks")
   announcements   Announcement[]       @relation("Announcements")
   announcementReads AnnouncementRead[] @relation("AnnouncementReads")
   carExpenses     CarExpense[]         @relation("CarExpenseCreator")
@@ -939,6 +940,8 @@ model CarRequest {
   timeSlot    CarRequestTimeSlot @default(FULL_DAY)
   pickupLocation String?
   status      WorkflowStatus     @default(DRAFT)
+  managerAckAt   DateTime? // optional Dept-Head acknowledgement (never blocks)
+  managerAckById String?   @db.Uuid
   vehicleId   String?            @db.Uuid
   driverId    String?            @db.Uuid
   createdAt   DateTime           @default(now())
@@ -947,6 +950,7 @@ model CarRequest {
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
   vehicle    Vehicle?        @relation(fields: [vehicleId], references: [id])
   driver     Driver?         @relation(fields: [driverId], references: [id])
+  managerAckBy User?         @relation("CarManagerAcks", fields: [managerAckById], references: [id])
   assignment CarAssignment?
 
   @@index([startDate, endDate])

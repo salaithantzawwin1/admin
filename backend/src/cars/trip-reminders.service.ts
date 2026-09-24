@@ -202,6 +202,72 @@ export class TripRemindersService {
       console.log(`[cars] auto-released ${stuck.length} expired assignment(s): ${stuck.map((a) => a.request.docNumber).join(', ')}`);
     }
   }
+
+  /**
+   * Overdue running trips: the booking window ended but the driver never tapped
+   * "🏁 Back at Office" — the vehicle still shows IN_USE and blocks new bookings.
+   * Ping the driver hourly and raise it to Administration (idempotent: one
+   * ESCALATED notification per request per 12h). Booking stays reserved until
+   * the driver signals back or Administration intervenes — that is deliberate:
+   * silently freeing a car that might still be on the road would double-book it.
+   */
+  @Cron('0 15 * * * *') // hourly at :15
+  async escalateOverdueRunning() {
+    try {
+      const now = new Date();
+      const overdue = await this.prisma.carAssignment.findMany({
+        where: {
+          releasedAt: null,
+          driverBackAtOfficeAt: null,
+          request: { carRequest: { endDate: { lt: now } } },
+        },
+        include: {
+          driver: { select: { id: true, name: true, telegramChatId: true } },
+          vehicle: { select: { vehicleNo: true, brandModel: true } },
+          request: { select: { id: true, docNumber: true, requester: { select: { fullName: true } }, carRequest: { select: { endDate: true, destination: true } } } },
+        },
+      });
+
+      for (const a of overdue) {
+        const ended = a.request.carRequest?.endDate;
+        const overMins = ended ? Math.round((now.getTime() - new Date(ended).getTime()) / 60000) : 0;
+        const when = ended ? new Date(ended).toLocaleString() : 'the scheduled end';
+
+        // 1) driver nudge on Telegram
+        if (a.driver?.telegramChatId) {
+          await this.telegram.sendRaw(
+            a.driver.telegramChatId,
+            [
+              `🏁 <b>Overdue — ${escapeHtml(a.request.docNumber)}</b>`,
+              `The booking window ended at ${escapeHtml(when)} (${overMins} min ago) but the trip is still open.`,
+              `Vehicle ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} is still reserved.`,
+              ``,
+              `If you are back, tap <b>"🏁 Back at Office"</b> on your assignment message — the car frees up immediately.`,
+            ].join('\n'),
+          ).catch(() => undefined);
+        }
+
+        // 2) Administration escalation — one per request per 12h
+        const recent = await this.prisma.notification.findFirst({
+          where: { type: 'ESCALATED' as never, requestId: a.requestId, createdAt: { gte: new Date(now.getTime() - 12 * 3600 * 1000) } },
+          select: { id: true },
+        });
+        if (recent) continue;
+
+        const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+        await this.notifications.notifyMany(adminIds, {
+          type: 'ESCALATED' as never,
+          title: `🏁 Trip overdue — ${a.request.docNumber}`,
+          body: `${a.driver?.name ?? 'The driver'} has not tapped "Back at Office" ${overMins} min after the window ended (${when}). Vehicle ${a.vehicle?.vehicleNo ?? '—'} is still reserved${a.driver?.telegramChatId ? ' — driver was nudged on Telegram' : ' — driver has no Telegram, call them'}. Use the request page to complete the trip or release the assignment.`,
+          link: `/requests/${a.requestId}`,
+          requestId: a.requestId,
+        });
+        this.logger.log(`escalated overdue running trip ${a.request.docNumber} (+${overMins} min)`);
+      }
+    } catch (e) {
+      this.logger.warn(`escalateOverdueRunning failed: ${(e as Error).message}`);
+    }
+  }
 }
 
 function escapeHtml(s: string): string {

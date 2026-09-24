@@ -74,6 +74,18 @@ export class CarsController {
     return this.cars.listApprovedUnassigned();
   }
 
+  /** Car requests in my department(s) still missing the optional manager ack. */
+  @Get('manager-acks/pending')
+  pendingManagerAcks(@Req() req) {
+    return this.cars.myPendingManagerAcks(req.user.id);
+  }
+
+  /** OPTIONAL manager ack — pure FYI, never blocks the workflow. */
+  @Post('requests/:requestId/manager-ack')
+  managerAck(@Req() req, @Param('requestId') requestId: string) {
+    return this.cars.managerAck(requestId, this.actor(req));
+  }
+
   /** Clash preview for a time window (form pre-warning, before submitting). */
   @Get('availability/conflicts')
   windowConflicts(@Query('startDate') startDate: string, @Query('endDate') endDate: string) {

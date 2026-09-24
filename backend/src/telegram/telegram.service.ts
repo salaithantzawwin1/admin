@@ -1146,6 +1146,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Administration shifted the trip time — tell the assigned driver directly
+   * (they hold no AMS account) so they plan the new window.
+   */
+  async notifyDriverOfTimeChange(requestId: string, docNumber: string, driverId: string, start: Date, end: Date, comment?: string) {
+    try {
+      const driver = await this.prisma.driver.findUnique({ where: { id: driverId } });
+      if (!driver?.telegramChatId) return;
+      const lines = [
+        `🕒 <b>${escapeHtml(docNumber)} — time changed by Administration</b>`,
+        `New schedule: ${escapeHtml(start.toLocaleString('en-GB'))} → ${escapeHtml(end.toLocaleString('en-GB'))}.`,
+      ];
+      if (comment) lines.push(`Note: ${escapeHtml(comment)}`);
+      await this.call('sendMessage', { chat_id: driver.telegramChatId, text: lines.join('\n'), parse_mode: 'HTML' });
+      await this.audit.log({
+        action: 'TELEGRAM_DRIVER_TIMECHANGE_NOTIFIED', module: 'CARS', recordId: requestId,
+        newValue: { driver: driver.name, start: start.toISOString(), end: end.toISOString() },
+      });
+    } catch {
+      /* notification must never break the time shift */
+    }
+  }
+
   /** Regenerate (or create) a bind code for a driver — used by Settings/Drivers UI. */
   async regenerateBindCode(driverId: string) {
     const code = `DRV-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;

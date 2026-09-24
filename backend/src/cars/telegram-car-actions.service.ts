@@ -419,13 +419,28 @@ export class TelegramCarActionsService {
       select: { carRequest: { select: { startDate: true, endDate: true } } },
     });
     const busyDriverIds = cr?.carRequest
-      ? (await this.prisma.driverAbsence.findMany({
-          where: { status: 'ACTIVE', startsAt: { lt: cr.carRequest.endDate }, endsAt: { gt: cr.carRequest.startDate } },
-          select: { driverId: true },
-        })).map((x) => x.driverId)
+      ? [
+          // planned absence during the trip window
+          ...(await this.prisma.driverAbsence.findMany({
+            where: { status: 'ACTIVE', startsAt: { lt: cr.carRequest.endDate }, endsAt: { gt: cr.carRequest.startDate } },
+            select: { driverId: true },
+          })).map((x) => x.driverId),
+          // already driving an overlapping IN_PROGRESS trip (not yet Back at Office)
+          ...(await this.prisma.carRequest.findMany({
+            where: {
+              status: 'IN_PROGRESS',
+              driverId: { not: null },
+              requestId: { not: payload.requestId },
+              startDate: { lt: cr.carRequest.endDate },
+              endDate: { gt: cr.carRequest.startDate },
+              assignment: { releasedAt: null, driverBackAtOfficeAt: null },
+            },
+            select: { driverId: true },
+          })).map((x) => x.driverId),
+        ].filter(Boolean)
       : [];
     const drivers = await this.prisma.driver.findMany({
-      where: { status: 'AVAILABLE', ...(busyDriverIds.length ? { id: { notIn: busyDriverIds } } : {}) },
+      where: { status: 'AVAILABLE', ...(busyDriverIds.length ? { id: { notIn: busyDriverIds as string[] } } : {}) },
       take: 8,
       select: { id: true, name: true },
     });

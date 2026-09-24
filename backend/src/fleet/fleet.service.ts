@@ -196,6 +196,24 @@ export class FleetService {
   }
 
   // ---------- drivers ----------
+  /**
+   * Drivers busy over a window (IN_PROGRESS assignments overlapping it and not
+   * yet "Back at Office") — CarPanel and the Telegram picker both exclude them.
+   */
+  async busyDriverIds(start: Date, end: Date): Promise<string[]> {
+    const rows = await this.prisma.carRequest.findMany({
+      where: {
+        status: 'IN_PROGRESS',
+        driverId: { not: null },
+        startDate: { lt: end },
+        endDate: { gt: start },
+        assignment: { releasedAt: null, driverBackAtOfficeAt: null },
+      },
+      select: { driverId: true },
+    });
+    return [...new Set(rows.map((r) => r.driverId).filter(Boolean) as string[])];
+  }
+
   listDrivers(status?: DriverStatus) {
     // telegramBindCode deliberately excluded — it is a linking secret (see listTelegramBindings)
     return this.prisma.driver.findMany({

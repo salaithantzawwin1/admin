@@ -14,6 +14,8 @@ interface CarRequest {
   passengers: number;
   status: string;
   vehicleTypeRequired?: string;
+  managerAckAt?: string | null;
+  managerAckBy?: { fullName: string } | null;
   vehicle?: { id: string; vehicleNo: string; brandModel: string } | null;
   driver?: { id: string; name: string } | null;
   assignment?: {
@@ -37,6 +39,18 @@ interface Driver {
   name: string;
   status: string;
   absences?: { startsAt: string; endsAt: string; reason?: string | null }[];
+}
+
+/** Driver ids on an overlapping IN_PROGRESS trip (server truth, not just status label). */
+function useBusyDrivers(tripStart: Date, tripEnd: Date): string[] {
+  const [busy, setBusy] = useState<string[]>([]);
+  useEffect(() => {
+    if (!(tripStart instanceof Date) || Number.isNaN(tripStart.getTime())) return;
+    api<string[]>(`/fleet/drivers/busy?start=${tripStart.toISOString()}&end=${tripEnd.toISOString()}`)
+      .then(setBusy)
+      .catch(() => setBusy([]));
+  }, [tripStart.toISOString(), tripEnd.toISOString()]);
+  return busy;
 }
 interface Expense {
   id: string;
@@ -72,6 +86,8 @@ export function CarPanel({
   // change vehicle/driver of a live assignment (fleet plan change)
   const [reassignForm, setReassignForm] = useState({ vehicleId: '', driverId: '' });
   const [confirmReassign, setConfirmReassign] = useState(false);
+  // optional manager ack (Department Head FYI — never blocks)
+  const [canManagerAck, setCanManagerAck] = useState(false);
   const canAssign = hasPermission('cars.assign');
 
   const load = useCallback(() => {
@@ -86,6 +102,13 @@ export function CarPanel({
   }, [requestId]);
 
   useEffect(load, [load]);
+
+  // manager-ack visibility: ask the backend whether I am an eligible department manager
+  useEffect(() => {
+    api<unknown[]>('/cars/manager-acks/pending')
+      .then((rows) => setCanManagerAck(rows.some((r) => (r as { id: string }).id === requestId)))
+      .catch(() => setCanManagerAck(false));
+  }, [requestId]);
 
   const act = async (fn: () => Promise<unknown>): Promise<boolean> => {
     setError('');
@@ -140,6 +163,25 @@ export function CarPanel({
           {assignment && <DriverAckStages a={assignment} />}
         </div>
       </div>
+
+      {/* optional manager acknowledgement (Department Head) — never blocks */}
+      {status !== 'DRAFT' && (car.managerAckAt || canManagerAck) && (
+        <div className="mb-4 flex items-center gap-2 text-sm">
+          {car.managerAckAt ? (
+            <span className="text-green-700">✅ Manager acknowledged{car.managerAckBy ? ` — ${car.managerAckBy.fullName}` : ''} · {new Date(car.managerAckAt).toLocaleString()}</span>
+          ) : (
+            <>
+              <span className="text-gray-500">Department manager has not acknowledged yet (optional — does not delay the trip).</span>
+              <Button
+                variant="ghost"
+                onClick={() => act(() => api(`/cars/requests/${requestId}/manager-ack`, { method: 'POST' }))}
+              >
+                👍 Acknowledge
+              </Button>
+            </>
+          )}
+        </div>
+      )}
 
       {showAdminControls && (
         <div className="border-t border-gray-100 pt-4 mt-4">
@@ -202,6 +244,7 @@ export function CarPanel({
       {showAssign && (() => {
         const tripStart = car ? new Date(car.startDate) : new Date(0);
         const tripEnd = car ? new Date(car.endDate) : new Date(8640000000000000);
+        const busyDrivers = useBusyDrivers(tripStart, tripEnd);
         return (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Assign vehicle (Administration)</div>
@@ -216,9 +259,10 @@ export function CarPanel({
               <option value="">— Driver (optional) —</option>
               {drivers.filter((d) => d.status === 'AVAILABLE').map((d) => {
                 const absent = d.absences?.some((a) => new Date(a.startsAt) < tripEnd && new Date(a.endsAt) > tripStart);
+                const onTrip = busyDrivers.includes(d.id);
                 return (
-                  <option key={d.id} value={d.id} disabled={absent}>
-                    {d.name}{absent ? ' · on planned absence' : ''}
+                  <option key={d.id} value={d.id} disabled={absent || onTrip}>
+                    {d.name}{onTrip ? ' · on the way (busy)' : absent ? ' · on planned absence' : ''}
                   </option>
                 );
               })}
@@ -234,7 +278,11 @@ export function CarPanel({
         );
       })()}
 
-      {canReassign && (
+      {canReassign && (() => {
+        const tripStart = car ? new Date(car.startDate) : new Date(0);
+        const tripEnd = car ? new Date(car.endDate) : new Date(8640000000000000);
+        const busyDrivers = useBusyDrivers(tripStart, tripEnd);
+        return (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Change vehicle / driver</div>
           <div className="flex flex-wrap gap-2 items-center">
@@ -250,9 +298,15 @@ export function CarPanel({
               <option value="">— Driver (optional) —</option>
               {drivers
                 .filter((d) => d.status === 'AVAILABLE' || d.id === car.driver?.id)
-                .map((d) => (
-                  <option key={d.id} value={d.id}>{d.name}{d.id === car.driver?.id ? ' (current)' : ''}</option>
-                ))}
+                .map((d) => {
+                  const onOtherTrip = busyDrivers.includes(d.id) && d.id !== car.driver?.id;
+                  const absent = d.absences?.some((a) => new Date(a.startsAt) < tripEnd && new Date(a.endsAt) > tripStart) && d.id !== car.driver?.id;
+                  return (
+                    <option key={d.id} value={d.id} disabled={onOtherTrip || absent}>
+                      {d.name}{d.id === car.driver?.id ? ' (current)' : onOtherTrip ? ' · on the way (busy)' : absent ? ' · on planned absence' : ''}
+                    </option>
+                  );
+                })}
             </Select>
             <Button
               variant="ghost"
@@ -266,7 +320,8 @@ export function CarPanel({
             The previous driver gets a Telegram notice that the trip is no longer theirs; the new driver gets the route message; the requester is notified.
           </p>
         </div>
-      )}
+        );
+      })()}
 
       {confirmReassign && (
         <ConfirmDialog
