@@ -93,6 +93,9 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
 };
 
 type Tab = 'catalog' | 'management' | 'purchases';
+type MgmtTab = 'queue' | 'restock' | 'alerts' | 'reorder' | 'items';
+
+const ITEMS_PER_PAGE = 10;
 
 /** Shrink + convert any picked image to a small square-ish JPEG before upload (5 MB → ~50 KB). */
 async function resizeToJpeg(file: File, maxDim = 512, quality = 0.82): Promise<Blob> {
@@ -171,6 +174,10 @@ export default function Inventory() {
   const [alertMsg, setAlertMsg] = useState('');
   const [alertBusy, setAlertBusy] = useState(false);
   const [reorder, setReorder] = useState<ReorderRow[]>([]);
+  // Management sub-tabs + items-master pagination
+  const [mgmtTab, setMgmtTab] = useState<MgmtTab>('queue');
+  const [itemPage, setItemPage] = useState(1);
+  const [itemQuery, setItemQuery] = useState('');
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
 
@@ -444,10 +451,10 @@ export default function Inventory() {
     }
   };
 
-  /** Pre-fill the restock form from a low-stock suggestion. */
+  /** Pre-fill the restock form from a low-stock suggestion (jumps to the Restock sub-tab). */
   const suggestRestock = (i: Item) => {
     setRestock({ itemId: i.id, quantity: Math.max(i.minStock * 3 - i.balance, i.minStock), reference: `Restock suggestion — ${i.code}`, unitPrice: i.lastUnitPrice != null ? String(i.lastUnitPrice) : '', supplierId: '' });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setMgmtTab('restock');
   };
 
   const alertNow = async () => {
@@ -502,6 +509,16 @@ export default function Inventory() {
 
   const cartLines = Object.entries(cart).filter(([, q]) => q > 0);
   const lowCount = items.filter((i) => i.low).length;
+
+  // items-master search + pagination (Management → Items)
+  const filteredItems = items.filter((i) => {
+    const q = itemQuery.trim().toLowerCase();
+    if (!q) return true;
+    return i.code.toLowerCase().includes(q) || i.name.toLowerCase().includes(q) || i.category.toLowerCase().includes(q);
+  });
+  const itemPageCount = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
+  const itemPageSafe = Math.min(itemPage, itemPageCount);
+  const pagedItems = filteredItems.slice((itemPageSafe - 1) * ITEMS_PER_PAGE, itemPageSafe * ITEMS_PER_PAGE);
 
   /** Ledger rows after the modal's type + date filters. */
   const filteredHistory = history.filter((t) => {
@@ -777,10 +794,34 @@ export default function Inventory() {
         </>
       )}
 
-      {/* ============ Tab: Management (queue + forms + alerts) ============ */}
+      {/* ============ Tab: Management (sub-tabs) ============ */}
       {tab === 'management' && canManage && (
         <>
-          {/* pending fulfillment queue */}
+          {/* management sub-tab bar — one concern per tab (screenshot request) */}
+          <div className="flex flex-wrap gap-1.5 mb-4">
+            {([
+              ['queue', `📋 To issue (${pending.length})`],
+              ['restock', '📥 Restock (stock IN)'],
+              ['alerts', `🔔 Low stock${lowCount > 0 ? ` (${lowCount})` : ''}`],
+              ['reorder', `♻️ Reorder${reorder.length > 0 ? ` (${reorder.length})` : ''}`],
+              ['items', '🗂 Items'],
+            ] as [MgmtTab, string][]).map(([k, label]) => (
+              <button
+                key={k}
+                className={`px-3.5 py-1.5 text-sm rounded-full border transition-colors ${
+                  mgmtTab === k
+                    ? 'bg-yellow-600 border-yellow-600 text-white shadow-sm'
+                    : 'bg-white border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-800'
+                }`}
+                onClick={() => setMgmtTab(k)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* ---- sub-tab: fulfillment queue ---- */}
+          {mgmtTab === 'queue' && (
           <Card className="mb-5 p-5">
             <h2 className="font-semibold text-gray-800 mb-1 text-sm uppercase tracking-wide">
               Approved — waiting for issue from store ({pending.length})
@@ -826,8 +867,10 @@ export default function Inventory() {
               </div>
             )}
           </Card>
+          )}
 
-          {/* restock + new item forms */}
+          {/* ---- sub-tab: restock form ---- */}
+          {mgmtTab === 'restock' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
             <Card className="p-5">
               <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Restock (stock IN)</h2>
@@ -857,6 +900,20 @@ export default function Inventory() {
             </Card>
 
             <Card className="p-5">
+              <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Quick tips</h2>
+              <ul className="text-sm text-gray-500 space-y-2 list-disc pl-4">
+                <li>Pick an item — the dropdown shows current balance and last paid price.</li>
+                <li>Unit price + supplier feed the <b>Purchases</b> report and reorder cost estimates.</li>
+                <li>Low-stock and reorder rows elsewhere have a <b>Fill restock</b> link that pre-fills this form.</li>
+                <li>Every restock lands in the item's <b>Ledger</b> with who/when/what.</li>
+              </ul>
+            </Card>
+          </div>
+          )}
+
+          {/* ---- sub-tab: low stock alerts ---- */}
+          {mgmtTab === 'alerts' && (
+          <Card className="p-5">
               <div className="flex items-center justify-between mb-3">
                 <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Low stock alerts</h2>
                 <button className="text-xs text-blue-600 hover:underline" disabled={alertBusy} onClick={alertNow}>
@@ -886,10 +943,12 @@ export default function Inventory() {
                 </ul>
               )}
               <p className="text-xs text-gray-400 mt-3">Administration is notified automatically (LOW_STOCK) once a day at 08:00 — “Check now” runs the pass immediately.</p>
-            </Card>
+          </Card>
+          )}
 
-            {/* auto-reorder queue — items at/below their reorder level */}
-            <Card className="p-5">
+          {/* ---- sub-tab: auto-reorder suggestions ---- */}
+          {mgmtTab === 'reorder' && (
+          <Card className="p-5">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Auto-reorder suggestions</h2>
                 <span className="text-xs text-gray-400">balance ≤ reorder level (≈3× threshold when unset) · Purchasing is notified daily at 08:00</span>
@@ -912,7 +971,10 @@ export default function Inventory() {
                         <button
                           className="text-xs text-blue-600 hover:underline whitespace-nowrap"
                           title="Pre-fill the restock form with the suggested quantity"
-                          onClick={() => setRestock({ itemId: r.itemId, quantity: r.suggestedQty, reference: `Reorder suggestion — ${r.code}`, unitPrice: r.lastUnitPrice != null ? String(r.lastUnitPrice) : '', supplierId: '' })}
+                          onClick={() => {
+                            setRestock({ itemId: r.itemId, quantity: r.suggestedQty, reference: `Reorder suggestion — ${r.code}`, unitPrice: r.lastUnitPrice != null ? String(r.lastUnitPrice) : '', supplierId: '' });
+                            setMgmtTab('restock');
+                          }}
                         >
                           Fill restock
                         </button>
@@ -921,8 +983,105 @@ export default function Inventory() {
                   ))}
                 </ul>
               )}
-            </Card>
-          </div>
+          </Card>
+          )}
+
+          {/* ---- sub-tab: items master (search + pagination) ---- */}
+          {mgmtTab === 'items' && (
+          <Card className="p-4">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <input
+                className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-64 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+                placeholder="🔍 Search code, name, category…"
+                value={itemQuery}
+                onChange={(e) => { setItemQuery(e.target.value); setItemPage(1); }}
+              />
+              <span className="text-xs text-gray-400 ml-auto">{filteredItems.length} item{filteredItems.length === 1 ? '' : 's'}</span>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                  <th className="px-4 py-3 font-medium">Code</th>
+                  <th className="px-4 py-3 font-medium">Item</th>
+                  <th className="px-4 py-3 font-medium">Unit</th>
+                  <th className="px-4 py-3 font-medium">Balance</th>
+                  <th className="px-4 py-3 font-medium">Min</th>
+                  <th className="px-4 py-3 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {pagedItems.map((i) => (
+                  <tr key={i.id} className={`hover:bg-gray-50 ${i.isActive ? '' : 'opacity-50'}`}>
+                    <td className="px-4 py-3 font-mono text-xs text-gray-500">{i.code}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {i.imageStoredName ? (
+                          <img
+                            src={itemImageUrl(i)}
+                            alt={i.name}
+                            title="Click to preview"
+                            className="w-9 h-9 rounded object-cover flex-shrink-0 cursor-zoom-in hover:ring-2 hover:ring-yellow-400"
+                            onClick={() => setPreviewFor(i)}
+                          />
+                        ) : (
+                          <div className="w-9 h-9 rounded bg-gray-100 flex items-center justify-center text-gray-300 flex-shrink-0">📦</div>
+                        )}
+                        <span>{i.name}{!i.isActive && ' (inactive)'}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-500">{i.unit}</td>
+                    <td className="px-4 py-3">{i.balance}</td>
+                    <td className="px-4 py-3 text-gray-500">{i.minStock}</td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <button className="text-blue-600 hover:underline mr-3" onClick={() => openImageModal(i)}>Photo</button>
+                      <button className="text-blue-600 hover:underline mr-3" onClick={() => { setEditingItem(i); setItemForm({ ...i }); }}>Edit</button>
+                      <button className="text-gray-500 hover:underline mr-3" onClick={() => openHistory(i)}>Ledger</button>
+                      <button className="text-red-600 hover:underline" onClick={() => setDeletingItem(i)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredItems.length === 0 && <p className="text-sm text-gray-400 p-4">No items match “{itemQuery}”.</p>}
+            {/* pagination */}
+            {itemPageCount > 1 && (
+              <div className="flex items-center justify-between border-t border-gray-100 px-4 py-3">
+                <span className="text-xs text-gray-400">
+                  Page {itemPageSafe} of {itemPageCount} — showing {pagedItems.length} of {filteredItems.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="px-2 py-1 rounded border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={itemPageSafe <= 1}
+                    onClick={() => setItemPage(itemPageSafe - 1)}
+                  >
+                    ← Prev
+                  </button>
+                  {Array.from({ length: itemPageCount }, (_, n) => n + 1)
+                    .filter((n) => n === 1 || n === itemPageCount || Math.abs(n - itemPageSafe) <= 1)
+                    .map((n, idx, arr) => (
+                      <span key={n} className="flex items-center">
+                        {idx > 0 && arr[idx - 1] !== n - 1 && <span className="px-1 text-gray-300">…</span>}
+                        <button
+                          className={`w-8 h-8 rounded text-sm ${n === itemPageSafe ? 'bg-yellow-600 text-white font-medium' : 'text-gray-600 hover:bg-gray-50'}`}
+                          onClick={() => setItemPage(n)}
+                        >
+                          {n}
+                        </button>
+                      </span>
+                    ))}
+                  <button
+                    className="px-2 py-1 rounded border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={itemPageSafe >= itemPageCount}
+                    onClick={() => setItemPage(itemPageSafe + 1)}
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            )}
+          </Card>
+          )}
 
           {/* monthly spending lives in its own Purchases tab now */}
         </>
