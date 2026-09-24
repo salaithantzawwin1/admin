@@ -227,22 +227,40 @@ export default function RbacMatrix() {
       {notice && <div className="mb-4 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{notice}</div>}
 
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search permission…"
-          className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm w-56"
-        />
-        {canManage && dirtyCount > 0 && (
-          <span className="text-xs font-medium text-amber-700 bg-amber-50 rounded-full px-2.5 py-1">
-            {dirtyCount} role{dirtyCount > 1 ? 's' : ''} with unsaved changes
+        <div className="relative">
+          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search permission…"
+            className="border border-gray-200 rounded-lg pl-8 pr-8 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-gray-300 hover:bg-gray-400 text-white text-[9px] leading-none flex items-center justify-center"
+              title="Clear"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        {canManage && dirtyCount > 0 ? (
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-3 py-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
+            {dirtyCount} role{dirtyCount > 1 ? 's' : ''} unsaved — Save below
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
+            All changes saved
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
           {sections.length > 0 && (
             <button
               onClick={() => setAll(!allOpen)}
-              className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2.5 py-1.5 hover:bg-gray-50 transition-colors"
+              className="text-xs text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors"
             >
               {allOpen ? '⊟ Collapse all' : '⊞ Expand all'}
             </button>
@@ -254,8 +272,11 @@ export default function RbacMatrix() {
               </Button>
             </span>
           )}
-          <Badge color="blue">{catalog.length} permissions</Badge>
-          <Badge color="gray">{roles.length} roles</Badge>
+          <span className="inline-flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-full px-3 py-1.5">
+            <b className="text-gray-800">{catalog.length}</b> permissions
+            <span className="text-gray-300">·</span>
+            <b className="text-gray-800">{roles.length}</b> roles
+          </span>
         </div>
       </div>
 
@@ -263,9 +284,9 @@ export default function RbacMatrix() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
-              <th className="px-4 py-3 font-medium">Permission</th>
+              <th className="px-4 py-3 font-medium sticky left-0 bg-white z-10 shadow-[1px_0_0_0_#e5e7eb]">Permission</th>
               {roles.map((r) => (
-                <th key={r.role} className={`px-3 py-3 font-medium text-center ${dirty[r.role] ? 'bg-amber-50' : ''}`} title={r.role}>
+                <th key={r.role} className={`px-3 py-3 font-medium text-center whitespace-nowrap ${dirty[r.role] ? 'bg-amber-50' : ''}`} title={r.role}>
                   {ROLE_LABELS[r.role] ?? r.role.replace(/_/g, ' ')}
                   {dirty[r.role] && <span className="ml-1 text-amber-500">●</span>}
                 </th>
@@ -275,18 +296,19 @@ export default function RbacMatrix() {
           <tbody className="divide-y divide-gray-100">
             {sections.map((sec) => (
               <>
-                <tr key={sec.name} className="bg-gray-50/80">
-                  <td colSpan={roles.length + 1} className="px-4 py-1.5">
-                    <button className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide hover:text-gray-700" onClick={() => toggleGroup(sec.name)}>
-                      <span>{sec.open ? '▾' : '▸'}</span> {sec.name}
+                <tr key={sec.name} className="bg-gray-50/80 hover:bg-gray-100/80 cursor-pointer select-none" onClick={() => toggleGroup(sec.name)}>
+                  <td colSpan={roles.length + 1} className="px-4 py-2" title={sec.open ? 'Collapse group' : 'Expand group'}>
+                    <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      <span className={`text-gray-400 transition-transform ${sec.open ? 'rotate-90' : ''}`}>▶</span>
+                      {sec.name}
                       <span className="text-gray-300 normal-case font-normal">({sec.perms.length})</span>
-                    </button>
+                    </div>
                   </td>
                 </tr>
                 {sec.open &&
                   sec.perms.map((perm) => (
                     <tr key={perm} className="hover:bg-gray-50">
-                      <td className="px-4 py-2.5">
+                      <td className="px-4 py-2 sticky left-0 bg-white group-hover:bg-gray-50 hover:bg-gray-50 shadow-[1px_0_0_0_#e5e7eb] z-10">
                         <div className="font-mono text-xs text-gray-700">{perm}</div>
                         <div className="text-[11px] text-gray-400">{PERM_LABELS[perm] ?? ''}</div>
                       </td>
@@ -296,11 +318,11 @@ export default function RbacMatrix() {
                         const orig = roles.find((x) => x.role === r.role)?.permissions.includes(perm) ?? false;
                         const changed = dirty[r.role] && on !== orig;
                         return (
-                          <td key={r.role} className={`px-3 py-2.5 text-center ${changed ? 'bg-amber-50' : ''}`}>
+                          <td key={r.role} className={`px-3 py-2 text-center ${changed ? 'bg-amber-50' : ''}`}>
                             {locked ? (
                               <span className="text-blue-500" title="Superuser — always granted">✓</span>
                             ) : canManage ? (
-                              <input type="checkbox" checked={on} onChange={() => toggle(r.role, perm)} className="w-4 h-4 cursor-pointer" />
+                              <input type="checkbox" checked={on} onChange={() => toggle(r.role, perm)} className="w-4 h-4 cursor-pointer accent-yellow-600" />
                             ) : (
                               <span className={on ? 'text-green-600' : 'text-gray-300'}>{on ? '✓' : '—'}</span>
                             )}
@@ -323,7 +345,8 @@ export default function RbacMatrix() {
       </div>
 
       {canManage && (
-        <div className="mt-4 flex flex-wrap gap-2 items-center">
+        <div className={`sticky bottom-0 -mx-1 px-1 py-2 mt-1 flex flex-wrap gap-2 items-center rounded-lg ${dirtyCount > 0 ? 'bg-amber-50/95 border border-amber-200 shadow-sm' : ''}`}>
+          {dirtyCount > 0 && <span className="text-xs font-semibold text-amber-800 mr-1">Unsaved changes</span>}
           {roles
             .filter((r) => r.role !== 'SYSTEM_ADMIN' && dirty[r.role])
             .map((r) => (
