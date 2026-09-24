@@ -3,6 +3,8 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsISO8601, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { IsNotEmpty } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PermissionsService } from '../auth/permissions.service';
+import { PERMISSIONS } from '../auth/permissions';
 import { WorkflowService } from './workflow.service';
 import { DelegationsService } from './delegations.service';
 import { CreateDelegationDto } from './dto/delegation.dto';
@@ -34,6 +36,7 @@ export class WorkflowController {
   constructor(
     private workflow: WorkflowService,
     private delegations: DelegationsService,
+    private permissions: PermissionsService,
   ) {}
 
   private actor(req): Actor {
@@ -42,7 +45,7 @@ export class WorkflowController {
 
   // ---------- requests ----------
   @Get('requests')
-  list(
+  async list(
     @Req() req,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
@@ -51,14 +54,22 @@ export class WorkflowController {
     @Query('docType') docType?: string,
     @Query('archived') archived?: string,
   ) {
+    // RBAC: the office-wide (unscoped) list needs requests.read.all — callers
+    // without it are silently scoped down to their own requests instead of 403
+    // (MyRequests/CarRequests share one list component; 'dept' is checked in the service).
+    let effectiveScope = scope;
+    if (scope !== 'mine' && scope !== 'dept') {
+      const granted = await this.permissions.forUser(req.user.id);
+      if (!granted.includes(PERMISSIONS.REQUESTS_READ_ALL)) effectiveScope = 'mine';
+    }
     return this.workflow.list({
       page: Math.max(1, Number(page || 1)),
       pageSize: Math.min(100, Number(pageSize || 20)),
       status,
       docType,
       archived,
-      mine: scope === 'mine',
-      dept: scope === 'dept',
+      mine: effectiveScope === 'mine',
+      dept: effectiveScope === 'dept',
     }, this.actor(req));
   }
 

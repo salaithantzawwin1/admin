@@ -161,7 +161,8 @@ export class WorkflowService {
     else if (params.archived !== 'all') where.archivedAt = null;
     if (params.dept) {
       const employee = await this.prisma.employee.findFirst({ where: { userId: actor.userId } });
-      where.departmentId = employee?.departmentId;
+      if (employee?.departmentId) where.departmentId = employee.departmentId;
+      else where.requesterId = actor.userId; // no employee/department record → fall back to own requests
     }
 
     const [items, total] = await this.prisma.$transaction([

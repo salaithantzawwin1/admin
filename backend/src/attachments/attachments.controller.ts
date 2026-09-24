@@ -5,15 +5,18 @@ import { Response } from 'express';
 import * as fs from 'fs';
 import { AttachmentsService } from './attachments.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PermissionsGuard, RequirePermissions } from '../auth/permissions.guard';
+import { PERMISSIONS } from '../auth/permissions';
 
 @ApiTags('attachments')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('attachments')
 export class AttachmentsController {
   constructor(private attachments: AttachmentsService) {}
 
   @Post('upload')
+  @RequirePermissions(PERMISSIONS.ATTACHMENTS_USE)
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file'))
   async upload(
