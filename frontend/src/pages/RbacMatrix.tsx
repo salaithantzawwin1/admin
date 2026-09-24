@@ -57,7 +57,8 @@ function groupOf(perm: string): string {
   return g ? g.name : 'Other';
 }
 
-const GROUP_ORDER = [...new Set(GROUPS.map((g) => g.name)), 'Other'];
+// groups display A→Z (matching the permission rows inside them); 'Other' stays last
+const GROUP_ORDER = [...new Set(GROUPS.map((g) => g.name))].sort((a, b) => a.localeCompare(b)).concat('Other');
 
 /** Friendly role labels shown as column headers. */
 const ROLE_LABELS: Record<string, string> = {
