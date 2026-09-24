@@ -32,6 +32,18 @@ interface BranchLite {
   isActive: boolean;
 }
 
+interface IssuedItem {
+  id: string;
+  at: string;
+  itemCode: string;
+  itemName: string;
+  quantity: number;
+  unit: string;
+  reference: string | null;
+  requestTitle: string | null;
+  issuedBy: string;
+}
+
 const ROLES = ['SYSTEM_ADMIN', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'PURCHASING', 'FINANCE', 'MANAGEMENT', 'MAINTENANCE_COORDINATOR', 'EMPLOYEE'];
 
 const EMPTY: {
@@ -57,6 +69,9 @@ export default function Employees() {
   const [allUsers, setAllUsers] = useState<{ id: string; username: string; fullName: string }[]>([]);
   const [newLogin, setNewLogin] = useState({ username: '', password: '', roles: ['EMPLOYEE'] as string[], authSource: 'LOCAL' as 'LOCAL' | 'AD' });
   const [confirmDelete, setConfirmDelete] = useState<EmployeeRow | null>(null);
+  // Issued-items history (what the store issued to this employee)
+  const [issuedFor, setIssuedFor] = useState<EmployeeRow | null>(null);
+  const [issuedRows, setIssuedRows] = useState<IssuedItem[] | null>(null);
   // employees.manage (or org.manage) gates CRUD — read-only users see the directory only
   const canManage = hasPermission('employees.manage') || hasPermission('org.manage');
   const [confirmText, setConfirmText] = useState('');
@@ -326,6 +341,19 @@ export default function Employees() {
                   >
                     {e0.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}
                   </button>
+                  <button
+                    className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                    title="Supplies issued to this employee"
+                    onClick={() => {
+                      setIssuedFor(e0);
+                      setIssuedRows(null);
+                      api<IssuedItem[]>(`/inventory/employees/${e0.id}/issued-items`)
+                        .then(setIssuedRows)
+                        .catch(() => setIssuedRows([]));
+                    }}
+                  >
+                    Issued
+                  </button>
                   <button className="text-xs px-2 py-1 rounded border border-red-300 text-red-600 hover:bg-red-50" onClick={() => { setConfirmDelete(e0); setConfirmText(''); }}>Delete</button>
                 </div>
               )}
@@ -475,6 +503,52 @@ export default function Employees() {
               </Button>
             </div>
           </div>
+        </Modal>
+      )}
+
+      {/* Issued-items history modal */}
+      {issuedFor && (
+        <Modal title={`Issued supplies — ${issuedFor.fullName} (${issuedFor.employeeNo})`} onClose={() => setIssuedFor(null)}>
+          {issuedRows === null ? (
+            <p className="text-sm text-gray-400 py-4">Loading…</p>
+          ) : issuedRows.length === 0 ? (
+            <p className="text-sm text-gray-400 py-4">No supplies have been issued to this employee yet.</p>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto border border-gray-100 rounded-lg">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-gray-400 uppercase bg-gray-50 sticky top-0">
+                    <th className="py-2 px-2 font-medium">When</th>
+                    <th className="py-2 px-2 font-medium">Item</th>
+                    <th className="py-2 px-2 text-right font-medium">Qty</th>
+                    <th className="py-2 px-2 font-medium">Ref / What</th>
+                    <th className="py-2 px-2 font-medium">Issued by</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {issuedRows.map((t) => (
+                    <tr key={t.id}>
+                      <td className="py-2 px-2 whitespace-nowrap text-gray-500">
+                        {new Date(t.at).toLocaleDateString()}<br />
+                        <span className="text-[10px] text-gray-400">{new Date(t.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </td>
+                      <td className="py-2 px-2">
+                        <div className="font-medium text-gray-700">{t.itemName}</div>
+                        <div className="text-[10px] text-gray-400">{t.itemCode}</div>
+                      </td>
+                      <td className="py-2 px-2 text-right font-medium text-blue-700 whitespace-nowrap">{t.quantity} {t.unit}</td>
+                      <td className="py-2 px-2 text-gray-500 max-w-[200px]">
+                        {t.reference && <div className="font-mono text-[11px] text-gray-600">{t.reference}</div>}
+                        {t.requestTitle && <div className="truncate" title={t.requestTitle}>{t.requestTitle}</div>}
+                        {!t.reference && !t.requestTitle && '—'}
+                      </td>
+                      <td className="py-2 px-2 text-gray-500">{t.issuedBy}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </Modal>
       )}
 

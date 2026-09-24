@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, getUser, hasPermission } from '../api';
-import { Card } from '../components/ui';
+import { Badge, Card } from '../components/ui';
 
 interface AnnouncementItem {
   id: string; code: string; title: string; priority: string;
   requiresAck: boolean; read?: boolean; acked?: string | null;
+}
+
+interface MovementRow {
+  itemId: string; code: string; name: string; unit: string;
+  balance: number; low: boolean; issuedQty: number; issues: number;
 }
 
 const PRIORITY_BADGE: Record<string, string> = {
@@ -20,6 +25,7 @@ export default function Dashboard() {
   const [carQueueCount, setCarQueueCount] = useState<number | null>(null);
   const [roomQueueCount, setRoomQueueCount] = useState<number | null>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
+  const [movements, setMovements] = useState<MovementRow[] | null>(null);
 
   const load = useCallback(() => {
     if (hasPermission('approvals.act')) {
@@ -41,6 +47,11 @@ export default function Dashboard() {
       api<AnnouncementItem[]>('/announcements/mine')
         .then((r) => setAnnouncements(r.slice(0, 5)))
         .catch(() => setAnnouncements([]));
+    }
+    if (hasPermission('inventory.read')) {
+      api<{ top: MovementRow[] }>('/inventory/movement-summary?days=30')
+        .then((r) => setMovements(r.top))
+        .catch(() => setMovements(null));
     }
   }, []);
 
@@ -119,6 +130,36 @@ export default function Dashboard() {
           </Link>
         )}
       </div>
+
+      {/* Inventory stock movement — top-5 most-issued items in the last 30 days */}
+      {hasPermission('inventory.read') && movements !== null && movements.length > 0 && (
+        <div className="mt-8">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">📦 Most issued supplies — last 30 days</h2>
+            {hasPermission('inventory.manage') && (
+              <Link to="/inventory" className="text-xs text-blue-600 hover:underline">Open Inventory →</Link>
+            )}
+          </div>
+          <Card className="p-4">
+            <ul className="divide-y divide-gray-100">
+              {movements.map((m, idx) => (
+                <li key={m.itemId} className="flex items-center gap-3 py-2 text-sm">
+                  <span className="w-5 text-center text-xs font-semibold text-gray-300">{idx + 1}</span>
+                  <span className="truncate flex-1">
+                    <span className="font-medium text-gray-800">{m.name}</span>
+                    <span className="text-xs text-gray-400 ml-2">{m.code} · balance {m.balance} {m.unit}</span>
+                  </span>
+                  {m.low && <Badge color="yellow">LOW</Badge>}
+                  <span className="flex-shrink-0 text-right">
+                    <span className="font-semibold text-blue-700">−{m.issuedQty} {m.unit}</span>
+                    <span className="text-xs text-gray-400 ml-1">({m.issues} issue{m.issues === 1 ? '' : 's'})</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </div>
+      )}
 
       {/* Announcements (Plan §18) — visible to anyone with announcements.read */}
       {hasPermission('announcements.read') && announcements.length > 0 && (

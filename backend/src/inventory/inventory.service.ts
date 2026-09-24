@@ -46,7 +46,7 @@ export class InventoryService {
     return this.numbering.nextStable('ITM');
   }
 
-  async createItem(data: { name: string; category?: string; unit?: string; balance?: number; minStock?: number; description?: string }, actor: Actor) {
+  async createItem(data: { name: string; category?: string; unit?: string; balance?: number; minStock?: number; reorderLevel?: number; description?: string }, actor: Actor) {
     const item = await this.prisma.inventoryItem.create({
       data: {
         code: await this.nextItemCode(),
@@ -56,6 +56,7 @@ export class InventoryService {
         // opening balance is recorded as a PURCHASE transaction so the ledger stays complete
         balance: 0,
         minStock: data.minStock ?? 0,
+        reorderLevel: data.reorderLevel ?? null,
         description: data.description,
       },
     });
@@ -70,7 +71,7 @@ export class InventoryService {
     return item;
   }
 
-  async updateItem(id: string, data: { name?: string; category?: string; unit?: string; minStock?: number; description?: string; isActive?: boolean }, actor: Actor) {
+  async updateItem(id: string, data: { name?: string; category?: string; unit?: string; minStock?: number; reorderLevel?: number | null; description?: string; isActive?: boolean }, actor: Actor) {
     const item = await this.prisma.inventoryItem.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('Item not found');
     // balance is never edited here — only via PURCHASE/ISSUE/RETURN/ADJUSTMENT transactions
@@ -81,6 +82,7 @@ export class InventoryService {
         category: data.category as ItemCategory | undefined,
         unit: data.unit?.trim(),
         minStock: data.minStock,
+        reorderLevel: data.reorderLevel,
         description: data.description,
         isActive: data.isActive,
       },
@@ -88,7 +90,7 @@ export class InventoryService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'INVENTORY_ITEM_UPDATED', module: 'INVENTORY', recordId: id,
-      oldValue: { name: item.name, category: item.category, unit: item.unit, minStock: item.minStock, isActive: item.isActive },
+      oldValue: { name: item.name, category: item.category, unit: item.unit, minStock: item.minStock, reorderLevel: item.reorderLevel, isActive: item.isActive },
       newValue: data,
     });
     return updated;
@@ -193,6 +195,7 @@ export class InventoryService {
     unitPrice?: number,
     supplier?: string,
     supplierId?: string,
+    issuedToEmployeeId?: string | null,
   ) {
     const run = async (tx: Prisma.TransactionClient) => {
       // row lock so concurrent issues cannot both pass the balance check
@@ -211,6 +214,7 @@ export class InventoryService {
         data: {
           itemId, type, quantity: signedQty, balanceAfter: newBalance,
           reference, requestId, createdById: actor.userId,
+          ...(issuedToEmployeeId ? { issuedToEmployeeId } : {}),
           ...(unitPrice !== undefined ? { unitPrice } : {}),
           ...(supplier ? { supplier } : {}),
           ...(supplierId ? { supplierId } : {}),
@@ -303,7 +307,10 @@ export class InventoryService {
   async fulfill(requestId: string, actor: Actor) {
     const doc = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
-      include: { supplyRequest: { include: { lines: { include: { item: true } } } } },
+      include: {
+        requester: { select: { username: true, fullName: true, employee: { select: { id: true } } } },
+        supplyRequest: { include: { lines: { include: { item: true } } } },
+      },
     });
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
     const supply = doc.supplyRequest;
@@ -328,7 +335,7 @@ export class InventoryService {
           continue;
         }
         // deduct via the ledger (row-locked, negative-proof)
-        await this.applyTransaction(line.itemId, 'ISSUE', -line.quantity, doc.docNumber, doc.id, actor, tx);
+        await this.applyTransaction(line.itemId, 'ISSUE', -line.quantity, doc.docNumber, doc.id, actor, tx, undefined, undefined, undefined, doc.requester?.employee?.id ?? null);
         await tx.supplyRequestLine.update({
           where: { id: line.id },
           data: { status: 'FULFILLED', fulfilledQty: line.quantity },
@@ -564,6 +571,7 @@ export class InventoryService {
       take: 200,
       include: {
         createdBy: { select: { fullName: true } },
+        issuedToEmployee: { select: { fullName: true } },
         request: { select: { title: true, requester: { select: { fullName: true, username: true } } } },
       },
     });
@@ -577,7 +585,9 @@ export class InventoryService {
       createdAt: t.createdAt,
       createdBy: t.createdBy,
       requestTitle: t.request?.title ?? null,
-      issuedTo: t.type === 'ISSUE' ? (t.request?.requester.fullName ?? null) : null,
+      issuedTo:
+        t.issuedToEmployee?.fullName ??
+        (t.type === 'ISSUE' ? t.request?.requester.fullName ?? null : null),
     }));
   }
 
@@ -598,6 +608,7 @@ export class InventoryService {
       include: {
         item: { select: { code: true, name: true, unit: true } },
         createdBy: { select: { fullName: true } },
+        issuedToEmployee: { select: { fullName: true } },
         request: { select: { title: true, requester: { select: { fullName: true } } } },
       },
     });
@@ -619,7 +630,7 @@ export class InventoryService {
         esc(t.reference),
         esc(t.request?.title),
         esc(t.createdBy.fullName),
-        esc(t.type === 'ISSUE' ? t.request?.requester.fullName : ''),
+        esc(t.type === 'ISSUE' ? (t.issuedToEmployee?.fullName ?? t.request?.requester.fullName) : ''),
       ].join(','));
     }
     const month = start.toISOString().slice(0, 7);
@@ -630,6 +641,138 @@ export class InventoryService {
     return this.prisma.inventoryItem.findMany({
       where: { isActive: true, ...Prisma.validator<Prisma.InventoryItemWhereInput>()({}) },
     }).then((items) => items.filter((i) => i.balance <= i.minStock));
+  }
+
+  /**
+   * Stock movement summary for the Dashboard widget — the most-issued items
+   * over the last `days` (defaults 30) with current balance + health flag.
+   */
+  async movementSummary(days = 30, top = 5) {
+    const since = new Date(Date.now() - days * 24 * 3600 * 1000);
+    const issued = await this.prisma.stockTransaction.groupBy({
+      by: ['itemId'],
+      where: { type: 'ISSUE', quantity: { lt: 0 }, createdAt: { gte: since }, item: { isActive: true } },
+      _sum: { quantity: true },
+      _count: { _all: true },
+    });
+    if (issued.length === 0) return { windowDays: days, top: [] };
+    const items = await this.prisma.inventoryItem.findMany({
+      where: { id: { in: issued.map((r) => r.itemId) } },
+      select: { id: true, code: true, name: true, unit: true, balance: true, minStock: true },
+    });
+    const byId = new Map(items.map((i) => [i.id, i]));
+    const ranked = issued
+      .map((r) => {
+        const item = byId.get(r.itemId);
+        if (!item) return null;
+        return {
+          itemId: r.itemId, code: item.code, name: item.name, unit: item.unit,
+          balance: item.balance, low: item.balance <= item.minStock,
+          issuedQty: Math.abs(r._sum.quantity ?? 0),
+          issues: r._count._all,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => b.issuedQty - a.issuedQty)
+      .slice(0, top);
+    return { windowDays: days, top: ranked };
+  }
+
+  /**
+   * Auto-reorder suggestions — every active item whose balance is at/below its
+   * reorder level (or ≈3× the alert threshold when no reorder level is set),
+   * with the recommended top-up quantity and estimated cost.
+   */
+  async reorderSuggestions() {
+    const items = await this.prisma.inventoryItem.findMany({
+      where: { isActive: true },
+      orderBy: { code: 'asc' },
+      select: { id: true, code: true, name: true, unit: true, balance: true, minStock: true, reorderLevel: true, lastUnitPrice: true },
+    });
+    return items
+      .map((i) => {
+        const target = i.reorderLevel ?? (i.minStock > 0 ? i.minStock * 3 : null);
+        if (target === null || i.balance > target) return null;
+        const suggestedQty = Math.max(target - i.balance, i.minStock, 1);
+        const lastUnitPrice = i.lastUnitPrice !== null ? Number(i.lastUnitPrice) : null;
+        return {
+          itemId: i.id, code: i.code, name: i.name, unit: i.unit,
+          balance: i.balance, threshold: i.minStock, reorderLevel: i.reorderLevel,
+          suggestedQty,
+          lastUnitPrice,
+          estimatedCost: lastUnitPrice !== null ? Math.round(lastUnitPrice * suggestedQty * 100) / 100 : null,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+  }
+
+  /**
+   * Supplies issued to one employee — powers the "Issued items" tab on the
+   * Employees page. Direct ledger rows first (issuedToEmployeeId), legacy rows
+   * via the linked supply request's requester.
+   */
+  async employeeIssuedItems(employeeId: string) {
+    const employee = await this.prisma.employee.findUnique({ where: { id: employeeId } });
+    if (!employee) throw new NotFoundException('Employee not found');
+    const rows = await this.prisma.stockTransaction.findMany({
+      where: {
+        type: 'ISSUE',
+        OR: [{ issuedToEmployeeId: employeeId }, { request: { requester: { employee: { id: employeeId } } } }],
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      include: {
+        item: { select: { code: true, name: true, unit: true } },
+        createdBy: { select: { fullName: true } },
+        request: { select: { title: true } },
+      },
+    });
+    return rows.map((t) => ({
+      id: t.id,
+      at: t.createdAt,
+      itemCode: t.item.code,
+      itemName: t.item.name,
+      quantity: Math.abs(t.quantity),
+      unit: t.item.unit,
+      reference: t.reference,
+      requestTitle: t.request?.title ?? null,
+      issuedBy: t.createdBy.fullName,
+    }));
+  }
+
+  /**
+   * Push the reorder queue to whoever manages inventory (RBAC-native:
+   * inventory.manage holders — Telegram mirror included). Idempotent per day
+   * per item; also runs on the daily 08:00 stock pass.
+   */
+  async alertReorder() {
+    const suggestions = await this.reorderSuggestions();
+    if (suggestions.length === 0) return 0;
+    // managers decide, Purchasing buys — both get the reorder queue
+    const [managers, buyers] = await Promise.all([
+      this.permissions.usersWithPermissions(['inventory.manage']),
+      this.permissions.usersWithPermissions(['org.manage']),
+    ]);
+    const recipients = [...new Set([...managers, ...buyers])];
+    if (recipients.length === 0) return 0;
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    let sent = 0;
+    for (const s of suggestions) {
+      const recent = await this.prisma.notification.findFirst({
+        where: { type: 'LOW_STOCK', title: `Reorder — ${s.name}`, createdAt: { gte: since } },
+        select: { id: true },
+      });
+      if (recent) continue;
+      await this.notifications.notifyMany(recipients, {
+        type: 'LOW_STOCK',
+        title: `Reorder — ${s.name}`,
+        body: `${s.code} is at ${s.balance} ${s.unit} (reorder level ${s.reorderLevel ?? `≈3× threshold ${s.threshold}`}). Suggested order: ${s.suggestedQty} ${s.unit}${s.estimatedCost !== null ? ` (≈ ${s.estimatedCost.toLocaleString()})` : ''}.`,
+        link: '/inventory',
+      });
+      sent++;
+    }
+    if (sent > 0) console.log(`[inventory] reorder alert(s) sent: ${sent}`);
+    return sent;
   }
 
   /**
@@ -788,9 +931,10 @@ export class InventoryService {
     return sent;
   }
 
-  /** Daily 08:00 — raise LOW_STOCK notifications + restock suggestions for Administration. */
+  /** Daily 08:00 — LOW_STOCK alerts + auto-reorder suggestions for Administration. */
   @Cron('0 0 8 * * *')
   async lowStockCron() {
     await this.alertLowStock();
+    await this.alertReorder();
   }
 }

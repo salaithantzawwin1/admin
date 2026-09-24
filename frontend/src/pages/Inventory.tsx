@@ -14,6 +14,7 @@ interface Item {
   unit: string;
   balance: number;
   minStock: number;
+  reorderLevel?: number | null;
   description?: string;
   isActive: boolean;
   imageStoredName?: string | null;
@@ -24,6 +25,11 @@ interface Item {
 }
 
 interface SpendingEntry { quantity: number; unitPrice: number | null; reference: string | null; supplier?: string | null; createdAt: string }
+interface ReorderRow {
+  itemId: string; code: string; name: string; unit: string;
+  balance: number; threshold: number; reorderLevel: number | null;
+  suggestedQty: number; lastUnitPrice: number | null; estimatedCost: number | null;
+}
 interface Supplier { id: string; name: string; phone?: string | null; address?: string | null; note?: string | null; isActive: boolean }
 interface Spending {
   monthStart: string;
@@ -164,6 +170,7 @@ export default function Inventory() {
   const [spendMonth, setSpendMonth] = useState(() => new Date());
   const [alertMsg, setAlertMsg] = useState('');
   const [alertBusy, setAlertBusy] = useState(false);
+  const [reorder, setReorder] = useState<ReorderRow[]>([]);
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
 
@@ -177,6 +184,10 @@ export default function Inventory() {
 
   // history viewer
   const [historyFor, setHistoryFor] = useState<Item | null>(null);
+  // Ledger modal filters — movement type + date window
+  const [ledgerFilter, setLedgerFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
+  const [ledgerFrom, setLedgerFrom] = useState('');
+  const [ledgerTo, setLedgerTo] = useState('');
   const [history, setHistory] = useState<Txn[]>([]);
   const [lifetime, setLifetime] = useState<{ qty: number; cost: number; unit: string } | null>(null);
 
@@ -202,6 +213,7 @@ export default function Inventory() {
     if (!canManage) return;
     const w = spendWindow(spendMonth);
     api<Spending>(`/inventory/spending?start=${w.start}&end=${w.end}`).then(setSpending).catch(() => setSpending(null));
+    api<ReorderRow[]>('/inventory/reorder-suggestions').then(setReorder).catch(() => setReorder([]));
   }, [spendMonth, canManage]);
 
   const loadSuppliers = useCallback(() => {
@@ -275,6 +287,9 @@ export default function Inventory() {
   const openHistory = async (item: Item) => {
     setHistoryFor(item);
     setLifetime(null);
+    setLedgerFilter('ALL');
+    setLedgerFrom('');
+    setLedgerTo('');
     try {
       setHistory(await api<Txn[]>(`/inventory/items/${item.id}/history`));
     } catch {
@@ -456,7 +471,9 @@ export default function Inventory() {
           method: 'PATCH',
           body: {
             name: itemForm.name, category: itemForm.category, unit: itemForm.unit,
-            minStock: Number(itemForm.minStock) || 0, description: itemForm.description || undefined,
+            minStock: Number(itemForm.minStock) || 0,
+            ...(itemForm.reorderLevel != null ? { reorderLevel: Number(itemForm.reorderLevel) } : { reorderLevel: null }),
+            description: itemForm.description || undefined,
           },
         });
       } else {
@@ -465,6 +482,7 @@ export default function Inventory() {
           body: {
             name: itemForm.name, category: itemForm.category, unit: itemForm.unit,
             balance: Number(itemForm.balance) || 0, minStock: Number(itemForm.minStock) || 0,
+            ...(itemForm.reorderLevel != null ? { reorderLevel: Number(itemForm.reorderLevel) } : {}),
             description: itemForm.description || undefined,
           },
         });
@@ -483,6 +501,16 @@ export default function Inventory() {
 
   const cartLines = Object.entries(cart).filter(([, q]) => q > 0);
   const lowCount = items.filter((i) => i.low).length;
+
+  /** Ledger rows after the modal's type + date filters. */
+  const filteredHistory = history.filter((t) => {
+    if (ledgerFilter === 'IN' && t.quantity < 0) return false;
+    if (ledgerFilter === 'OUT' && t.quantity >= 0) return false;
+    if (ledgerFrom && new Date(t.createdAt) < new Date(`${ledgerFrom}T00:00:00`)) return false;
+    if (ledgerTo && new Date(t.createdAt) > new Date(`${ledgerTo}T23:59:59.999`)) return false;
+    return true;
+  });
+  const filterActive = ledgerFilter !== 'ALL' || ledgerFrom !== '' || ledgerTo !== '';
 
   const TABS: { key: Tab; label: string }[] = [
     { key: 'catalog', label: 'Item Catalog' },
@@ -889,6 +917,41 @@ export default function Inventory() {
               )}
               <p className="text-xs text-gray-400 mt-3">Administration is notified automatically (LOW_STOCK) once a day at 08:00 — “Check now” runs the pass immediately.</p>
             </Card>
+
+            {/* auto-reorder queue — items at/below their reorder level */}
+            <Card className="p-5">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Auto-reorder suggestions</h2>
+                <span className="text-xs text-gray-400">balance ≤ reorder level (≈3× threshold when unset) · Purchasing is notified daily at 08:00</span>
+              </div>
+              {reorder.length === 0 ? (
+                <p className="text-sm text-gray-400">Nothing to reorder — every item is above its reorder level. ✓</p>
+              ) : (
+                <ul className="divide-y divide-gray-100">
+                  {reorder.map((r) => (
+                    <li key={r.itemId} className="flex items-center justify-between gap-2 py-2 text-sm">
+                      <span className="truncate">
+                        <span className="font-medium text-gray-700">{r.code} — {r.name}</span>
+                        <span className="text-xs text-gray-400 ml-2">
+                          at {r.balance} {r.unit} · target {r.reorderLevel ?? `≈${r.threshold * 3}`} {r.unit}
+                        </span>
+                      </span>
+                      <span className="flex items-center gap-2 flex-shrink-0">
+                        {r.estimatedCost !== null && <span className="text-xs text-gray-500">≈ {fmtMoney(r.estimatedCost)}</span>}
+                        <Badge color="yellow">order {r.suggestedQty} {r.unit}</Badge>
+                        <button
+                          className="text-xs text-blue-600 hover:underline whitespace-nowrap"
+                          title="Pre-fill the restock form with the suggested quantity"
+                          onClick={() => setRestock({ itemId: r.itemId, quantity: r.suggestedQty, reference: `Reorder suggestion — ${r.code}`, unitPrice: r.lastUnitPrice != null ? String(r.lastUnitPrice) : '', supplierId: '' })}
+                        >
+                          Fill restock
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
           </div>
 
           {/* monthly spending lives in its own Purchases tab now */}
@@ -1103,6 +1166,14 @@ export default function Inventory() {
                 <Input type="number" min={0} placeholder="Opening balance" value={itemForm.balance ?? 0} onChange={(e) => setItemForm({ ...itemForm, balance: Number(e.target.value) })} />
               )}
               <Input type="number" min={0} placeholder="Min stock (alert threshold)" value={itemForm.minStock ?? 0} onChange={(e) => setItemForm({ ...itemForm, minStock: Number(e.target.value) })} />
+              <Input
+                type="number"
+                min={0}
+                placeholder="Reorder level (auto top-up target)"
+                title="When balance drops to/below this, a reorder suggestion is raised. Empty = ≈3× the alert threshold."
+                value={itemForm.reorderLevel ?? ''}
+                onChange={(e) => setItemForm({ ...itemForm, reorderLevel: e.target.value === '' ? null : Number(e.target.value) })}
+              />
             </div>
             <Textarea rows={2} placeholder="Description (optional)" value={itemForm.description ?? ''} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
           </div>
@@ -1198,9 +1269,49 @@ export default function Inventory() {
             Balance now: <b>{historyFor.balance} {historyFor.unit}</b> · alert threshold {historyFor.minStock}
             {lifetime ? ` · Lifetime purchased: ${lifetime.qty} ${lifetime.unit} (${fmtMoney(lifetime.cost)})` : ''}
           </div>
+          {/* filters — type + date window */}
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+              {([['ALL', 'All'], ['IN', 'Received'], ['OUT', 'Issued']] as const).map(([k, label]) => (
+                <button
+                  key={k}
+                  className={`px-3 py-1 text-xs font-medium transition-colors ${ledgerFilter === k ? 'bg-yellow-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
+                  onClick={() => setLedgerFilter(k)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="text-gray-300">|</span>
+            <label className="text-xs text-gray-500">From</label>
+            <input
+              type="date"
+              className="text-xs border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+              value={ledgerFrom}
+              onChange={(e) => setLedgerFrom(e.target.value)}
+            />
+            <label className="text-xs text-gray-500">To</label>
+            <input
+              type="date"
+              className="text-xs border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+              value={ledgerTo}
+              onChange={(e) => setLedgerTo(e.target.value)}
+            />
+            {filterActive && (
+              <button
+                className="text-xs text-gray-400 hover:text-gray-600 underline"
+                onClick={() => { setLedgerFilter('ALL'); setLedgerFrom(''); setLedgerTo(''); }}
+              >
+                Clear
+              </button>
+            )}
+            <span className="ml-auto text-xs text-gray-400">{filteredHistory.length} of {history.length} entries</span>
+          </div>
           <div className="max-h-96 overflow-y-auto border border-gray-100 rounded-lg">
             {history.length === 0 ? (
               <div className="text-sm text-gray-400 p-4">No transactions yet.</div>
+            ) : filteredHistory.length === 0 ? (
+              <div className="text-sm text-gray-400 p-4">No entries match the current filter.</div>
             ) : (
               <table className="w-full text-xs">
                 <thead>
@@ -1214,7 +1325,7 @@ export default function Inventory() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {history.map((t) => (
+                  {filteredHistory.map((t) => (
                     <tr key={t.id}>
                       <td className="py-2 px-2 whitespace-nowrap text-gray-500" title={new Date(t.createdAt).toLocaleString()}>
                         {new Date(t.createdAt).toLocaleDateString()}<br />

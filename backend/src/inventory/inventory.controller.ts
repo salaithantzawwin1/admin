@@ -5,7 +5,7 @@ import { Response } from 'express';
 import * as fs from 'fs';
 import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions } from '../auth/permissions.guard';
+import { AnyPermission, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { InventoryService } from './inventory.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
@@ -17,6 +17,7 @@ export class CreateItemDto {
   @IsOptional() @IsString() @MaxLength(20) unit?: string;
   @IsOptional() @IsInt() @Min(0) balance?: number;
   @IsOptional() @IsInt() @Min(0) minStock?: number;
+  @IsOptional() @IsInt() @Min(0) reorderLevel?: number;
   @IsOptional() @IsString() @MaxLength(500) description?: string;
 }
 
@@ -25,6 +26,7 @@ export class UpdateItemDto {
   @IsOptional() @IsIn(['STATIONERY', 'BOOKS', 'PAPER', 'ELECTRONICS', 'CLEANING', 'KITCHEN', 'FURNITURE', 'IT_SUPPLIES', 'OTHER']) category?: string;
   @IsOptional() @IsString() @MaxLength(20) unit?: string;
   @IsOptional() @IsInt() @Min(0) minStock?: number;
+  @IsOptional() @IsInt() @Min(0) reorderLevel?: number;
   @IsOptional() @IsString() @MaxLength(500) description?: string;
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
@@ -206,6 +208,34 @@ export class InventoryController {
   @Post('low-stock/alert')
   alertNow(@Req() req) {
     return this.inventory.alertLowStock(this.actor(req));
+  }
+
+  /** Dashboard widget — most-issued items over the recent window. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_READ)
+  @Get('movement-summary')
+  movementSummary(@Query('days') days?: string) {
+    return this.inventory.movementSummary(Number(days) || 30);
+  }
+
+  /** Auto-reorder queue — balance ≤ reorder level with suggested top-up qty. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Get('reorder-suggestions')
+  reorderSuggestions() {
+    return this.inventory.reorderSuggestions();
+  }
+
+  /** Manual trigger for the reorder alert pass (also runs daily at 08:00). */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('reorder/alert')
+  reorderAlertNow(@Req() req) {
+    return this.inventory.alertReorder();
+  }
+
+  /** Supplies issued to one employee (issued-items history on the Employees page). */
+  @AnyPermission([PERMISSIONS.ORG_READ], [PERMISSIONS.EMPLOYEES_READ])
+  @Get('employees/:id/issued-items')
+  employeeIssuedItems(@Param('id') id: string) {
+    return this.inventory.employeeIssuedItems(id);
   }
 
   // ---------- suppliers master (delegates to the standalone Suppliers module) ----------
