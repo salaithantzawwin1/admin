@@ -104,6 +104,8 @@ export default function Fleet() {
   const [editingD, setEditingD] = useState<Driver | null>(null);
   const [deletingV, setDeletingV] = useState<Vehicle | null>(null);
   const [deletingD, setDeletingD] = useState<Driver | null>(null);
+  const [deletingType, setDeletingType] = useState<VehicleTypeRow | null>(null);
+  const [cancelingAbsence, setCancelingAbsence] = useState<Absence | null>(null);
   // employee link picker state (driverId → employeeId or '')
   const [empPick, setEmpPick] = useState<Record<string, string>>({});
   const [historyFor, setHistoryFor] = useState<Driver | null>(null);
@@ -270,14 +272,15 @@ export default function Fleet() {
   };
 
   const deleteType = async (t: VehicleTypeRow) => {
-    if (!window.confirm(`Delete vehicle type ${t.name}?`)) return;
     setError('');
     try {
       await api(`/fleet/vehicle-types/${t.id}`, { method: 'DELETE' });
+      setDeletingType(null);
       flash(`Type ${t.name} deleted`);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete type — deactivate it instead if vehicles use it');
+      throw e; // ConfirmDialog keeps itself open and shows the error inside
     }
   };
 
@@ -349,6 +352,39 @@ export default function Fleet() {
             if (ok) setDeletingD(null);
           }}
           onClose={() => setDeletingD(null)}
+        />
+      )}
+
+      {deletingType && (
+        <ConfirmDialog
+          title={`Delete vehicle type ${deletingType.name}?`}
+          description="This removes the type from the master data. If vehicles still use it, delete fails — deactivate it instead."
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={async () => { await deleteType(deletingType); }}
+          onClose={() => setDeletingType(null)}
+        />
+      )}
+
+      {cancelingAbsence && (
+        <ConfirmDialog
+          title={`Cancel the absence for ${cancelingAbsence.driver?.name ?? '?'}?`}
+          description="The driver becomes available again immediately."
+          confirmLabel="Cancel absence"
+          variant="danger"
+          onConfirm={async () => {
+            setError(''); setNotice('');
+            try {
+              await api(`/fleet/absences/${cancelingAbsence.id}/cancel`, { method: 'POST' });
+              setCancelingAbsence(null);
+              toast('Absence cancelled — driver is available again.');
+              load();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Cancel failed');
+              throw e; // dialog stays open, error shown inside
+            }
+          }}
+          onClose={() => setCancelingAbsence(null)}
         />
       )}
 
@@ -758,14 +794,7 @@ export default function Fleet() {
                     className="text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg px-2.5 py-1 transition-colors"
                     onClick={async () => {
                       setError(''); setNotice('');
-                      if (!window.confirm(`Cancel the absence for ${a.driver?.name}? The driver becomes available again.`)) return;
-                      try {
-                        await api(`/fleet/absences/${a.id}/cancel`, { method: 'POST' });
-                        toast('Absence cancelled — driver is available again.');
-                        load();
-                      } catch (e) {
-                        setError(e instanceof Error ? e.message : 'Cancel failed');
-                      }
+                      setCancelingAbsence(a);
                     }}
                   >
                     Cancel
@@ -815,7 +844,7 @@ export default function Fleet() {
                   {canManage && (
                     <td className="px-4 py-2.5 text-right whitespace-nowrap">
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => toggleType(t)}>{t.active ? 'Hide' : 'Show'}</button>
-                      <button className="text-red-600 hover:underline" onClick={() => deleteType(t)}>Delete</button>
+                      <button className="text-red-600 hover:underline" onClick={() => setDeletingType(t)}>Delete</button>
                     </td>
                   )}
                 </tr>

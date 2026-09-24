@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, hasPermission } from '../api';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Badge, Button, PageHeader } from '../components/ui';
 
 interface MatrixRole {
@@ -88,6 +89,9 @@ export default function RbacMatrix() {
     }
   });
   const [busy, setBusy] = useState(false);
+  // in-app confirm dialogs (replace window.confirm — native popups are banned app-wide)
+  const [confirmLegacy, setConfirmLegacy] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const canManage = hasPermission('users.manage');
 
@@ -191,7 +195,6 @@ export default function RbacMatrix() {
 
   /** One-click cleanup: revoke codes that the backend catalog no longer knows (stale legacy grants). */
   const cleanupLegacy = async () => {
-    if (!window.confirm('Revoke permissions that are no longer in the system catalog from all roles?')) return;
     setBusy(true);
     setError('');
     try {
@@ -246,7 +249,7 @@ export default function RbacMatrix() {
           )}
           {canManage && (
             <span title="Revoke codes no longer in the catalog">
-              <Button variant="ghost" onClick={cleanupLegacy} disabled={busy}>
+              <Button variant="ghost" onClick={() => setConfirmLegacy(true)} disabled={busy}>
                 🧹 Clean legacy grants
               </Button>
             </span>
@@ -332,15 +335,46 @@ export default function RbacMatrix() {
             <Button
               variant="ghost"
               disabled={saving !== null}
-              onClick={() => {
-                if (window.confirm('Discard all unsaved changes?')) setDirty({});
-              }}
+              onClick={() => setConfirmDiscard(true)}
             >
               Discard all
             </Button>
           )}
           {dirtyCount === 0 && <span className="text-xs text-gray-400 self-center">No unsaved changes</span>}
         </div>
+      )}
+
+      {confirmLegacy && (
+        <ConfirmDialog
+          title="Clean legacy grants?"
+          description={
+            <>
+              Revokes permission rows that are <b>no longer in the system catalog</b> (left over from removed
+              features or renames) from every role. Current catalog permissions are untouched. The change is
+              audit-logged as ROLE_PERMISSIONS_UPDATED.
+            </>
+          }
+          confirmLabel="Clean up"
+          variant="danger"
+          onConfirm={async () => {
+            await cleanupLegacy();
+            setConfirmLegacy(false);
+          }}
+          onClose={() => setConfirmLegacy(false)}
+        />
+      )}
+      {confirmDiscard && (
+        <ConfirmDialog
+          title="Discard all unsaved changes?"
+          description="Every ticked-but-not-saved checkbox returns to its last saved state."
+          confirmLabel="Discard"
+          variant="danger"
+          onConfirm={async () => {
+            setDirty({});
+            setConfirmDiscard(false);
+          }}
+          onClose={() => setConfirmDiscard(false)}
+        />
       )}
 
       {!canManage && (

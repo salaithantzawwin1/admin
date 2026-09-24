@@ -4,6 +4,7 @@ import { Badge, Button, Empty, Input, PageHeader, Table, statusColor } from '../
 import { Modal } from '../components/Modal';
 import { PasswordStrength } from '../components/PasswordStrength';
 import { toast } from '../components/Toast';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface UserRow {
   id: string;
@@ -28,6 +29,7 @@ export default function Users() {
   const [error, setError] = useState('');
   const [modalError, setModalError] = useState(''); // submit errors show inside the dialog, not on the page
   const [form, setForm] = useState({ username: '', fullName: '', password: '', roles: ['EMPLOYEE'] as string[] });
+  const [unbindFor, setUnbindFor] = useState<UserRow | null>(null); // in-app confirm (replaces window.confirm)
 
   // edit state
   const [edit, setEdit] = useState<UserRow | null>(null);
@@ -202,13 +204,7 @@ export default function Users() {
                   <button
                     className="text-xs px-2 py-1 rounded border border-orange-300 text-orange-700 hover:bg-orange-50"
                     title="Remove the user's Telegram link — they stop receiving notifications in Telegram"
-                    onClick={async () => {
-                      if (!window.confirm(`Unbind Telegram for ${u.username}? They will stop receiving notifications in Telegram.`)) return;
-                      try {
-                        await api(`/users/${u.id}/telegram`, { method: 'DELETE' });
-                        load();
-                      } catch { /* error shown by reload */ }
-                    }}
+                    onClick={() => setUnbindFor(u)}
                   >
                     Unbind TG
                   </button>
@@ -296,6 +292,22 @@ export default function Users() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {unbindFor && (
+        <ConfirmDialog
+          title={`Unbind Telegram for ${unbindFor.username}?`}
+          description="They will stop receiving notifications in Telegram (in-app notifications continue). They can re-link later from Profile."
+          confirmLabel="Unbind"
+          variant="danger"
+          onConfirm={async () => {
+            await api(`/users/${unbindFor.id}/telegram`, { method: 'DELETE' });
+            setUnbindFor(null);
+            toast('Telegram unlinked');
+            load();
+          }}
+          onClose={() => setUnbindFor(null)}
+        />
       )}
     </div>
   );

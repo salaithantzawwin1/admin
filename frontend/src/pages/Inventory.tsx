@@ -165,6 +165,9 @@ export default function Inventory() {
   const [itemForm, setItemForm] = useState<Partial<Item> & { balance?: number } | null>(null);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
+  // reason-prompt dialogs (in-app, replaces window.prompt)
+  const [cancelFor, setCancelFor] = useState<PendingRequest | null>(null);
+  const [rejectFor, setRejectFor] = useState<PendingRequest | null>(null);
 
   // history viewer
   const [historyFor, setHistoryFor] = useState<Item | null>(null);
@@ -348,25 +351,27 @@ export default function Inventory() {
     }
   };
 
-  const doAdminCancel = async (requestId: string) => {
-    const reason = window.prompt('Cancellation reason (notifies the requester):') ?? undefined;
+  const doAdminCancel = async (requestId: string, reason?: string) => {
     setError('');
     try {
       await api(`/inventory/requests/${requestId}/admin-cancel`, { method: 'POST', body: { reason } });
+      setCancelFor(null);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      throw e; // ConfirmDialog keeps itself open and shows the error inside
     }
   };
 
-  const doRejectFulfill = async (requestId: string) => {
-    const reason = window.prompt('Reason (notifies the requester):') ?? undefined;
+  const doRejectFulfill = async (requestId: string, reason?: string) => {
     setError('');
     try {
       await api(`/inventory/requests/${requestId}/reject`, { method: 'POST', body: { reason } });
+      setRejectFor(null);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      throw e; // ConfirmDialog keeps itself open and shows the error inside
     }
   };
 
@@ -776,9 +781,9 @@ export default function Inventory() {
                     {r.supplyRequest?.note && <div className="text-xs text-gray-500 mb-2">Note: {r.supplyRequest.note}</div>}
                     <div className="flex gap-2">
                       <Button onClick={() => doFulfill(r.id)}>✓ Fulfill (issue stock)</Button>
-                      <Button variant="danger" onClick={() => doRejectFulfill(r.id)}>Cannot fulfill</Button>
+                      <Button variant="danger" onClick={() => setRejectFor(r)}>Cannot fulfill</Button>
                       {r.status === 'APPROVED' && (
-                        <Button variant="ghost" onClick={() => doAdminCancel(r.id)}>✕ Cancel request</Button>
+                        <Button variant="ghost" onClick={() => setCancelFor(r)}>✕ Cancel request</Button>
                       )}
                     </div>
                   </div>
@@ -991,6 +996,33 @@ export default function Inventory() {
       )}
 
       {/* ============ modals ============ */}
+      {/* admin-cancel with reason (replaces window.prompt) */}
+      {cancelFor && (
+        <ConfirmDialog
+          title={`Cancel ${cancelFor.docNumber}?`}
+          description="The request is withdrawn and the requester is notified with your reason."
+          confirmLabel="Cancel request"
+          variant="danger"
+          withNote
+          notePlaceholder="Cancellation reason (notifies the requester)"
+          onClose={() => setCancelFor(null)}
+          onConfirm={async (note) => { await doAdminCancel(cancelFor.id, note || undefined); }}
+        />
+      )}
+
+      {/* cannot-fulfill with reason (replaces window.prompt) */}
+      {rejectFor && (
+        <ConfirmDialog
+          title={`Cannot fulfill ${rejectFor.docNumber}?`}
+          description="The request is rejected and the requester is notified with your reason."
+          confirmLabel="Reject request"
+          variant="danger"
+          withNote
+          notePlaceholder="Reason (notifies the requester)"
+          onClose={() => setRejectFor(null)}
+          onConfirm={async (note) => { await doRejectFulfill(rejectFor.id, note || undefined); }}
+        />
+      )}
       {/* single-item quick request */}
       {requestFor && (
         <ConfirmDialog

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { Modal } from '../components/Modal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
 import { Badge, Button, Empty, Input, PageHeader } from '../components/ui';
 
@@ -131,6 +132,7 @@ export default function Settings() {
   const [joinDrivers, setJoinDrivers] = useState<PickDriver[]>([]);
   const [joinPick, setJoinPick] = useState<Record<string, { kind: 'user' | 'driver'; id: string }>>({});
   const [joinEditing, setJoinEditing] = useState<Record<string, boolean>>({}); // APPROVED rows: pickers stay hidden until the admin clicks Re-assign
+  const [unbindJoin, setUnbindJoin] = useState<TgJoin | null>(null); // in-app confirm (replaces window.confirm)
   const [joinMsg, setJoinMsg] = useState('');
   const [joinError, setJoinError] = useState('');
   // chat bind-history dialog state
@@ -644,16 +646,9 @@ export default function Settings() {
                       </button>
                       <button
                         className="text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg px-3 py-1.5 transition-colors"
-                        onClick={async () => {
+                        onClick={() => {
                           setJoinError(''); setJoinMsg('');
-                          if (!window.confirm(`Unbind ${j.displayName ?? j.chatId} from ${j.bound?.name ?? 'its account'}? They will be notified in Telegram, and the join goes back to Pending.`)) return;
-                          try {
-                            const res = await api<{ unbound: string }>(`/settings/telegram/joins/${j.id}/unbind`, { method: 'POST' });
-                            setJoinMsg(`Unbound — released from ${res.unbound}. The join is back in Pending.`);
-                            loadJoins();
-                          } catch (e) {
-                            setJoinError(e instanceof Error ? e.message : 'Unbind failed');
-                          }
+                          setUnbindJoin(j);
                         }}
                       >
                         🔓 Unbind
@@ -913,6 +908,32 @@ export default function Settings() {
         </div>
       </div>
       </>
+      )}
+
+      {unbindJoin && (
+        <ConfirmDialog
+          title={`Unbind ${unbindJoin.displayName ?? unbindJoin.chatId}?`}
+          description={
+            <>
+              Releases the Telegram chat from <b>{unbindJoin.bound?.name ?? 'its account'}</b>. The person is
+              notified in Telegram and the join goes back to Pending.
+            </>
+          }
+          confirmLabel="Unbind"
+          variant="danger"
+          onConfirm={async () => {
+            try {
+              const res = await api<{ unbound: string }>(`/settings/telegram/joins/${unbindJoin.id}/unbind`, { method: 'POST' });
+              setUnbindJoin(null);
+              setJoinMsg(`Unbound — released from ${res.unbound}. The join is back in Pending.`);
+              loadJoins();
+            } catch (e) {
+              setJoinError(e instanceof Error ? e.message : 'Unbind failed');
+              throw e; // dialog stays open, error shown inside
+            }
+          }}
+          onClose={() => setUnbindJoin(null)}
+        />
       )}
     </div>
   );

@@ -85,6 +85,27 @@ the Permission Matrix (`/rbac`). Do not hard-code role names — add permission 
 Existing RBAC-native examples: departments (read/manage), employees (read/manage),
 announcement album/ack flows, fleet types, meeting-room facilities.
 
+### UI conventions (mandatory — kept this way app-wide)
+
+- **No native browser popups.** `window.confirm`, `window.alert`, `window.prompt`
+  are banned — they render as "192.168.100.110 says …" native dialogs that cannot
+  be styled and break the app's look. Use the in-app components instead:
+  - `<ConfirmDialog>` (`frontend/src/components/ConfirmDialog.tsx`) — confirm a
+    destructive action; supports `variant="danger"`, a `withNote` textarea
+    (replaces window.prompt), and it **stays open on error** showing the failure
+    inside (rethrow from `onConfirm`).
+  - `toast('Saved')` (`frontend/src/components/Toast.tsx`) — success/info/error
+    feedback after actions.
+- **Permission Matrix sorting** — the backend serves the catalog A→Z
+  (`/auth/permissions/matrix` returns `[...ALL_PERMISSION_CODES].sort()`), and the
+  matrix page sorts rows within each group again. If a new permission appears
+  unsorted in the UI, hard-refresh (Ctrl+Shift+R) first — stale JS bundles
+  predate the sort; nginx now sends `index.html` with no-cache so future deploys
+  update automatically.
+- A build that fails these conventions should not ship — grep for
+  `window.confirm|window.prompt|window.alert` in `frontend/src` before committing
+  UI work; only comments may match.
+
 ## 4. Git workflow
 
 - Remote: `https://github.com/salaithantzawwin1/admin.git` (branch `main`)

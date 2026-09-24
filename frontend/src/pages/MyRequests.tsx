@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 
 interface RequestRow {
   id: string;
@@ -33,6 +34,8 @@ export default function MyRequests() {
   const [error, setError] = useState('');
   const [form, setForm] = useState({ title: '', description: '', docType: 'GENERIC_REQUEST' });
   const navigate = useNavigate();
+  // in-app confirm dialog state (replaces window.confirm)
+  const [confirming, setConfirming] = useState<{ kind: 'recall' | 'cancelApproved'; id: string } | null>(null);
 
   const load = useCallback(() => {
     api<{ items: RequestRow[] }>('/requests?scope=mine&pageSize=100')
@@ -82,25 +85,27 @@ export default function MyRequests() {
 
   /** Withdraw a request that is still waiting for approval. */
   const recall = async (id: string) => {
-    if (!window.confirm('Recall this request? It will be cancelled and removed from the approver inbox.')) return;
     setError('');
     try {
       await api(`/requests/${id}`, { method: 'DELETE' });
+      setConfirming(null);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      throw e; // ConfirmDialog keeps itself open and shows the error inside
     }
   };
 
   /** Cancel an APPROVED request — Administration frees the room/vehicle/stock afterwards. */
   const cancelApproved = async (id: string) => {
-    if (!window.confirm('Cancel this approved request? Administration will be notified to release it.')) return;
     setError('');
     try {
       await api(`/requests/${id}/cancel-approved`, { method: 'POST' });
+      setConfirming(null);
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      throw e; // ConfirmDialog keeps itself open and shows the error inside
     }
   };
 
@@ -169,10 +174,10 @@ export default function MyRequests() {
                     </>
                   )}
                   {(r.status === 'PENDING_APPROVAL' || r.status === 'SUBMITTED') && (
-                    <Button variant="ghost" onClick={() => recall(r.id)}>↩ Recall</Button>
+                    <Button variant="ghost" onClick={() => setConfirming({ kind: 'recall', id: r.id })}>↩ Recall</Button>
                   )}
                   {r.status === 'APPROVED' && (r.docType === 'CAR_REQUEST' || r.docType === 'MEETING_ROOM_REQUEST' || r.docType === 'OFFICE_SUPPLY_REQUEST') && (
-                    <Button variant="ghost" onClick={() => cancelApproved(r.id)}>✕ Cancel</Button>
+                    <Button variant="ghost" onClick={() => setConfirming({ kind: 'cancelApproved', id: r.id })}>✕ Cancel</Button>
                   )}
                 </td>
               </tr>
@@ -180,6 +185,27 @@ export default function MyRequests() {
           </tbody>
         </table>
       </Card>
+
+      {confirming?.kind === 'recall' && (
+        <ConfirmDialog
+          title="Recall this request?"
+          description="It will be cancelled and removed from the approver inbox."
+          confirmLabel="Recall"
+          variant="danger"
+          onConfirm={async () => { await recall(confirming.id); }}
+          onClose={() => setConfirming(null)}
+        />
+      )}
+      {confirming?.kind === 'cancelApproved' && (
+        <ConfirmDialog
+          title="Cancel this approved request?"
+          description="Administration will be notified to release the room/vehicle/items."
+          confirmLabel="Cancel request"
+          variant="danger"
+          onConfirm={async () => { await cancelApproved(confirming.id); }}
+          onClose={() => setConfirming(null)}
+        />
+      )}
     </div>
   );
 }
