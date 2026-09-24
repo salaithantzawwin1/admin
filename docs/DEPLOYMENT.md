@@ -105,6 +105,21 @@ announcement album/ack flows, fleet types, meeting-room facilities.
 - A build that fails these conventions should not ship — grep for
   `window.confirm|window.prompt|window.alert` in `frontend/src` before committing
   UI work; only comments may match.
+- **Tabs and sub-tabs live in the URL as query params (mandatory).** Any page
+  with tabs — and any nested sub-tab set — must keep its state in the URL so
+  refresh, back/forward, bookmarks, and shared links land on the exact view:
+  - top-level tab: `?tab=<key>` (e.g. `/inventory?tab=management`, `/inventory?tab=purchases`,
+    `/meeting-rooms?tab=setup`)
+  - second-level sub-tab: add `&sub=<key>` (e.g. Inventory Management:
+    `/inventory?tab=management&sub=queue` · `&sub=restock` · `&sub=alerts` ·
+    `&sub=reorder` · `&sub=items`)
+  - the default tab/sub-tab stays parameterless (`/inventory` = catalog,
+    `?tab=management` = To-issue queue)
+  - switching tabs uses `setSearchParams(..., { replace: false })` so browser
+    Back walks the tab history
+  - when adding a new tabbed page, follow the existing pattern
+    (`useSearchParams` → read param → validate against the known keys →
+    fallback to default); do NOT keep tab state in bare `useState`
 
 ## 4. Git workflow
 

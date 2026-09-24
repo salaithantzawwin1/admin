@@ -140,8 +140,14 @@ export default function Inventory() {
   const tabParam = searchParams.get('tab') as Tab | null;
   const tab: Tab = tabParam === 'management' || tabParam === 'purchases' ? tabParam : 'catalog';
   const setTab = (t: Tab) => setSearchParams(t === 'catalog' ? {} : { tab: t }, { replace: false });
-  // Grid is the default catalog view (visual browsing fits a store); the
-  // choice persists per browser — Table users keep Table.
+  // Management sub-tab also lives in the URL (?tab=management&sub=restock)
+  // so refresh / back / shared links land on the exact working view
+  const mgmtParam = searchParams.get('sub') as MgmtTab | null;
+  const mgmtTab: MgmtTab =
+    mgmtParam === 'queue' || mgmtParam === 'restock' || mgmtParam === 'alerts' || mgmtParam === 'reorder' || mgmtParam === 'items'
+      ? mgmtParam
+      : 'queue';
+  const setMgmtTab = (m: MgmtTab) => setSearchParams({ tab: 'management', ...(m === 'queue' ? {} : { sub: m }) }, { replace: false });
   const [view, setView] = useState<'table' | 'grid'>(() =>
     localStorage.getItem('ams.inventoryView') === 'table' ? 'table' : 'grid',
   );
@@ -174,8 +180,7 @@ export default function Inventory() {
   const [alertMsg, setAlertMsg] = useState('');
   const [alertBusy, setAlertBusy] = useState(false);
   const [reorder, setReorder] = useState<ReorderRow[]>([]);
-  // Management sub-tabs + items-master pagination
-  const [mgmtTab, setMgmtTab] = useState<MgmtTab>('queue');
+  // items-master pagination
   const [itemPage, setItemPage] = useState(1);
   const [itemQuery, setItemQuery] = useState('');
 
