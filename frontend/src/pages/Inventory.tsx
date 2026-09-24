@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, getToken, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 
@@ -68,6 +69,9 @@ interface Txn {
   unitPrice?: number | string | null;
   createdAt: string;
   createdBy?: { fullName: string } | null;
+  // Who/What enrichment (ISSUE rows): who received the stock + linked request title
+  issuedTo?: string | null;
+  requestTitle?: string | null;
 }
 
 const ITEM_CATEGORIES = ['STATIONERY', 'BOOKS', 'PAPER', 'ELECTRONICS', 'CLEANING', 'KITCHEN', 'FURNITURE', 'IT_SUPPLIES', 'OTHER'];
@@ -127,8 +131,10 @@ export default function Inventory() {
   const tabParam = searchParams.get('tab') as Tab | null;
   const tab: Tab = tabParam === 'management' || tabParam === 'purchases' ? tabParam : 'catalog';
   const setTab = (t: Tab) => setSearchParams(t === 'catalog' ? {} : { tab: t }, { replace: false });
+  // Grid is the default catalog view (visual browsing fits a store); the
+  // choice persists per browser — Table users keep Table.
   const [view, setView] = useState<'table' | 'grid'>(() =>
-    localStorage.getItem('ams.inventoryView') === 'grid' ? 'grid' : 'table',
+    localStorage.getItem('ams.inventoryView') === 'table' ? 'table' : 'grid',
   );
   const setViewPersist = (v: 'table' | 'grid') => {
     setView(v);
@@ -279,6 +285,29 @@ export default function Inventory() {
       const t = totals.find((x) => x.itemId === item.id);
       if (t) setLifetime({ qty: t.qty, cost: t.cost, unit: item.unit });
     } catch { /* totals are supplementary */ }
+  };
+
+  /** Full movement ledger CSV — Received/Issued with Who/When/What for the window. */
+  const downloadLedgerCsv = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const w = spendWindow(spendMonth);
+      const res = await fetch(`/api/inventory/ledger.csv?start=${w.start}&end=${w.end}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `stock-ledger-${spendMonth.getFullYear()}-${String(spendMonth.getMonth() + 1).padStart(2, '0')}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const downloadCsv = async () => {
@@ -630,7 +659,7 @@ export default function Inventory() {
                         {cart[i.id] ? `In cart (${cart[i.id]}) +` : '+ Request'}
                       </button>
                       {canManage && (
-                        <button className="text-gray-500 hover:underline" onClick={() => openHistory(i)}>History</button>
+                        <button className="text-gray-500 hover:underline" title="Stock ledger — who issued/received, when, what" onClick={() => openHistory(i)}>Ledger</button>
                       )}
                     </td>
                   </tr>
@@ -681,8 +710,9 @@ export default function Inventory() {
                     </div>
                     <div className="flex items-center justify-between">
                       <button
-                        className="text-blue-600 hover:underline text-sm disabled:text-gray-300 disabled:no-underline"
+                        className={`inline-flex items-center gap-1 text-sm font-medium rounded-lg px-2 py-1 -ml-2 transition-colors ${i.out ? 'text-gray-300 cursor-not-allowed' : cart[i.id] ? 'text-blue-700 bg-blue-50' : 'text-blue-600 hover:bg-blue-50'}`}
                         disabled={i.out}
+                        title={i.out ? 'Out of stock' : cart[i.id] ? `In cart (${cart[i.id]}) — open the cart to submit` : 'Request this item'}
                         onClick={() => {
                           if (cart[i.id]) {
                             setCart({ ...cart, [i.id]: cart[i.id] + 1 });
@@ -692,10 +722,17 @@ export default function Inventory() {
                           }
                         }}
                       >
-                        {cart[i.id] ? `In cart (${cart[i.id]}) +` : '+ Request'}
+                        {cart[i.id] ? <span aria-hidden>🛒</span> : <span aria-hidden>✋</span>}
+                        {cart[i.id] ? `In cart (${cart[i.id]})` : 'Request'}
                       </button>
                       {canManage && (
-                        <button className="text-gray-500 hover:underline text-xs" onClick={() => openHistory(i)}>History</button>
+                        <button
+                          className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg px-2 py-1 transition-colors"
+                          title="Stock ledger — who issued/received, when, what"
+                          onClick={() => openHistory(i)}
+                        >
+                          <span aria-hidden>📜</span> Ledger
+                        </button>
                       )}
                     </div>
                   </div>
@@ -869,7 +906,12 @@ export default function Inventory() {
             <div className="flex items-center justify-between mb-3">
               <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Purchases — {spendWindow(spendMonth).label}</h2>
               <div className="flex items-center gap-2 text-sm">
-                <Button variant="ghost" onClick={downloadCsv} disabled={busy}>⬇ CSV</Button>
+                <span title="Monthly purchase spend by item & supplier">
+                  <Button variant="ghost" onClick={downloadCsv} disabled={busy}>⬇ Purchases CSV</Button>
+                </span>
+                <span title="Every stock movement — Received/Issued with Who, When, What">
+                  <Button variant="ghost" onClick={downloadLedgerCsv} disabled={busy}>⬇ Ledger CSV</Button>
+                </span>
                 <button className="px-2 py-1 rounded hover:bg-gray-100" onClick={() => setSpendMonth((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))}>←</button>
                 <button className="px-2 py-1 rounded hover:bg-gray-100 text-xs" onClick={() => setSpendMonth(new Date())}>This month</button>
                 <button className="px-2 py-1 rounded hover:bg-gray-100" onClick={() => setSpendMonth((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))}>→</button>
@@ -984,7 +1026,7 @@ export default function Inventory() {
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => openImageModal(i)}>Photo</button>
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => { setEditingItem(i); setItemForm({ ...i }); }}>Edit</button>
-                      <button className="text-gray-500 hover:underline mr-3" onClick={() => openHistory(i)}>History</button>
+                      <button className="text-gray-500 hover:underline mr-3" onClick={() => openHistory(i)}>Ledger</button>
                       <button className="text-red-600 hover:underline" onClick={() => setDeletingItem(i)}>Delete</button>
                     </td>
                   </tr>
@@ -1149,48 +1191,65 @@ export default function Inventory() {
         />
       )}
 
-      {/* history drawer */}
+      {/* ledger drawer — Who / When / What for every stock movement */}
       {historyFor && (
-        <ConfirmDialog
-          title={`Ledger — ${historyFor.code} ${historyFor.name}`}
-          description={`Balance now: ${historyFor.balance} ${historyFor.unit} · alert threshold ${historyFor.minStock}${lifetime ? ` · Lifetime purchased: ${lifetime.qty} ${lifetime.unit} (${fmtMoney(lifetime.cost)})` : ''}`}
-          confirmLabel="Close"
-          onClose={() => setHistoryFor(null)}
-          onConfirm={() => setHistoryFor(null)}
-        >
-          <div className="mt-3 max-h-72 overflow-y-auto">
+        <Modal title={`Ledger — ${historyFor.code} ${historyFor.name}`} onClose={() => setHistoryFor(null)}>
+          <div className="text-sm text-gray-600 mb-3">
+            Balance now: <b>{historyFor.balance} {historyFor.unit}</b> · alert threshold {historyFor.minStock}
+            {lifetime ? ` · Lifetime purchased: ${lifetime.qty} ${lifetime.unit} (${fmtMoney(lifetime.cost)})` : ''}
+          </div>
+          <div className="max-h-96 overflow-y-auto border border-gray-100 rounded-lg">
             {history.length === 0 ? (
-              <div className="text-sm text-gray-400">No transactions yet.</div>
+              <div className="text-sm text-gray-400 p-4">No transactions yet.</div>
             ) : (
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-left text-gray-400 uppercase">
-                    <th className="py-1">When</th>
-                    <th className="py-1">Type</th>
-                    <th className="py-1 text-right">Qty</th>
-                    <th className="py-1 text-right">Balance</th>
-                    <th className="py-1">Ref / by</th>
+                  <tr className="text-left text-gray-400 uppercase bg-gray-50 sticky top-0">
+                    <th className="py-2 px-2 font-medium">When</th>
+                    <th className="py-2 px-2 font-medium">Type</th>
+                    <th className="py-2 px-2 font-medium">Who</th>
+                    <th className="py-2 px-2 font-medium">What</th>
+                    <th className="py-2 px-2 text-right font-medium">Qty</th>
+                    <th className="py-2 px-2 text-right font-medium">Balance</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {history.map((t) => (
                     <tr key={t.id}>
-                      <td className="py-1">{new Date(t.createdAt).toLocaleString()}</td>
-                      <td className="py-1">
+                      <td className="py-2 px-2 whitespace-nowrap text-gray-500" title={new Date(t.createdAt).toLocaleString()}>
+                        {new Date(t.createdAt).toLocaleDateString()}<br />
+                        <span className="text-[10px] text-gray-400">{new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </td>
+                      <td className="py-2 px-2">
                         <Badge color={t.quantity >= 0 ? 'green' : 'blue'}>{t.type}</Badge>
                       </td>
-                      <td className={`py-1 text-right font-medium ${t.quantity >= 0 ? 'text-green-700' : 'text-blue-700'}`}>
+                      <td className="py-2 px-2">
+                        {t.type === 'ISSUE' ? (
+                          <>
+                            <div className="font-medium text-gray-700" title="Received the items">👤 {t.issuedTo ?? '—'}</div>
+                            <div className="text-[10px] text-gray-400" title="Recorded by">by {t.createdBy?.fullName ?? '—'}</div>
+                          </>
+                        ) : (
+                          <div className="text-gray-500">{t.createdBy?.fullName ?? '—'}</div>
+                        )}
+                      </td>
+                      <td className="py-2 px-2 text-gray-500 max-w-[220px]">
+                        {t.reference && <div className="font-mono text-[11px] text-gray-600">{t.reference}</div>}
+                        {t.requestTitle && <div className="truncate" title={t.requestTitle}>{t.requestTitle}</div>}
+                        {t.unitPrice != null && <div className="text-[10px] text-gray-400">@ {fmtMoney(Number(t.unitPrice))}</div>}
+                        {!t.reference && !t.requestTitle && t.unitPrice == null && '—'}
+                      </td>
+                      <td className={`py-2 px-2 text-right font-medium whitespace-nowrap ${t.quantity >= 0 ? 'text-green-700' : 'text-blue-700'}`}>
                         {t.quantity > 0 ? '+' : ''}{t.quantity}
                       </td>
-                      <td className="py-1 text-right">{t.balanceAfter}</td>
-                      <td className="py-1 text-gray-400">{t.reference ?? '—'}{t.unitPrice != null ? ` · @${fmtMoney(Number(t.unitPrice))}` : ''} · {t.createdBy?.fullName ?? '—'}</td>
+                      <td className="py-2 px-2 text-right text-gray-500 whitespace-nowrap">{t.balanceAfter}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
           </div>
-        </ConfirmDialog>
+        </Modal>
       )}
     </div>
   );

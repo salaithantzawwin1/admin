@@ -191,6 +191,16 @@ export class InventoryController {
     res!.send(content);
   }
 
+  /** Full movement ledger (Received/Issued + Who/When/What) for a month window. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_READ)
+  @Get('ledger.csv')
+  async ledgerCsv(@Query('start') start?: string, @Query('end') end?: string, @Res() res?: Response) {
+    const { filename, content } = await this.inventory.ledgerCsv(start || undefined, end || undefined);
+    res!.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res!.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res!.send(content);
+  }
+
   /** Manual trigger for the low-stock alert pass (also runs daily at 08:00). */
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
   @Post('low-stock/alert')

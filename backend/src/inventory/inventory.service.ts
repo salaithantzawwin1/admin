@@ -551,13 +551,79 @@ export class InventoryService {
 
   // ---------- history & alerts ----------
 
-  itemHistory(itemId: string) {
-    return this.prisma.stockTransaction.findMany({
+  /**
+   * Item ledger — Who / When / What for every stock movement.
+   * WHO: who recorded it (createdBy) and, for ISSUE, who received the stock
+   *      (the supply request's requester — the employee walking out with the items).
+   * WHAT: doc number reference + unit price + linked request title.
+   */
+  async itemHistory(itemId: string) {
+    const rows = await this.prisma.stockTransaction.findMany({
       where: { itemId },
       orderBy: { createdAt: 'desc' },
       take: 200,
-      include: { createdBy: { select: { fullName: true } } },
+      include: {
+        createdBy: { select: { fullName: true } },
+        request: { select: { title: true, requester: { select: { fullName: true, username: true } } } },
+      },
     });
+    return rows.map((t) => ({
+      id: t.id,
+      type: t.type,
+      quantity: t.quantity,
+      balanceAfter: t.balanceAfter,
+      reference: t.reference,
+      unitPrice: t.unitPrice,
+      createdAt: t.createdAt,
+      createdBy: t.createdBy,
+      requestTitle: t.request?.title ?? null,
+      issuedTo: t.type === 'ISSUE' ? (t.request?.requester.fullName ?? null) : null,
+    }));
+  }
+
+  /**
+   * Full movement ledger CSV (Received/Issued with Who/When/What) — one row per
+   * stock transaction in the window, Excel-friendly.
+   */
+  async ledgerCsv(monthStart?: string, monthEnd?: string) {
+    const now = new Date();
+    const start = monthStart ? new Date(monthStart) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const end = monthEnd ? new Date(monthEnd) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      throw new BadRequestException('Invalid period');
+    }
+    const rows = await this.prisma.stockTransaction.findMany({
+      where: { createdAt: { gte: start, lt: end }, item: { isActive: true } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        item: { select: { code: true, name: true, unit: true } },
+        createdBy: { select: { fullName: true } },
+        request: { select: { title: true, requester: { select: { fullName: true } } } },
+      },
+    });
+    const esc = (v: string | number | null | undefined) => {
+      const s = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines: string[] = [];
+    lines.push(['Date', 'Type', 'Item code', 'Item name', 'Qty', 'Unit', 'Balance after', 'Ref / doc', 'What (request title)', 'Recorded by', 'Received by (ISSUE)'].join(','));
+    for (const t of rows) {
+      lines.push([
+        esc(t.createdAt.toISOString().slice(0, 16).replace('T', ' ')),
+        esc(t.type),
+        esc(t.item.code),
+        esc(t.item.name),
+        (t.quantity > 0 ? '+' : '') + t.quantity,
+        esc(t.item.unit),
+        t.balanceAfter,
+        esc(t.reference),
+        esc(t.request?.title),
+        esc(t.createdBy.fullName),
+        esc(t.type === 'ISSUE' ? t.request?.requester.fullName : ''),
+      ].join(','));
+    }
+    const month = start.toISOString().slice(0, 7);
+    return { filename: `stock-ledger-${month}.csv`, content: '\ufeff' + lines.join('\r\n') };
   }
 
   lowStock() {
