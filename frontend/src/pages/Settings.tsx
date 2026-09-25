@@ -94,9 +94,12 @@ type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins';
 
 /** Company Time Table — office hours the leave windows are derived from. */
 interface Timetable {
-  workStart: string;
-  workEnd: string;
-  halfDaySplit: string;
+  fullStart: string;
+  fullEnd: string;
+  morningStart: string;
+  morningEnd: string;
+  eveningStart: string;
+  eveningEnd: string;
   workDays: number[];
 }
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -454,12 +457,13 @@ export default function Settings() {
       <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
         <div className="flex items-center justify-between mb-1">
           <h2 className="font-semibold text-gray-800">Company Time Table</h2>
-          {tt && <Badge color="blue">{tt.workStart} – {tt.workEnd}</Badge>}
+          {tt && <Badge color="blue">{tt.fullStart} – {tt.fullEnd}</Badge>}
         </div>
         <p className="text-sm text-gray-500 mb-4">
           Office hours used company-wide. Driver Absences (Fleet) derive their leave windows from these
-          times — Full day = {tt?.workStart ?? '…'}–{tt?.workEnd ?? '…'}, Morning half = start–{tt?.halfDaySplit ?? '…'},
-          Evening half = {tt?.halfDaySplit ?? '…'}–end. Times are 24h office time (Asia/Yangon).
+          ranges — Full Day = {tt?.fullStart ?? '…'}–{tt?.fullEnd ?? '…'}, Half Day (Morning) = {tt?.morningStart ?? '…'}–{tt?.morningEnd ?? '…'},
+          Half Day (Evening) = {tt?.eveningStart ?? '…'}–{tt?.eveningEnd ?? '…'}. The driver's status flips to Leave at
+          the range's Start Time and back to Available after its End Time. Times are 24h office time (Asia/Yangon).
         </p>
 
         {ttError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{ttError}</div>}
@@ -469,19 +473,24 @@ export default function Settings() {
           <Empty />
         ) : (
         <>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Work start</label>
-            <Input type="time" value={tt.workStart} onChange={(e) => setTt({ ...tt, workStart: e.target.value })} />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Half-day split (Morning | Evening boundary)</label>
-            <Input type="time" value={tt.halfDaySplit} onChange={(e) => setTt({ ...tt, halfDaySplit: e.target.value })} />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">Work end</label>
-            <Input type="time" value={tt.workEnd} onChange={(e) => setTt({ ...tt, workEnd: e.target.value })} />
-          </div>
+        <div className="space-y-3">
+          {([
+            ['Full Day', 'fullStart', 'fullEnd'],
+            ['Half Day (Morning)', 'morningStart', 'morningEnd'],
+            ['Half Day (Evening)', 'eveningStart', 'eveningEnd'],
+          ] as const).map(([label, startKey, endKey]) => (
+            <div key={startKey} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+              <label className="block text-xs text-gray-500 sm:text-sm sm:text-gray-700 font-medium">{label}</label>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Start Time</label>
+                <Input type="time" value={tt[startKey]} onChange={(e) => setTt({ ...tt, [startKey]: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">End Time</label>
+                <Input type="time" value={tt[endKey]} onChange={(e) => setTt({ ...tt, [endKey]: e.target.value })} />
+              </div>
+            </div>
+          ))}
         </div>
 
         <div className="mt-4">
@@ -508,7 +517,7 @@ export default function Settings() {
         </div>
 
         <div className="flex justify-end mt-4">
-          <Button onClick={saveTimetable} disabled={ttBusy || !tt.workStart || !tt.workEnd || !tt.halfDaySplit}>
+          <Button onClick={saveTimetable} disabled={ttBusy || !tt.fullStart || !tt.fullEnd || !tt.morningStart || !tt.morningEnd || !tt.eveningStart || !tt.eveningEnd}>
             {ttBusy ? 'Saving…' : 'Save time table'}
           </Button>
         </div>

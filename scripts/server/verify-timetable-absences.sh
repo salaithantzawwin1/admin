@@ -11,9 +11,9 @@ DATE=$(date -d '+1 day' +%F)
 echo "== timetable default =="
 curl -s -H "Authorization: Bearer $TOK" "$BASE/settings/timetable"; echo
 
-echo "== save custom timetable =="
+echo "== save custom timetable (3 explicit ranges) =="
 curl -s -X PUT -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
-  -d '{"workStart":"08:00","workEnd":"17:30","halfDaySplit":"12:30","workDays":[1,2,3,4,5]}' \
+  -d '{"fullStart":"08:00","fullEnd":"17:30","morningStart":"08:00","morningEnd":"12:30","eveningStart":"12:30","eveningEnd":"17:30","workDays":[1,2,3,4,5]}' \
   "$BASE/settings/timetable"; echo
 
 echo "== create HALF/EVENING absence for $DATE =="

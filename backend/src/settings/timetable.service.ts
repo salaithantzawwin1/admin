@@ -7,44 +7,75 @@ import { AuditService } from '../audit/audit.service';
  *
  * Stored in system_settings under `timetable.company` as JSON. Consumers:
  *  - Fleet → Driver Absences: a leave is recorded as Full day / Half day
- *    (Morning | Evening) and its concrete start/end window is derived from
- *    this table, so admins never re-enter clock times per absence.
+ *    (Morning | Evening) and its concrete start/end window comes straight
+ *    from the matching range here, so admins never re-enter clock times
+ *    per absence. The three ranges are independent — e.g. a Morning half
+ *    can end at 12:00 while Full day ends at 17:30.
+ *
+ * Legacy note: earlier versions stored a single {workStart, halfDaySplit,
+ * workEnd} triple; `normalize()` maps that shape to
+ * {fullStart..fullEnd, morningStart..morningEnd, eveningStart..eveningEnd}
+ * so no data migration is needed.
  *
  * All times are "HH:MM" 24h strings (Asia/Yangon office time).
  */
 export interface CompanyTimetable {
-  /** Workday start, e.g. "08:00" */
-  workStart: string;
-  /** Workday end, e.g. "17:30" */
-  workEnd: string;
-  /** Boundary that splits Morning | Evening half-days, e.g. "12:30" */
-  halfDaySplit: string;
+  /** Full-day leave range, e.g. "08:00" … "17:30" */
+  fullStart: string;
+  fullEnd: string;
+  /** Morning half-day leave range, e.g. "08:00" … "12:00" */
+  morningStart: string;
+  morningEnd: string;
+  /** Evening half-day leave range, e.g. "13:00" … "17:30" */
+  eveningStart: string;
+  eveningEnd: string;
   /** Working days (0=Sun … 6=Sat) — used by future scheduling features */
   workDays: number[];
 }
 
 export const DEFAULT_TIMETABLE: CompanyTimetable = {
-  workStart: '08:00',
-  workEnd: '17:30',
-  halfDaySplit: '12:30',
+  fullStart: '08:00',
+  fullEnd: '17:30',
+  morningStart: '08:00',
+  morningEnd: '12:30',
+  eveningStart: '12:30',
+  eveningEnd: '17:30',
   workDays: [1, 2, 3, 4, 5], // Mon–Fri
 };
 
 const KEY = 'timetable.company';
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-function validate(tt: Partial<CompanyTimetable>): CompanyTimetable {
-  for (const f of ['workStart', 'workEnd', 'halfDaySplit'] as const) {
-    if (typeof tt[f] !== 'string' || !TIME_RE.test(tt[f] as string)) {
-      throw new BadRequestException(`${f} must be a HH:MM time (24h)`);
-    }
-  }
-  const { workStart, halfDaySplit, workEnd } = tt as Required<Pick<CompanyTimetable, 'workStart' | 'halfDaySplit' | 'workEnd'>>;
-  if (!(workStart < halfDaySplit && halfDaySplit < workEnd)) {
-    throw new BadRequestException('Times must be ordered: work start < half-day split < work end');
-  }
-  const workDays = Array.isArray(tt.workDays) ? [...new Set(tt.workDays.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort() : DEFAULT_TIMETABLE.workDays;
-  return { workStart, workEnd, halfDaySplit, workDays };
+/** Accept either the new 3-range shape or the legacy 3-field triple. */
+function normalize(input: Partial<CompanyTimetable>): CompanyTimetable {
+  const time = (v: unknown, fallback: string): string =>
+    typeof v === 'string' && TIME_RE.test(v) ? v : fallback;
+
+  // legacy shape → derive the three ranges from workStart/halfDaySplit/workEnd
+  const legacyFullStart = typeof (input as Record<string, unknown>).workStart === 'string' ? (input as Record<string, string>).workStart : undefined;
+  const legacySplit = typeof (input as Record<string, unknown>).halfDaySplit === 'string' ? (input as Record<string, string>).halfDaySplit : undefined;
+  const legacyFullEnd = typeof (input as Record<string, unknown>).workEnd === 'string' ? (input as Record<string, string>).workEnd : undefined;
+
+  const workDays = Array.isArray(input.workDays) && input.workDays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+    ? [...new Set(input.workDays)].sort((a, b) => a - b)
+    : [...DEFAULT_TIMETABLE.workDays];
+
+  return {
+    fullStart: time(input.fullStart, legacyFullStart ?? DEFAULT_TIMETABLE.fullStart),
+    fullEnd: time(input.fullEnd, legacyFullEnd ?? DEFAULT_TIMETABLE.fullEnd),
+    morningStart: time(input.morningStart, legacyFullStart ?? DEFAULT_TIMETABLE.morningStart),
+    morningEnd: time(input.morningEnd, legacySplit ?? DEFAULT_TIMETABLE.morningEnd),
+    eveningStart: time(input.eveningStart, legacySplit ?? DEFAULT_TIMETABLE.eveningStart),
+    eveningEnd: time(input.eveningEnd, legacyFullEnd ?? DEFAULT_TIMETABLE.eveningEnd),
+    workDays,
+  };
+}
+
+function validate(tt: CompanyTimetable): CompanyTimetable {
+  if (!(tt.fullStart < tt.fullEnd)) throw new BadRequestException('Full Day times must be ordered: start < end');
+  if (!(tt.morningStart < tt.morningEnd)) throw new BadRequestException('Half Day (Morning) times must be ordered: start < end');
+  if (!(tt.eveningStart < tt.eveningEnd)) throw new BadRequestException('Half Day (Evening) times must be ordered: start < end');
+  return { ...tt, workDays: [...tt.workDays] };
 }
 
 @Injectable()
@@ -53,25 +84,17 @@ export class TimetableService {
 
   async get(): Promise<CompanyTimetable> {
     const row = await this.prisma.systemSetting.findUnique({ where: { key: KEY } });
-    if (!row?.value) return { ...DEFAULT_TIMETABLE };
+    if (!row?.value) return { ...DEFAULT_TIMETABLE, workDays: [...DEFAULT_TIMETABLE.workDays] };
     try {
-      const parsed = JSON.parse(row.value) as Partial<CompanyTimetable>;
-      // tolerate a stored-but-invalid value by falling back per-field
-      return {
-        workStart: TIME_RE.test(parsed.workStart ?? '') ? parsed.workStart! : DEFAULT_TIMETABLE.workStart,
-        workEnd: TIME_RE.test(parsed.workEnd ?? '') ? parsed.workEnd! : DEFAULT_TIMETABLE.workEnd,
-        halfDaySplit: TIME_RE.test(parsed.halfDaySplit ?? '') ? parsed.halfDaySplit! : DEFAULT_TIMETABLE.halfDaySplit,
-        workDays: Array.isArray(parsed.workDays) && parsed.workDays.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)
-          ? parsed.workDays
-          : DEFAULT_TIMETABLE.workDays,
-      };
+      // normalize() also upgrades the legacy workStart/halfDaySplit/workEnd shape
+      return validate(normalize(JSON.parse(row.value) as Partial<CompanyTimetable>));
     } catch {
-      return { ...DEFAULT_TIMETABLE };
+      return { ...DEFAULT_TIMETABLE, workDays: [...DEFAULT_TIMETABLE.workDays] };
     }
   }
 
   async update(dto: Partial<CompanyTimetable>, actor: { userId: string; username: string }): Promise<CompanyTimetable> {
-    const next = validate({ ...(await this.get()), ...dto });
+    const next = validate(normalize({ ...(await this.get()), ...dto }));
     const before = await this.get();
     await this.prisma.systemSetting.upsert({
       where: { key: KEY },

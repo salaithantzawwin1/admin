@@ -35,9 +35,12 @@ interface Absence {
 
 /** The Company Time Table (Settings → Company Time Table). */
 interface Timetable {
-  workStart: string;
-  workEnd: string;
-  halfDaySplit: string;
+  fullStart: string;
+  fullEnd: string;
+  morningStart: string;
+  morningEnd: string;
+  eveningStart: string;
+  eveningEnd: string;
   workDays: number[];
 }
 
@@ -775,7 +778,7 @@ export default function Fleet() {
         <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Record driver leave — the driver is skipped in assign pickers and auto-set to ON_LEAVE</div>
         <div className="text-xs text-gray-400 mb-3">
           Leave windows follow the Company Time Table
-          {timetable ? `: full day ${timetable.workStart}–${timetable.workEnd} · morning until ${timetable.halfDaySplit} · evening from ${timetable.halfDaySplit}` : ' (Settings → Company Time Table)'}.
+          {timetable ? `: Full Day ${timetable.fullStart}–${timetable.fullEnd} · Morning ${timetable.morningStart}–${timetable.morningEnd} · Evening ${timetable.eveningStart}–${timetable.eveningEnd}` : ' (Settings → Company Time Table)'}. Status auto-restores to Available after the range's End Time.
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
           <Select value={absenceForm.driverId} onChange={(e) => setAbsenceForm({ ...absenceForm, driverId: e.target.value })}>

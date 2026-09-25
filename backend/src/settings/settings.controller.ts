@@ -47,9 +47,12 @@ class JoinApproveDto {
 }
 
 class TimetableDto {
-  @IsString() workStart!: string;
-  @IsString() workEnd!: string;
-  @IsString() halfDaySplit!: string;
+  @IsString() fullStart!: string;
+  @IsString() fullEnd!: string;
+  @IsString() morningStart!: string;
+  @IsString() morningEnd!: string;
+  @IsString() eveningStart!: string;
+  @IsString() eveningEnd!: string;
   @IsOptional() @IsArray() workDays?: number[];
 }
 

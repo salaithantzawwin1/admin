@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { DriverStatus, Prisma, VehicleStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
@@ -479,9 +479,10 @@ export class FleetService {
 
   /**
    * Derive the concrete leave window from the Company Time Table:
-   *  FULL day        → workStart … workEnd
-   *  HALF / MORNING  → workStart … halfDaySplit
-   *  HALF / EVENING  → halfDaySplit … workEnd
+   *  FULL day        → Full Day start … Full Day end
+   *  HALF / MORNING  → Morning start … Morning end
+   *  HALF / EVENING  → Evening start … Evening end
+   * The three ranges are independent (Settings → Company Time Table).
    * `date` is a calendar day (YYYY-MM-DD); the timetable times are local
    * office time (Asia/Yangon = server TZ, +06:30 without DST).
    */
@@ -489,9 +490,9 @@ export class FleetService {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
     const tt = await this.timetable.get();
     const at = (time: string) => new Date(`${date}T${time}:00+06:30`); // office local time
-    if (dayType === 'FULL') return { startsAt: at(tt.workStart), endsAt: at(tt.workEnd) };
-    if (period === 'MORNING') return { startsAt: at(tt.workStart), endsAt: at(tt.halfDaySplit) };
-    if (period === 'EVENING') return { startsAt: at(tt.halfDaySplit), endsAt: at(tt.workEnd) };
+    if (dayType === 'FULL') return { startsAt: at(tt.fullStart), endsAt: at(tt.fullEnd) };
+    if (period === 'MORNING') return { startsAt: at(tt.morningStart), endsAt: at(tt.morningEnd) };
+    if (period === 'EVENING') return { startsAt: at(tt.eveningStart), endsAt: at(tt.eveningEnd) };
     throw new BadRequestException('Half-day leave needs a period: MORNING or EVENING');
   }
 
@@ -647,8 +648,10 @@ export class FleetService {
    * Cron: keep driver status in step with absences — flip to ON_LEAVE when a
    * window starts, back to AVAILABLE when it ends (never touching ON_TRIP or
    * INACTIVE drivers). Idempotent by construction (status checks in where).
+   * Runs every 5 minutes so a Morning half-day ends at its configured End
+   * Time, not up to an hour later.
    */
-  @Cron('0 5 * * * *') // five past every hour
+  @Cron(CronExpression.EVERY_5_MINUTES)
   async syncAbsenceStatuses() {
     const now = new Date();
     // windows that just started → ON_LEAVE
