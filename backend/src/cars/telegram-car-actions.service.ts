@@ -39,6 +39,14 @@ export class TelegramCarActionsService {
       handleText: (text, chatId) => this.handleRejectText(text, chatId),
       hasPending: (chatId) => this.pendingRejects.has(chatId),
     };
+    this.telegram.carRequests = {
+      handleCommand: async (text, chatId) => {
+        await this.handleCarCommand(text, chatId);
+        return true;
+      },
+      handleText: (text, chatId) => this.handleCarText(text, chatId),
+      hasPending: (chatId) => this.pendingCarRequests.has(chatId),
+    };
     this.workflow.onSubmittedTelegram = (requestId) => this.offerApprovalButtons(requestId);
   }
 
@@ -52,6 +60,10 @@ export class TelegramCarActionsService {
     this.logger.log(`/assign handler entered: "${text}" (chat ${chatId})`);
     const [rawCommand, ...rest] = text.replace(/\s+/, ' ').split(' ');
     const command = rawCommand.toLowerCase().replace(/@.*$/, ''); // strip /assign@BotName
+    if (command === '/car') {
+      await this.handleCarCommand(text, chatId);
+      return true;
+    }
     if (command !== '/assign') {
       this.logger.warn(`/assign handler: parsed command "${command}" did not match — ignoring`);
       return false;
@@ -203,6 +215,19 @@ export class TelegramCarActionsService {
     if (prefix !== 'wfa') return false; // defensive — poll loop already filtered
     if (action === 'noop') {
       await this.telegram.answer(callbackId, 'Open AMS in your browser to view details');
+      return true;
+    }
+    // /car form buttons — slot pick, submit, cancel (no assignment involved)
+    if (action === 'carslot') {
+      await this.actCarSlot(arg1 ?? '', chatId, callbackId);
+      return true;
+    }
+    if (action === 'carsubmit') {
+      await this.actCarSubmit(chatId, callbackId);
+      return true;
+    }
+    if (action === 'carcancel') {
+      await this.actCarCancel(chatId, callbackId);
       return true;
     }
 
@@ -485,6 +510,320 @@ export class TelegramCarActionsService {
     } catch (e) {
       await this.telegram.editCallbackMessage(chatId, callbackId, `⚠️ ${escapeHtml((e as Error).message || 'Assign failed')}`);
       await this.telegram.answer(callbackId, 'Assign failed — see message');
+    }
+  }
+
+  // ============================================================ /car — conversational request form
+
+  /** TTL for an open /car conversation (plan: 15 min). */
+  private static readonly CAR_TTL_MS = 15 * 60 * 1000;
+  /** Vehicle types accepted in the bot (mirrors CarsController's web list). */
+  private static readonly CAR_VEHICLE_TYPES = [
+    'SEDAN', 'SUV', 'PICKUP', 'VAN', 'BUS', 'TRUCK', 'OTHER',
+    'MINIVAN', 'MINIBUS', 'LIMOUSINE', 'STAFF_BUS', 'VAN_CARGO',
+  ];
+
+  /** One /car form draft — every field optional until Submit validates. */
+  /**
+   * Pending /car form drafts per chat. The card lists every field at once;
+   * the user answers with `Field: value` lines in any order (all at once or
+   * gradually), the card re-renders after each reply, Submit validates.
+   */
+  private pendingCarRequests = new Map<string, { draft: Record<string, string | number | undefined>; at: number }>();
+
+  /** Field aliases — Burmese-first + English, matched case-insensitively. */
+  private static readonly CAR_FIELDS: { key: string; aliases: string[] }[] = [
+    { key: 'destination', aliases: ['destination', 'dest', 'သွားမယ့်နေရာ', 'သွားရန်နေရာ'] },
+    { key: 'start', aliases: ['start', 'start time', 'ထွက်မယ့်အချိန်', 'ထွက်ချိန်'] },
+    { key: 'slot', aliases: ['slot', 'time slot', 'အချိန်အပိုင်းအခြား'] },
+    { key: 'end', aliases: ['end', 'end time', 'ပြန်ရောက်မည့်အချိန်', 'ပြန်ချိန်'] },
+    { key: 'passengers', aliases: ['passengers', 'pax', 'လိုက်ပါသူ', 'လိုက်သူ'] },
+    { key: 'vehicle', aliases: ['vehicle', 'vehicle type', 'ကားအမျိုးအစား', 'ကား'] },
+    { key: 'pickup', aliases: ['pickup', 'pickup location', 'တက်မည့်နေရာ', 'တက်ရမည့်နေရာ'] },
+    { key: 'purpose', aliases: ['purpose', 'ရည်ရွယ်ချက်'] },
+    { key: 'notes', aliases: ['notes', 'description', 'မှတ်ချက်'] },
+  ];
+
+  /** /car — open (or re-show) the request form card. */
+  async handleCarCommand(_text: string, chatId: string): Promise<void> {
+    const user = await this.boundUser(chatId);
+    if (!user) {
+      await this.telegram.sendRaw(chatId, '❌ Your Telegram is not linked to an AMS account.');
+      return;
+    }
+    // fresh draft (re-issuing /car resets the form — deliberate and predictable)
+    this.pendingCarRequests.set(chatId, { draft: {}, at: Date.now() });
+    this.sweepCarDrafts();
+    await this.sendRawCard(chatId, this.renderCarCard(chatId));
+  }
+
+  /** Text arriving while a /car conversation is open — field answers or /cancel. */
+  async handleCarText(text: string, chatId: string): Promise<void> {
+    const entry = this.pendingCarRequests.get(chatId);
+    if (!entry) return;
+    if (Date.now() - entry.at > TelegramCarActionsService.CAR_TTL_MS) {
+      this.pendingCarRequests.delete(chatId);
+      await this.sendRawCard(chatId, '⌛ ကားတောင်းခံမှု form က အချိန်ကုန်သွားပါပြီ — /car ကို ပြန်ရိုက်ပါ။ (The form expired — send /car again.)');
+      return;
+    }
+    if (text === '/cancel') {
+      this.pendingCarRequests.delete(chatId);
+      await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
+      return;
+    }
+
+    entry.at = Date.now(); // touch — an active conversation never TTLs mid-typing
+    const unknownKeys: string[] = [];
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      const sep = line.indexOf(':');
+      if (sep <= 0) {
+        unknownKeys.push(line.slice(0, 40));
+        continue;
+      }
+      const key = line.slice(0, sep).trim().toLowerCase();
+      const value = line.slice(sep + 1).trim();
+      const field = TelegramCarActionsService.CAR_FIELDS.find((f) => f.aliases.includes(key));
+      if (!field) {
+        unknownKeys.push(key);
+        continue;
+      }
+      this.setCarField(entry.draft, field.key, value);
+    }
+
+    if (unknownKeys.length > 0) {
+      await this.telegram.sendRaw(
+        chatId,
+        `❓ မသိပါသော အကွက်များ — ${escapeHtml(unknownKeys.join(', '))}\n` +
+          'အကွက်အမည် ရှေ့တွင် ထည့်ရေးပါ — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး\n' +
+          escapeHtml(TelegramCarActionsService.CAR_FIELDS.map((f) => f.aliases[0]).join(', ')),
+      );
+    }
+    await this.sendRawCard(chatId, this.renderCarCard(chatId));
+  }
+
+  private setCarField(draft: Record<string, unknown>, key: string, value: string): void {
+    const v = value.trim();
+    const empty = v === '' || v === '-' || v === '/skip';
+    switch (key) {
+      case 'destination':
+      case 'pickup':
+      case 'purpose':
+      case 'notes':
+        if (empty) delete draft[key];
+        else draft[key] = v;
+        break;
+      case 'start':
+      case 'end':
+        if (empty) delete draft[key];
+        else draft[key] = v; // validated at submit; card shows ❌ if unparseable
+        break;
+      case 'slot':
+        if (empty) delete draft.slot;
+        else {
+          const s = v.toLowerCase().replace(/[\s_-]/g, '');
+          if (s.startsWith('full')) draft.slot = 'FULL_DAY';
+          else if (s.startsWith('halfam') || s.startsWith('am')) draft.slot = 'HALF_DAY_AM';
+          else if (s.startsWith('halfpm') || s.startsWith('pm')) draft.slot = 'HALF_DAY_PM';
+          else if (s.startsWith('custom')) draft.slot = 'CUSTOM_HOURS';
+          // unmatched → left unchanged; the card still shows the previous value
+        }
+        break;
+      case 'passengers': {
+        if (empty) {
+          delete draft.passengers;
+          break;
+        }
+        const n = Number.parseInt(v, 10);
+        if (Number.isFinite(n) && n >= 1 && n <= 60) draft.passengers = n;
+        break;
+      }
+      case 'vehicle': {
+        if (empty) {
+          delete draft.vehicle;
+          break;
+        }
+        const wanted = v.toUpperCase().replace(/[\s_-]/g, '');
+        const hit = TelegramCarActionsService.CAR_VEHICLE_TYPES.find((t) => t.replace(/[\s_-]/g, '') === wanted)
+          ?? TelegramCarActionsService.CAR_VEHICLE_TYPES.find((t) => t.replace(/[\s_-]/g, '').startsWith(wanted) && wanted.length >= 3);
+        if (hit) draft.vehicle = hit;
+        break;
+      }
+    }
+  }
+
+  /** Slot chosen via the card's inline buttons. */
+  private async actCarSlot(slot: string, chatId: string, callbackId: string): Promise<void> {
+    const entry = this.pendingCarRequests.get(chatId);
+    if (!entry) {
+      await this.telegram.answer(callbackId, 'Expired — send /car again');
+      return;
+    }
+    entry.at = Date.now();
+    entry.draft.slot = slot;
+    await this.telegram.answer(callbackId, 'Slot updated');
+    await this.sendRawCard(chatId, this.renderCarCard(chatId));
+  }
+
+  /** ✅ Submit — validate, create + submit as the bound user, confirm. */
+  private async actCarSubmit(chatId: string, callbackId: string): Promise<void> {
+    const entry = this.pendingCarRequests.get(chatId);
+    if (!entry) {
+      await this.telegram.answer(callbackId, 'Expired — send /car again');
+      return;
+    }
+    const user = await this.boundUser(chatId);
+    if (!user) {
+      this.pendingCarRequests.delete(chatId);
+      await this.telegram.answer(callbackId, 'Not authorized');
+      return;
+    }
+    const draft = entry.draft as Record<string, string | number | undefined>;
+    const str = (k: string): string | undefined => (typeof draft[k] === 'string' ? (draft[k] as string) : undefined);
+    const num = (k: string): number | undefined => (typeof draft[k] === 'number' ? (draft[k] as number) : undefined);
+    const problems: string[] = [];
+    const destination = str('destination');
+    if (!destination || destination.trim().length < 2) problems.push('❌ သွားမယ့်နေရာ (Destination) လိုအပ်ပါသည်');
+    const startRaw = str('start');
+    const startIso = startRaw ? this.parseCarDate(startRaw) : null;
+    if (!startIso) problems.push('❌ ထွက်မယ့်အချိန် (Start) — ဥပမာ 2026-09-28 08:30');
+    let endIso: string | null = null;
+    if (draft.slot === 'CUSTOM_HOURS') {
+      const endRaw = str('end');
+      endIso = endRaw ? this.parseCarDate(endRaw) : null;
+      if (!endIso) problems.push('❌ ပြန်ရောက်မည့်အချိန် (End) — Custom slot အတွက် လိုအပ်ပါသည်');
+    }
+    if (problems.length > 0) {
+      await this.telegram.answer(callbackId, 'ဖြည့်စွက်ရန် လိုအပ်သေးသည်');
+      await this.sendRawCard(chatId, `${problems.map((p) => `• ${p}`).join('\n')}\n\n${this.renderCarCard(chatId)}`);
+      return;
+    }
+
+    const actor = { userId: user.id, username: user.username };
+    try {
+      const created = await this.cars.createCarRequest(
+        {
+          destination: destination!,
+          startDate: startIso!,
+          endDate: endIso ?? undefined,
+          timeSlot: (draft.slot as 'FULL_DAY' | 'HALF_DAY_AM' | 'HALF_DAY_PM' | 'CUSTOM_HOURS' | undefined) ?? 'FULL_DAY',
+          passengers: num('passengers') ?? 1,
+          vehicleTypeRequired: str('vehicle'),
+          pickupLocation: str('pickup'),
+          purpose: str('purpose'),
+          description: str('notes'),
+        },
+        actor as never,
+      );
+      await this.workflow.submit(created.id, actor as never);
+      this.pendingCarRequests.delete(chatId);
+      await this.telegram.answer(callbackId, 'တောင်းခံလိုက်ပါပြီ');
+      await this.telegram.sendRaw(
+        chatId,
+        `✅ တောင်းခံလိုက်ပါပြီ — <b>${escapeHtml(created.docNumber)}</b> — ခွင့်ပြုချက် စောင့်နေပါသည်။\n(Submitted — waiting for approval.)`,
+        await this.openInAmsRow(`/requests/${created.id}`),
+      );
+    } catch (e) {
+      // creation/validation errors stay on the card; the conversation stays open for fixing
+      await this.telegram.answer(callbackId, 'မအောင်မြင်ပါ — စစ်ကြည့်ပါ');
+      await this.sendRawCard(chatId, `⚠️ ${escapeHtml((e as Error).message || 'Submit failed')}\n\n${this.renderCarCard(chatId)}`);
+    }
+  }
+
+  private async actCarCancel(chatId: string, callbackId: string): Promise<void> {
+    this.pendingCarRequests.delete(chatId);
+    await this.telegram.answer(callbackId, 'ပယ်ဖျက်လိုက်ပါသည်');
+    await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
+  }
+
+  /** The live form card — every field, ✅/➖/❌ markers, submit/cancel buttons. */
+  private renderCarCard(chatId: string): string {
+    const entry = this.pendingCarRequests.get(chatId);
+    const draft = (entry?.draft ?? {}) as Record<string, string | number | undefined>;
+    const sval = (k: string): string => (typeof draft[k] === 'string' ? (draft[k] as string) : '');
+    const ok = (label: string, value: string | number | undefined) =>
+      value != null && value !== '' ? `✅ ${label}: ${escapeHtml(String(value))}` : `➖ ${label}: —`;
+    const bad = (label: string) => `❌ ${label}: (မမှန်ပါ)`;
+    const startRaw = sval('start');
+    const endRaw = sval('end');
+    const startOk = startRaw ? this.parseCarDate(startRaw) != null : false;
+    const endOk = endRaw ? this.parseCarDate(endRaw) != null : false;
+    const slotLabel: Record<string, string> = {
+      FULL_DAY: 'Full day',
+      HALF_DAY_AM: 'Half AM',
+      HALF_DAY_PM: 'Half PM',
+      CUSTOM_HOURS: 'Custom',
+    };
+    const lines = [
+      '🚗 <b>ကားတောင်းခံမှု — New car request</b>',
+      '────────────────',
+      draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '➖ သွားမယ့်နေရာ: —',
+      draft.start ? (startOk ? `✅ ထွက်မယ့်အချိန်: ${escapeHtml(startRaw)}` : bad('ထွက်မယ့်အချိန်')) : '➖ ထွက်မယ့်အချိန်: —  (ဥပမာ 2026-09-28 08:30)',
+      `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
+      ok('လိုက်ပါသူ', draft.passengers ?? 1),
+      draft.vehicle ? `✅ ကားအမျိုးအစား: ${escapeHtml(String(draft.vehicle))}` : '➖ ကားအမျိုးအစား: —',
+      draft.pickup ? `✅ တက်မည့်နေရာ: ${escapeHtml(String(draft.pickup))}` : '➖ တက်မည့်နေရာ: —',
+      draft.purpose ? `✅ ရည်ရွယ်ချက်: ${escapeHtml(String(draft.purpose))}` : '➖ ရည်ရွယ်ချက်: —',
+      draft.notes ? `✅ မှတ်ချက်: ${escapeHtml(String(draft.notes))}` : '➖ မှတ်ချက်: —',
+      '────────────────',
+      'ဖြည့်ရန် — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး  (တစ်ကြောင်းချင်းလည်းရ / တစ်ခါတည်းလည်းရ)',
+    ].join('\n');
+    return lines;
+  }
+
+  /** Keyboard for the live card — slot shortcuts + submit/cancel. */
+  private carKeyboard(draft: Record<string, unknown>): { inline_keyboard: { text: string; callback_data: string }[][] } {
+    const slot = draft.slot;
+    const b = (text: string, data: string) => ({ text, callback_data: data });
+    return {
+      inline_keyboard: [
+        [
+          b(slot === 'FULL_DAY' ? '☀️ Full day ✓' : '☀️ Full day', 'wfa:carslot:FULL_DAY'),
+          b(slot === 'HALF_DAY_AM' ? '🌅 Half AM ✓' : '🌅 Half AM', 'wfa:carslot:HALF_DAY_AM'),
+          b(slot === 'HALF_DAY_PM' ? '🌆 Half PM ✓' : '🌆 Half PM', 'wfa:carslot:HALF_DAY_PM'),
+          b(slot === 'CUSTOM_HOURS' ? '⏱ Custom ✓' : '⏱ Custom', 'wfa:carslot:CUSTOM_HOURS'),
+        ],
+        [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
+      ],
+    };
+  }
+
+  /** telegram.sendRaw + the /car inline keyboard in one call — same args as telegram.sendRaw. */
+  private async sendRawCard(chatId: string, text: string): Promise<void> {
+    await this.telegram.sendRaw(chatId, text, { reply_markup: this.carKeyboard(this.pendingCarRequests.get(chatId)?.draft ?? {}) });
+  }
+
+  /** "YYYY-MM-DD HH:MM" / "YYYY-MM-DD HHMM" → ISO (Yangon = +06:30, no DST). */
+  private parseCarDate(raw: string): string | null {
+    const m = raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):?(\d{2})?$/);
+    if (!m) return null;
+    const [, y, mo, d, h, mi] = m;
+    const hour = Math.min(23, Number(h));
+    const minute = Number(mi ?? '0');
+    if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) return null;
+    const dt = new Date(`${y}-${mo}-${d}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+06:30`);
+    return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+  }
+
+  /** "Open in AMS" button row when a web URL is configured. */
+  private async openInAmsRow(link: string): Promise<Record<string, unknown>> {
+    const { webUrl } = await this.telegramWebUrl();
+    if (!webUrl) return {};
+    return { reply_markup: { inline_keyboard: [[{ text: '👁 Open in AMS', url: `${webUrl.replace(/\/$/, '')}${link}` }]] } };
+  }
+
+  private async telegramWebUrl(): Promise<{ webUrl: string | null }> {
+    // TelegramService keeps the config logic private — mirror the system_setting read
+    const row = await this.prisma.systemSetting.findUnique({ where: { key: 'telegram.web_url' } });
+    const webUrl = (row?.value ?? '').trim().replace(/^"|"$/g, '');
+    return { webUrl: webUrl || null };
+  }
+
+  private sweepCarDrafts() {
+    const now = Date.now();
+    for (const [k, v] of this.pendingCarRequests) {
+      if (now - v.at > TelegramCarActionsService.CAR_TTL_MS) this.pendingCarRequests.delete(k);
     }
   }
 }

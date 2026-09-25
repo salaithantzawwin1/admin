@@ -52,7 +52,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   /** Reject-reason conversation state + handler (wired by CarsModule). */
   rejects?: {
     handleText(text: string, chatId: string): Promise<void>;
-    /** true while this chat owes a rejection reason (next text = the reason). */
+    hasPending(chatId: string): boolean;
+  };
+  /** /car request-form conversation (wired by CarsModule). */
+  carRequests?: {
+    /** true when the text was a /car command (or consumed by the form). */
+    handleCommand(text: string, chatId: string): Promise<boolean>;
+    handleText(text: string, chatId: string): Promise<void>;
     hasPending(chatId: string): boolean;
   };
   /** AnnouncementsService (wired by AnnouncementsModule) — audience checks for ack buttons. */
@@ -227,6 +233,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       await this.rejects.handleText('/cancel', chatId).catch(() => undefined);
+    }
+    // an open /car form — the next text is field answers (or /cancel aborts).
+    // Runs BEFORE the slash-command fallback so /car itself opens/refreshes
+    // the form while it is already open, and other commands still abort it.
+    if (this.carRequests?.hasPending(chatId)) {
+      if (text === '/cancel' || text === '/car' || !text.startsWith('/')) {
+        await this.carRequests.handleText(text, chatId).catch(() => undefined);
+        return;
+      }
+      await this.carRequests.handleText('/cancel', chatId).catch(() => undefined);
     }
     // slash commands (except /start — the bind/join flow owns it)
     if (text.startsWith('/') && !text.startsWith('/start')) {
