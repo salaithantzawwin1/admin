@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Badge, Button, Empty, Input, PageHeader, Table, statusColor } from '../components/ui';
 import { hasPermission } from '../api';
 import { Modal } from '../components/Modal';
+import { PasswordStrength } from '../components/PasswordStrength';
 import { toast } from '../components/Toast';
 
 interface DepartmentLite {
@@ -59,7 +60,8 @@ export default function Employees() {
   const [rows, setRows] = useState<EmployeeRow[]>([]);
   const [depts, setDepts] = useState<DepartmentLite[]>([]);
   const [branches, setBranches] = useState<BranchLite[]>([]);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(false); // "New employee" dialog
+  const [formError, setFormError] = useState(''); // create-dialog error (modalError is shared by edit/delete dialogs)
   const [form, setForm] = useState({ ...EMPTY });
   const [edit, setEdit] = useState<EmployeeRow | null>(null);
   const [editRoles, setEditRoles] = useState<string[]>([]);
@@ -99,7 +101,7 @@ export default function Employees() {
       .catch(() => setAllUsers([]));
 
   const create = async () => {
-    setModalError('');
+    setFormError('');
     try {
       await api('/org/employees', {
         method: 'POST',
@@ -119,7 +121,7 @@ export default function Employees() {
       toast('Employee created');
       load();
     } catch (e) {
-      setModalError(e instanceof Error ? e.message : 'Failed');
+      setFormError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -208,94 +210,145 @@ export default function Employees() {
         title="Employees"
         subtitle="Employee master data — departments route requests to the right approvers"
         actions={
-          canManage ? <Button onClick={() => setShowForm(!showForm)}>{showForm ? 'Close' : '+ New Employee'}</Button> : undefined
+          canManage ? <Button onClick={() => { setForm({ ...EMPTY }); setFormError(''); setShowForm(true); }}>+ New Employee</Button> : undefined
         }
       />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
+      {/* New employee — dialog (errors show inside) */}
       {showForm && (
-        <div className="mb-5 bg-white border border-gray-200 rounded-xl p-5 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <Input placeholder="Employee No (e.g. EMP-001)" value={form.employeeNo} onChange={(e) => setForm({ ...form, employeeNo: e.target.value })} />
-            <Input placeholder="Full name" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
-            <Input placeholder="Position" value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
-            <Input placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-            <Input placeholder="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
-            <select
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={form.departmentId}
-              onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
-            >
-              <option value="">— Department —</option>
-              {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-            <select
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
-              value={form.branchId}
-              onChange={(e) => setForm({ ...form, branchId: e.target.value })}
-            >
-              <option value="">— Branch —</option>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </div>
-
-          {/* Login account (optional, same step) */}
-          <div className="border-t border-gray-100 pt-3">
-            <label className="flex items-center gap-2 text-sm text-gray-700 mb-2">
-              <input
-                type="checkbox"
-                checked={form.createLogin}
-                onChange={(e) => setForm({ ...form, createLogin: e.target.checked })}
-                className="w-4 h-4 accent-yellow-600"
-              />
-              Create login account (username + password + role)
-            </label>
-            {form.createLogin && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-4">
-                  <label className="flex items-center gap-1.5 text-sm text-gray-700">
-                    <input type="radio" checked={form.authSource === 'LOCAL'} onChange={() => setForm({ ...form, authSource: 'LOCAL' })} className="accent-yellow-600" />
-                    Local account (password stored here)
-                  </label>
-                  <label className="flex items-center gap-1.5 text-sm text-gray-700">
-                    <input type="radio" checked={form.authSource === 'AD'} onChange={() => setForm({ ...form, authSource: 'AD' })} className="accent-yellow-600" />
-                    Windows AD account (password checked by the directory)
-                  </label>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <Input placeholder="Username (AD: same as Windows)" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-                  {form.authSource === 'LOCAL' ? (
-                    <Input placeholder="Password (min 8)" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-                  ) : (
-                    <div className="text-xs text-gray-500 self-center">No password here — the user signs in with their Windows password; AD verifies it.</div>
-                  )}
-                  <select
-                    multiple
-                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white h-24 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
-                    value={form.roles}
-                    onChange={(e) => setForm({ ...form, roles: Array.from(e.target.selectedOptions).map((o) => o.value) })}
-                  >
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                </div>
-                {form.authSource === 'AD' && (
-                  <div className="text-xs text-gray-500">Department, branch, position and name above are stored now — the account works as soon as the person signs in with their Windows credentials.</div>
-                )}
+        <Modal title="New employee" error={formError} wide onClose={() => { setShowForm(false); setFormError(''); }}>
+          <div className="space-y-3">
+            <div className="text-xs text-gray-500">Employee master data — the department decides where their requests route for approval. A login account is optional and can be added later via Edit.</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Employee No *</label>
+                <Input placeholder="e.g. EMP-001" value={form.employeeNo} onChange={(e) => setForm({ ...form, employeeNo: e.target.value })} />
               </div>
-            )}
-          </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Full name *</label>
+                <Input placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Position</label>
+                <Input placeholder="e.g. Staff Officer" value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Department</label>
+                <select
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold w-full"
+                  value={form.departmentId}
+                  onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
+                >
+                  <option value="">— Department —</option>
+                  {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Branch</label>
+                <select
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold w-full"
+                  value={form.branchId}
+                  onChange={(e) => setForm({ ...form, branchId: e.target.value })}
+                >
+                  <option value="">— Branch —</option>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input placeholder="09-xxx" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Email</label>
+                <Input type="email" placeholder="name@company.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              </div>
+            </div>
 
-          <Button
-            onClick={create}
-            disabled={
-              form.employeeNo.length < 4 || form.fullName.length < 2 ||
-              (form.createLogin && (form.username.length < 3 || (form.authSource === 'LOCAL' && form.password.length < 8) || form.roles.length === 0))
-            }
-          >
-            Create Employee
-          </Button>
-        </div>
+            {/* Login account (optional, same step) */}
+            <div className="border-t border-gray-100 pt-3">
+              <label className="flex items-center gap-2 text-sm text-gray-700 mb-2">
+                <input
+                  type="checkbox"
+                  checked={form.createLogin}
+                  onChange={(e) => setForm({ ...form, createLogin: e.target.checked })}
+                  className="w-4 h-4 accent-yellow-600"
+                />
+                Create login account (username + password + role)
+              </label>
+              {form.createLogin && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                      <input type="radio" checked={form.authSource === 'LOCAL'} onChange={() => setForm({ ...form, authSource: 'LOCAL' })} className="accent-yellow-600" />
+                      Local account (password stored here)
+                    </label>
+                    <label className="flex items-center gap-1.5 text-sm text-gray-700">
+                      <input type="radio" checked={form.authSource === 'AD'} onChange={() => setForm({ ...form, authSource: 'AD' })} className="accent-yellow-600" />
+                      Windows AD account (password checked by the directory)
+                    </label>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Username {form.authSource === 'AD' ? '(same as Windows login)' : '*'}</label>
+                      <Input placeholder="e.g. aung.kyaw" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Password {form.authSource === 'LOCAL' ? '(min 8) *' : ''}</label>
+                      {form.authSource === 'LOCAL' ? (
+                        <>
+                          <Input type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                          <PasswordStrength value={form.password} />
+                        </>
+                      ) : (
+                        <div className="text-xs text-gray-500 h-9 flex items-center">No password here — the user signs in with their Windows password; AD verifies it.</div>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Roles *</label>
+                    <div className="flex flex-wrap gap-2">
+                      {ROLES.map((r) => {
+                        const on = form.roles.includes(r);
+                        return (
+                          <button
+                            key={r}
+                            type="button"
+                            className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                              on ? 'bg-yellow-600 border-yellow-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-yellow-400'
+                            }`}
+                            onClick={() =>
+                              setForm({ ...form, roles: on ? form.roles.filter((x) => x !== r) : [...form.roles, r] })
+                            }
+                          >
+                            {r}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {form.authSource === 'AD' && (
+                    <div className="text-xs text-gray-500">Name, department, branch and position above are stored now — the account works as soon as the person signs in with their Windows credentials.</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
+              <Button
+                onClick={create}
+                disabled={
+                  form.employeeNo.length < 4 || form.fullName.length < 2 ||
+                  (form.createLogin && (form.username.length < 3 || (form.authSource === 'LOCAL' && form.password.length < 8) || form.roles.length === 0))
+                }
+              >
+                Create Employee
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       <Table head={['No', 'Name', 'Department', 'Position', 'Linked User', 'Roles', 'Status', 'Actions']}>

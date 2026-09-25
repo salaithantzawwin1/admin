@@ -69,12 +69,15 @@ export function Modal({
   onClose,
   children,
   error,
+  wide,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   /** validation / API error shown as a red banner inside the modal body */
   error?: string | null;
+  /** wider dialog (max-w-2xl) for multi-column forms */
+  wide?: boolean;
 }) {
   useScrollLock(true);
   const trapRef = useFocusTrap<HTMLDivElement>(true);
@@ -93,7 +96,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[85vh] overflow-y-auto outline-none animate-[modalIn_.15s_ease-out]"
+        className={`bg-white rounded-xl shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[85vh] overflow-y-auto outline-none animate-[modalIn_.15s_ease-out]`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">

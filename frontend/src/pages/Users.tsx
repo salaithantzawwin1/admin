@@ -3,6 +3,7 @@ import { api, getUser } from '../api';
 import { Badge, Button, Empty, Input, PageHeader, Table, statusColor } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { PasswordStrength } from '../components/PasswordStrength';
+// PasswordStrength also used in the create-user dialog
 import { toast } from '../components/Toast';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 
@@ -48,14 +49,15 @@ export default function Users() {
   useEffect(load, [load]);
 
   const createUser = async () => {
-    setError('');
+    setModalError('');
     try {
       await api('/users', { method: 'POST', body: form });
       setShowForm(false);
       setForm({ username: '', fullName: '', password: '', roles: ['EMPLOYEE'] });
+      toast('User created');
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setModalError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -84,6 +86,7 @@ export default function Users() {
   const toggleStatus = async (u: UserRow) => {
     const status = u.status === 'ACTIVE' ? 'DISABLED' : 'ACTIVE';
     setError('');
+    setModalError('');
     try {
       await api(`/users/${u.id}/status`, { method: 'PATCH', body: { status } });
       load();
@@ -127,39 +130,62 @@ export default function Users() {
       <PageHeader
         title="Users"
         subtitle="User accounts and role assignment"
-        actions={<Button onClick={() => setShowForm(!showForm)}>{showForm ? 'Close' : '+ New User'}</Button>}
+        actions={<Button onClick={() => { setForm({ username: '', fullName: '', password: '', roles: ['EMPLOYEE'] }); setModalError(''); setShowForm(true); }}>+ New User</Button>}
       />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
+      {/* New user — dialog (errors show inside) */}
       {showForm && (
-        <div className="mb-5 bg-white border border-gray-200 rounded-xl p-5 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-            <Input placeholder="Full name" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
-            <Input placeholder="Password (min 8)" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+        <Modal title="New user account" error={modalError} onClose={() => { setShowForm(false); setModalError(''); }}>
+          <div className="space-y-3">
+            <div className="text-xs text-gray-500">Signs in with username + password. Roles decide what the user sees — changeable later on this page.</div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Username *</label>
+              <Input placeholder="e.g. aung.kyaw" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Full name *</label>
+              <Input placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Password (min 8) *</label>
+              <Input type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              <PasswordStrength value={form.password} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Roles *</label>
+              <div className="flex flex-wrap gap-2">
+                {ALL_ROLES.map((r) => {
+                  const on = form.roles.includes(r);
+                  return (
+                    <button
+                      key={r}
+                      type="button"
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                        on ? 'bg-yellow-600 border-yellow-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-yellow-400'
+                      }`}
+                      onClick={() =>
+                        setForm({
+                          ...form,
+                          roles: on ? form.roles.filter((x) => x !== r) : [...form.roles, r],
+                        })
+                      }
+                    >
+                      {r}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
+              <Button onClick={createUser} disabled={!form.username || !form.fullName || form.password.length < 8 || form.roles.length === 0}>
+                Create User
+              </Button>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {ALL_ROLES.map((r) => (
-              <label key={r} className="inline-flex items-center gap-1.5 text-xs border rounded-full px-3 py-1.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={form.roles.includes(r)}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      roles: e.target.checked ? [...form.roles, r] : form.roles.filter((x) => x !== r),
-                    })
-                  }
-                />
-                {r}
-              </label>
-            ))}
-          </div>
-          <Button onClick={createUser} disabled={!form.username || !form.fullName || form.password.length < 8}>
-            Create User
-          </Button>
-        </div>
+        </Modal>
       )}
 
       <Table head={['Username', 'Full Name', 'Roles', 'Status', 'Telegram', 'Last Login', 'Actions']}>
