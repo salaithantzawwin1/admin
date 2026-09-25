@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
@@ -69,6 +70,9 @@ export default function Suppliers() {
   // item picker for PO draft lines (catalog read is allowed for suppliers viewers)
   const [itemsCache, setItemsCache] = useState<{ id: string; code: string; name: string }[] | null>(null);
   const canManage = hasPermission('inventory.manage') || hasPermission('suppliers.manage');
+  // mirrors the backend OR-gate: page content needs suppliers.read; users who
+  // only hold inventory.read (store staff) get the alias link instead
+  const canViewSuppliers = hasPermission('suppliers.read');
 
   const load = useCallback(() => {
     api<Supplier[]>(`/suppliers${showInactive ? '?all=1' : ''}`).then(setSuppliers).catch(() => setSuppliers([]));
@@ -223,14 +227,30 @@ export default function Suppliers() {
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
-      <Card className="mb-5 p-5">
-        <div className="flex items-center justify-between mb-3">
-          <label className="flex items-center gap-2 text-sm text-gray-600">
-            <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-            Show deactivated
-          </label>
-          <span className="text-xs text-gray-400">{suppliers?.filter((s) => s.isActive).length ?? 0} active supplier(s)</span>
-        </div>
+      {/* suppliers.read gate — mirrors the backend OR-gate (see /suppliers list). */}
+      {!canViewSuppliers && (
+        <Card className="mb-5 p-8 text-center">
+          <div className="text-3xl mb-2">🔒</div>
+          <p className="text-sm text-gray-700 font-medium">You do not have permission to view suppliers.</p>
+          <p className="text-xs text-gray-400 mt-1">"View suppliers" was revoked from your role in the RBAC permission matrix.</p>
+          {hasPermission('inventory.read') && (
+            <p className="text-xs text-gray-500 mt-3">
+              Purchase records &amp; spending are still available on the{' '}
+              <Link to="/inventory" className="text-blue-600 underline">Inventory page</Link>.
+            </p>
+          )}
+        </Card>
+      )}
+
+      {canViewSuppliers && (
+        <Card className="mb-5 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+              Show deactivated
+            </label>
+            <span className="text-xs text-gray-400">{suppliers?.filter((s) => s.isActive).length ?? 0} active supplier(s)</span>
+          </div>
 
         {suppliers === null ? (
           <div className="text-sm text-gray-400 py-4">Loading…</div>
@@ -272,8 +292,9 @@ export default function Suppliers() {
           </table>
         )}
       </Card>
+      )}
 
-      {form && (
+      {canViewSuppliers && form && (
         <Modal title={form.id ? `Edit supplier — ${form.name}` : 'New supplier'} error={modalError} onClose={() => { setForm(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
@@ -306,7 +327,7 @@ export default function Suppliers() {
         </Modal>
       )}
 
-      {deleting && (
+      {canViewSuppliers && deleting && (
         <ConfirmDialog
           title={`Delete supplier ${deleting.name}?`}
           description="Suppliers with purchase history cannot be deleted (deactivate instead). This cannot be undone."
@@ -317,7 +338,7 @@ export default function Suppliers() {
         />
       )}
 
-      {historyFor && (
+      {canViewSuppliers && historyFor && (
         <Modal title={`Purchase history — ${historyFor.name}`} onClose={() => setHistoryFor(null)}>
           {!history ? (
             <div className="text-sm text-gray-400 py-4">Loading…</div>
@@ -391,7 +412,7 @@ export default function Suppliers() {
       )}
 
       {/* vendor management — contacts + PO drafts */}
-      {vendorFor && (
+      {canViewSuppliers && vendorFor && (
         <Modal
           title={`Manage vendor — ${vendorFor.name}`}
           error={modalError}

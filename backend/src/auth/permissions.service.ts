@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { RoleName } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
+import { syncDenyMemoryOnSave } from './permissions-seed';
 
 export interface AuthUserShape {
   id: string;
@@ -103,6 +104,10 @@ export class PermissionsService {
         skipDuplicates: true,
       }),
     ]);
+    // deny-memory: record default-seed codes this save deliberately dropped so
+    // the next restart's seeding cannot resurrect them (and clear deny rows for
+    // codes this save grants back)
+    await syncDenyMemoryOnSave(this.prisma, role.id, codes);
     return this.forRoleNames([roleName as RoleName]);
   }
 }
