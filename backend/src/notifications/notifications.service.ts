@@ -2,12 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { NotificationType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { TelegramService } from '../telegram/telegram.service';
+import { EventsService } from '../events/events.service';
 
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger(NotificationsService.name);
 
-  constructor(private prisma: PrismaService, private telegram: TelegramService) {}
+  constructor(private prisma: PrismaService, private telegram: TelegramService, private events: EventsService) {}
 
   async notify(params: {
     userId: string;
@@ -21,6 +22,12 @@ export class NotificationsService {
     // best-effort Telegram mirror — DB write stays authoritative, Telegram must never fail the flow
     this.telegram.mirrorToUser(params.userId, params.title, params.body, params.link)
       .catch((e) => this.logger.warn(`telegram mirror failed: ${(e as Error).message}`));
+    // live push for open tabs — best-effort, never fails the write
+    try {
+      this.events.publish('notification', { userIds: [params.userId], requestId: params.requestId });
+    } catch {
+      /* SSE push is best-effort */
+    }
     return created;
   }
 
@@ -29,6 +36,7 @@ export class NotificationsService {
     await this.prisma.notification.createMany({
       data: userIds.map((userId) => ({ userId, ...data })),
     });
+    this.events.publish('notification', { userIds, requestId: data.requestId });
     for (const userId of userIds) {
       this.telegram.mirrorToUser(userId, data.title, data.body, data.link)
         .catch((e) => this.logger.warn(`telegram mirror failed: ${(e as Error).message}`));

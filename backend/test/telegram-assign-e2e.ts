@@ -108,15 +108,16 @@ const cars: any = {
 
 const apiLog: Array<{ method: string; payload: any }> = [];
 
-const telegram = new TelegramService(prisma, audit);
+const permissions: any = {
+  forUser: async (userId: string) => (userId === 'u1' ? ['cars.assign', 'approvals.act', 'requests.read.own'] : ['requests.read.own']),
+  usersWithPermissions: async (codes: string[]) => (codes.includes('cars.assign') ? ['u1', 'u2'] : codes.includes('approvals.act') ? ['u1'] : ['u9']),
+};
+
+const telegram = new TelegramService(prisma, audit, permissions, { publish: () => 0 } as any);
 (telegram as any).call = async (method: string, payload?: any) => {
   apiLog.push({ method, payload });
   // sendMessage returns a message_id (as the real API does) so sendAssignment persists it
   return method === 'sendMessage' ? { message_id: 1000 + apiLog.length } : null;
-};
-
-const permissions: any = {
-  forUser: async (userId: string) => (userId === 'u1' ? ['cars.assign', 'approvals.act', 'requests.read.own'] : ['requests.read.own']),
 };
 
 const tgActions = new TelegramCarActionsService(prisma, audit, workflow, cars, telegram, permissions);
@@ -286,12 +287,20 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   // assigner/mirror user lookups, and the assignment row + stage update.
   const ADMIN_CHAT = '555000999';
   prisma.notification = { createMany: async () => undefined, create: async () => undefined } as any;
-  (prisma as any).userRole = { findMany: async () => [{ userId: 'u9' }] }; // Administration roster (assigner u1 NOT in it)
+  // Administration roster now resolves through PermissionsService (usersWithPermissions):
+  // u1 (assigner) + u2 (Administration) hold cars.assign — u9 (the acting admin) is added
+  // dynamically by the dedup scenarios below.
+  (prisma as any).userRole = { findMany: async () => [{ userId: 'u9' }] }; // legacy shape kept for older paths
   (prisma.user as any).findUnique = async ({ where }: any) => {
     if (where.id === 'u1') return { telegramChatId: CHAT_OK };
+    if (where.id === 'u2') return { telegramChatId: ADMIN_CHAT };
     if (where.id === 'u9') return { telegramChatId: ADMIN_CHAT };
     if (where.id === 'rq') return { telegramChatId: '555000888' }; // the requester
     return null;
+  };
+  (prisma.user as any).findMany = async ({ where }: any) => {
+    const ids: string[] = where?.id?.in ?? [];
+    return USERS.filter((u) => ids.includes(u.id) && u.status === 'ACTIVE' && u.telegramChatId);
   };
   const mkAssignment = (id: string) => ({
     id, vehicleId: 'v1', driverId: 'd1', assignedById: 'u1', // assigned via Telegram by u1
@@ -328,13 +337,19 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   await (telegram as any).manualAck('a1', 'returned', { userId: 'u9', username: 'admin1' });
   check(sent('🏁 Car available — CAR-202609-0036').some((m) => m.payload.chat_id === CHAT_OK), 'Back-at-office mirrors to the assigner chat');
 
-  // 15b. assigner who IS Administration must get exactly ONE mirror (deduped)
+  // 15b. assigner who IS Administration must get exactly ONE mirror (deduped):
+  // roster shrinks to the assigner alone (u1) — he must receive exactly one
+  // mirror, not a roster copy + an assigner copy.
   const beforeDedup = sent('✓ U Kyaw noted CAR-202609-0036').length;
-  (prisma.userRole as any).findMany = async () => [{ userId: 'u1' }]; // assigner is in the Administration roster now
+  const realPerms = (telegram as any).permissions;
+  (telegram as any).permissions = {
+    ...realPerms,
+    usersWithPermissions: async (codes: string[]) => (codes.includes('cars.assign') ? ['u1'] : realPerms.usersWithPermissions(codes)),
+  };
   await (telegram as any).manualAck('a2', 'noted', { userId: 'u9', username: 'admin1' });
   const dedupDelta = sent('✓ U Kyaw noted CAR-202609-0036').length - beforeDedup;
   check(dedupDelta === 1, 'assigner who is also Administration receives exactly ONE mirror (no duplicate)');
-  (prisma.userRole as any).findMany = async () => [{ userId: 'u9' }];
+  (telegram as any).permissions = realPerms;
 
   // ---------------------------------------------------------- reject flow (❌ button + reason conversation)
   // approver roster for offerApprovalButtons: our bound admin chat

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
+import { useLiveReload } from '../hooks/useLiveReload';
 
 interface CarRequest {
   id: string;
@@ -104,6 +105,13 @@ export function CarPanel({
   }, [requestId]);
 
   useEffect(load, [load]);
+
+  // live push: driver Telegram taps (Noted/Ready/Back at Office) and re-assignments
+  // refresh this panel instantly; the 15s polling elsewhere stays as fallback
+  useLiveReload(['assignment.updated', 'driver.updated'], (e) => {
+    // only refetch when the signal concerns this request (or fleet-wide driver state)
+    if (!e.requestId || e.requestId === requestId) load();
+  });
 
   // manager-ack visibility: ask the backend whether I am an eligible department manager
   useEffect(() => {

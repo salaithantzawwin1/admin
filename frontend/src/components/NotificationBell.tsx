@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { useLiveReload } from '../hooks/useLiveReload';
 
 interface Notification {
   id: string;
@@ -124,6 +125,12 @@ export function NotificationBell() {
     }, 15000);
     return () => clearInterval(t);
   }, [pollBadge]);
+
+  // Live push: server SSE signals refresh the badge instantly (polling above stays as fallback).
+  useLiveReload(['notification'], () => {
+    if (!document.hidden) pollBadge();
+    if (openRef.current) load(unreadOnly);
+  });
 
   // While the dropdown is open: refresh the visible list every 5s.
   useEffect(() => {

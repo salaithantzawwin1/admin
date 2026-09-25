@@ -5,6 +5,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
+import { useLiveReload } from '../hooks/useLiveReload';
 
 interface Driver {
   id: string;
@@ -170,6 +171,10 @@ export default function Fleet() {
   }, []);
 
   useEffect(load, [load]);
+
+  // live push: absence cron status flips (ON_LEAVE→AVAILABLE …) refresh this page
+  // instantly; the polling on other fleet views stays as the fallback
+  useLiveReload(['driver.updated'], () => load());
 
   const flash = (msg: string) => {
     toast(msg);

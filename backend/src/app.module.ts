@@ -12,6 +12,7 @@ import { OrgModule } from './org/org.module';
 import { AuditModule } from './audit/audit.module';
 import { NumberingModule } from './numbering/numbering.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { EventsModule } from './events/events.module';
 import { AttachmentsModule } from './attachments/attachments.module';
 import { TelegramModule } from './telegram/telegram.module';
 import { WorkflowModule } from './workflow/workflow.module';
@@ -37,6 +38,7 @@ import { HealthController } from './health/health.controller';
     AuditModule,
     NumberingModule,
     NotificationsModule,
+    EventsModule,
     AttachmentsModule,
     WorkflowModule,
     FleetModule,

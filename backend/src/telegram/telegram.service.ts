@@ -4,6 +4,7 @@ import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../auth/permissions.service';
+import { EventsService } from '../events/events.service';
 
 /**
  * Telegram driver-notification bot (Plan: Car assignment → Noted/Arrived/Back flow).
@@ -62,7 +63,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private cachedToken: string | null = null;
   private cachedEnabled = false;
 
-  constructor(private prisma: PrismaService, private audit: AuditService, private permissions: PermissionsService) {}
+  constructor(private prisma: PrismaService, private audit: AuditService, private permissions: PermissionsService, private events: EventsService) {}
 
   async onModuleInit() {
     this.polling = true;
@@ -854,6 +855,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       },
     })) as PrismaCarAssignment;
     await this.notifyStage(updated, action as 'noted' | 'arrived' | 'returned');
+    // live push — open Car Panels / dashboards refetch immediately (best-effort)
+    try {
+      this.events.publish('assignment.updated', { requestId: updated.request.id });
+      this.events.publish('driver.updated', { driverId: updated.driver?.id });
+    } catch {
+      /* SSE push is best-effort */
+    }
     return updated;
   }
 

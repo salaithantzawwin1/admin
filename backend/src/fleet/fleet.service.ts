@@ -7,6 +7,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
 import { TimetableService } from '../settings/timetable.service';
+import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
 
 /** Leave granularity against the Company Time Table. */
@@ -18,6 +19,7 @@ export class FleetService {
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
+    private events: EventsService,
     private telegram: TelegramService,
     private notifications: NotificationsService,
     private permissions: PermissionsService,
@@ -659,9 +661,11 @@ export class FleetService {
       where: { status: 'ACTIVE', startsAt: { lte: now }, endsAt: { gt: now } },
       include: { driver: { select: { id: true, status: true } } },
     });
+    let flipped = 0;
     for (const a of starting) {
       if (a.driver.status === 'AVAILABLE') {
         await this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'ON_LEAVE' } }).catch(() => undefined);
+        flipped++;
       }
     }
     // windows that ended → AVAILABLE (skip drivers now on a trip / inactive)
@@ -672,6 +676,15 @@ export class FleetService {
     for (const a of ended) {
       if (a.driver.status === 'ON_LEAVE') {
         await this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        flipped++;
+      }
+    }
+    // live push — Fleet absences tab + Car Panels refetch right away (best-effort)
+    if (flipped > 0) {
+      try {
+        this.events.publish('driver.updated');
+      } catch {
+        /* SSE push is best-effort */
       }
     }
   }
