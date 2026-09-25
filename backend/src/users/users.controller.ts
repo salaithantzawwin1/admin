@@ -72,6 +72,13 @@ export class UsersController {
     return this.users.setStatus(id, dto.status, this.actor(req));
   }
 
+  /** Lift a "Too many login attempts" lockout before its timer expires. */
+  @Post(':id/unlock')
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  unlock(@Req() req, @Param('id') id: string) {
+    return this.users.unlock(id, this.actor(req));
+  }
+
   @Patch(':id/password')
   @RequirePermissions(PERMISSIONS.USERS_MANAGE)
   resetPassword(@Req() req, @Param('id') id: string, @Body() dto: ResetPasswordDto) {

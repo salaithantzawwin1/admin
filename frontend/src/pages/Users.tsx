@@ -16,6 +16,8 @@ interface UserRow {
   lastLoginAt?: string;
   roles: string[];
   telegram?: { linked: boolean; username: string | null };
+  /** login lockout (Too Many Attempts) — seconds remaining, null/undefined = not locked */
+  lockedSeconds?: number | null;
 }
 
 const ALL_ROLES = [
@@ -105,6 +107,17 @@ export default function Users() {
       toast('Password reset');
     } catch (e) {
       setModalError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const doUnlock = async (u: UserRow) => {
+    setModalError('');
+    try {
+      await api(`/users/${u.id}/unlock`, { method: 'POST' });
+      toast(`${u.username} unlocked — they can sign in again immediately.`);
+      load();
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : 'Unlock failed');
     }
   };
 
@@ -206,7 +219,16 @@ export default function Users() {
                 ))}
               </div>
             </td>
-            <td className="px-4 py-3"><Badge color={statusColor(u.status)}>{u.status}</Badge></td>
+            <td className="px-4 py-3">
+              <div className="flex items-center gap-1.5">
+                <Badge color={statusColor(u.status)}>{u.status}</Badge>
+                {(u.lockedSeconds ?? 0) > 0 && (
+                  <Badge color="red" title={`Too many failed logins — locked for ${Math.ceil((u.lockedSeconds ?? 0) / 60)} more minute(s)`}>
+                    🔒 {Math.ceil((u.lockedSeconds ?? 0) / 60)}m
+                  </Badge>
+                )}
+              </div>
+            </td>
             <td className="px-4 py-3 whitespace-nowrap">
               {u.telegram?.linked ? (
                 <span className="text-green-700" title="User receives AMS notifications in Telegram">✓ {u.telegram.username ? `@${u.telegram.username}` : 'Linked'}</span>
@@ -219,6 +241,15 @@ export default function Users() {
               <div className="flex flex-wrap justify-end gap-1.5">
                 <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => openEdit(u)}>Edit</button>
                 <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => { setResetFor(u); setNewPassword(''); }}>Password</button>
+                {(u.lockedSeconds ?? 0) > 0 && (
+                  <button
+                    className="text-xs px-2 py-1 rounded border border-blue-300 text-blue-700 hover:bg-blue-50"
+                    title={`Too many failed logins — unlock so they can sign in again immediately`}
+                    onClick={() => doUnlock(u)}
+                  >
+                    🔓 Unlock
+                  </button>
+                )}
                 <button
                   className={`text-xs px-2 py-1 rounded border ${u.status === 'ACTIVE' ? 'border-yellow-300 text-yellow-700 hover:bg-yellow-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}
                   disabled={u.username === me?.username}

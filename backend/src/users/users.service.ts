@@ -2,11 +2,12 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
+import { LoginThrottleService } from '../auth/login-throttle.service';
 import { RoleName, UserStatus } from '@prisma/client';
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService, private audit: AuditService) {}
+  constructor(private prisma: PrismaService, private audit: AuditService, private loginThrottle: LoginThrottleService) {}
 
   async list(page = 1, pageSize = 25) {
     const [items, total] = await this.prisma.$transaction([
@@ -30,9 +31,28 @@ export class UsersService {
         userRoles: undefined,
         telegram: { linked: Boolean(u.telegramChatId), username: u.telegramUsername },
         telegramChatId: undefined,
+        // login lockout (Too Many Attempts) — seconds remaining, null = not locked
+        lockedSeconds: this.loginThrottle.lockedSeconds(u.username),
       })),
       total, page, pageSize,
     };
+  }
+
+  /**
+   * Administration unlock — lifts a login lockout (Too Many Attempts) before
+   * its 15-minute timer expires. Also resets the failure counters so the very
+   * next login attempt starts clean.
+   */
+  async unlock(id: string, actor: { userId: string; username: string }) {
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('User not found');
+    const cleared = this.loginThrottle.unlockByUsername(user.username);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'USER_UNLOCKED', module: 'USERS', recordId: id,
+      newValue: { username: user.username, throttleEntriesCleared: cleared },
+    });
+    return { success: true, cleared };
   }
 
   /** Administration: force-unbind a user's Telegram chat (lost phone, re-assignment…). */
