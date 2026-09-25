@@ -7,9 +7,9 @@
 set -u
 BASE=http://127.0.0.1:3000/api
 
-tok() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$1" "$2"; }
-uid() { docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT id FROM users WHERE username = '$1'\"" | tr -d '\r\n '; }
-J() { docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})" "$1"; }
+tok() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$1" "$2"; }
+uid() { docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT id FROM users WHERE username = '$1'\"" | tr -d '\r\n '; }
+J() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})" "$1"; }
 
 ATOKEN=$(tok "$(uid admin1)" admin1)        # ADMINISTRATION + EMPLOYEE
 ETOKEN=$(tok "$(uid employee1)" employee1)  # EMPLOYEE
@@ -53,18 +53,18 @@ curl -s -X PATCH -H "Authorization: Bearer $STOKEN" -H 'Content-Type: applicatio
   -d '{"permissions":["audit.read"]}' "$BASE/auth/permissions/roles/SYSTEM_ADMIN" | J "'blocked='+(!j.success)"
 
 echo "== 10) matrix edits audit-logged =="
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE module='RBAC' ORDER BY \\\"createdAt\\\" DESC LIMIT 2\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE module='RBAC' ORDER BY \\\"createdAt\\\" DESC LIMIT 2\""
 
 echo "== 11) unknown role edit (expect success=false) =="
 curl -s -X PATCH -H "Authorization: Bearer $STOKEN" -H 'Content-Type: application/json' \
   -d '{"permissions":[]}' "$BASE/auth/permissions/roles/NO_SUCH_ROLE" | J "'handled='+(!j.success)"
 
 echo "== 12) permissions persist in DB (final state) =="
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT r.name||' => '||COUNT(p.code) FROM roles r JOIN \\\"role_permissions\\\" rp ON rp.\\\"roleId\\\"=r.id JOIN permissions p ON p.id=rp.\\\"permissionId\\\" WHERE r.name IN ('PURCHASING','FINANCE') GROUP BY r.name ORDER BY r.name\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT r.name||' => '||COUNT(p.code) FROM roles r JOIN \\\"role_permissions\\\" rp ON rp.\\\"roleId\\\"=r.id JOIN permissions p ON p.id=rp.\\\"permissionId\\\" WHERE r.name IN ('PURCHASING','FINANCE') GROUP BY r.name ORDER BY r.name\""
 
 echo "== 13) suppliers.read/manage — admin1 (expect 200 / 200) =="
 curl -s -o /dev/null -w 'list=%{http_code}\n' -H "Authorization: Bearer $ATOKEN" "$BASE/suppliers"
-SID=$(docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM suppliers LIMIT 1"' | tr -d '\r\n ')
+SID=$(docker exec ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM suppliers LIMIT 1"' | tr -d '\r\n ')
 curl -s -o /dev/null -w 'history=%{http_code}\n' -H "Authorization: Bearer $ATOKEN" "$BASE/suppliers/$SID/history"
 
 echo "== 14) employee1 suppliers list (200 via inventory.read OR-gate; write access blocked in 15) =="
@@ -75,5 +75,5 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $ETOK
   -d '{"summary":"should be blocked"}' "$BASE/suppliers/$SID/contact-logs"
 
 echo "== 16) suppliers codes — seeded grants per role =="
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT r.name||': '||string_agg(p.code, ',' ORDER BY p.code) FROM roles r JOIN \\\"role_permissions\\\" rp ON rp.\\\"roleId\\\"=r.id JOIN permissions p ON p.id=rp.\\\"permissionId\\\" WHERE p.code LIKE 'suppliers%' GROUP BY r.name ORDER BY r.name\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT r.name||': '||string_agg(p.code, ',' ORDER BY p.code) FROM roles r JOIN \\\"role_permissions\\\" rp ON rp.\\\"roleId\\\"=r.id JOIN permissions p ON p.id=rp.\\\"permissionId\\\" WHERE p.code LIKE 'suppliers%' GROUP BY r.name ORDER BY r.name\""
 echo "DONE"

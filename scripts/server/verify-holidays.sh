@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Verify the holidays endpoints on the Testing stack.
 set -e
-docker exec ams-backend-1 node -e "
+docker exec ams-test-backend-1 node -e "
 const jwt=require('jsonwebtoken');
 const {PrismaService}=require('/app/dist/prisma/prisma.module');
 (async()=>{

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================
 # AMS — Deploy the TESTING stack on this server (192.168.100.110).
-# One-stack policy: this is THE deploy script for day-to-day work.
+# TESTING = project "ams-test" → UI http://192.168.100.110:8030
+# (PRODUCTION = project "ams" on the plain :80 URL — deploy-prod.sh)
 #
 # What it does that plain `up -d --build` forgets:
 #   1. pulls the latest code first — a stale checkout silently re-deploys old
@@ -18,7 +19,7 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$DIR"
-UI_URL="http://127.0.0.1"
+UI_URL="http://127.0.0.1:8030"
 
 COMPOSE="docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test"
 
@@ -60,4 +61,4 @@ else
 fi
 
 echo
-echo "DONE — testing UI: http://192.168.100.110/  (Ctrl+Shift+R in the browser after deploys!)"
+echo "DONE — TESTING UI: http://192.168.100.110:8030  (PRODUCTION on :80; Ctrl+Shift+R in the browser after deploys!)"

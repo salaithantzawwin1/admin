@@ -6,17 +6,17 @@
 set -u
 BASE=http://127.0.0.1:3000/api
 
-ETOKEN=$(docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:'employee1'}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$(docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM users WHERE username = '\''employee1'\''"' | tr -d '\r\n ')")
-ATOKEN=$(docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:'admin1'}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$(docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM users WHERE username = '\''admin1'\''"' | tr -d '\r\n ')")
+ETOKEN=$(docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:'employee1'}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$(docker exec ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM users WHERE username = '\''employee1'\''"' | tr -d '\r\n ')")
+ATOKEN=$(docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:'admin1'}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$(docker exec ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT id FROM users WHERE username = '\''admin1'\''"' | tr -d '\r\n ')")
 # settings endpoints are users.manage-gated (same as AD/holidays) — use a SYSTEM_ADMIN account
-SAID=$(docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT u.id FROM users u JOIN user_roles ur ON ur.\"userId\" = u.id JOIN roles r ON r.id = ur.\"roleId\" WHERE r.name = '\''SYSTEM_ADMIN'\'' LIMIT 1"' | tr -d '\r\n ')
-SA_USER=$(docker exec ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT u.username FROM users u JOIN user_roles ur ON ur.\"userId\" = u.id JOIN roles r ON r.id = ur.\"roleId\" WHERE r.name = '\''SYSTEM_ADMIN'\'' LIMIT 1"' | tr -d '\r\n ')
-STOKEN=$(docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$SAID" "$SA_USER")
+SAID=$(docker exec ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT u.id FROM users u JOIN user_roles ur ON ur.\"userId\" = u.id JOIN roles r ON r.id = ur.\"roleId\" WHERE r.name = '\''SYSTEM_ADMIN'\'' LIMIT 1"' | tr -d '\r\n ')
+SA_USER=$(docker exec ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tAc "SELECT u.username FROM users u JOIN user_roles ur ON ur.\"userId\" = u.id JOIN roles r ON r.id = ur.\"roleId\" WHERE r.name = '\''SYSTEM_ADMIN'\'' LIMIT 1"' | tr -d '\r\n ')
+STOKEN=$(docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$SAID" "$SA_USER")
 echo "settings actor: $SA_USER ($SAID)"
 
 # SQL via stdin so embedded double-quoted identifiers survive every shell layer
-q() { printf '%s' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
-json() { docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const o=JSON.parse(s);console.log(o['$1']??'MISSING')}catch(e){console.log('PARSE_FAIL')}})"; }
+q() { printf '%s' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+json() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const o=JSON.parse(s);console.log(o['$1']??'MISSING')}catch(e){console.log('PARSE_FAIL')}})"; }
 
 echo "--- 0) telegram settings defaults (system admin) + employee 403 check:"
 curl -s -H "Authorization: Bearer $STOKEN" "$BASE/settings/telegram"; echo

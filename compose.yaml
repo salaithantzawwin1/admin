@@ -1,5 +1,10 @@
 # =============================================================
 # AMS — Base Compose (test & prod overrides: compose.test.yaml / compose.prod.yaml)
+#
+# DESIGNATION (2026-09-25):
+#   PRODUCTION  = project "ams"      → UI http://192.168.100.110 (:80)  — the real data
+#   TESTING     = project "ams-test" → UI http://192.168.100.110:8030 — disposable
+# See docs/DEPLOYMENT.md §1.
 # =============================================================
 name: ams
 
@@ -47,6 +52,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_ENV_LABEL: ${VITE_ENV_LABEL:-Production}
     restart: unless-stopped
     depends_on:
       - backend

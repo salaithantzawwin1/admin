@@ -7,13 +7,13 @@
 set -u
 BASE=http://127.0.0.1:3000/api
 
-PGU=$(docker exec ams-db-1 printenv POSTGRES_USER)
-PGD=$(docker exec ams-db-1 printenv POSTGRES_DB)
+PGU=$(docker exec ams-test-db-1 printenv POSTGRES_USER)
+PGD=$(docker exec ams-test-db-1 printenv POSTGRES_DB)
 # psql runs directly (no sh -c nesting) so quoted identifiers in $1 survive
-q() { docker exec ams-db-1 psql -U "$PGU" -d "$PGD" -tAc "$1" | tr -d '\r\n '; }
+q() { docker exec ams-test-db-1 psql -U "$PGU" -d "$PGD" -tAc "$1" | tr -d '\r\n '; }
 
-tok() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$1" "$2"; }
-J() { docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})" "$1"; }
+tok() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$1" "$2"; }
+J() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})" "$1"; }
 
 SA=$(q "SELECT u.id FROM users u JOIN user_roles ur ON ur.\"userId\"=u.id JOIN roles r ON r.id=ur.\"roleId\" WHERE r.name='SYSTEM_ADMIN' AND u.status='ACTIVE' LIMIT 1")
 SAT=$(tok "$SA" sysadmin)
@@ -51,5 +51,5 @@ q "SELECT action FROM audit_logs WHERE action LIKE 'EMPLOYEE_LOGIN%' ORDER BY \"
 echo "== 8) cleanup =="
 curl -s -o /dev/null -w 'user_del=%{http_code}\n' -X DELETE -H "Authorization: Bearer $SAT" "$BASE/users/$TUID"
 q "SELECT 'emp_name_restored_check='||\"fullName\" FROM employees WHERE id='$EMP'"
-docker exec ams-db-1 psql -U "$PGU" -d "$PGD" -c "DELETE FROM audit_logs WHERE \"newValue\"::text LIKE '%e2e_linkuser%' OR \"oldValue\"::text LIKE '%e2e_linkuser%'" >/dev/null
+docker exec ams-test-db-1 psql -U "$PGU" -d "$PGD" -c "DELETE FROM audit_logs WHERE \"newValue\"::text LIKE '%e2e_linkuser%' OR \"oldValue\"::text LIKE '%e2e_linkuser%'" >/dev/null
 echo DONE

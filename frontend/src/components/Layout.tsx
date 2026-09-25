@@ -26,6 +26,11 @@ const nav = [
 
 const SIDEBAR_KEY = 'ams_sidebar';
 
+// Environment badge in the header — injected at build time by the Dockerfiles
+// (VITE_ENV_LABEL=Production on the :80 stack, Testing on the :8030 stack).
+const ENV_LABEL: string =
+  ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_ENV_LABEL) ?? 'AMS';
+
 export function Layout() {
   const navigate = useNavigate();
   const [user, setUser] = useState<AuthUser | null>(getUser());
@@ -103,7 +108,7 @@ export function Layout() {
             </div>
             <div className="min-w-0">
               <div className="font-semibold text-gray-900 text-sm sm:text-base truncate">AMS — Administration Management System</div>
-              <div className="text-xs text-gray-400">Testing Environment · v0.1.0</div>
+              <div className="text-xs text-gray-400">{ENV_LABEL} · v0.1.0</div>
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">

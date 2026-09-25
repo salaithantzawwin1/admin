@@ -8,11 +8,12 @@
 #     NOTE: moves the real Telegram chat binding (1501493695) from any previous
 #     holder (admin1) to this user — one chat = one binding.
 set -u
-BASE=http://127.0.0.1:3000/api
+# Testing stack = project ams-test → backend loopback :3011 (UI :8030)
+BASE=http://127.0.0.1:3011/api
 CHAT=1501493695
 
-q() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
-TOKEN_OF() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
+q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
 
 echo "=== 1) COUNTS BEFORE ==="
 echo "car docs:    $(q "SELECT count(*) FROM request_documents WHERE \"docType\"='CAR_REQUEST'")"
@@ -50,7 +51,7 @@ if [ -n "$PREV" ]; then
   echo "moving chat $CHAT away from: $PREV (their binding is freed — they can re-link from Profile later)"
   q "UPDATE users SET \"telegramChatId\"=NULL, \"telegramUsername\"=NULL WHERE \"telegramChatId\"='$CHAT'" >/dev/null
 fi
-HASH=$(docker exec ams-backend-1 node -e "console.log(require('bcryptjs').hashSync('Testing#2026',10))")
+HASH=$(docker exec ams-test-backend-1 node -e "console.log(require('bcryptjs').hashSync('Testing#2026',10))")
 q "INSERT INTO users (id, username, email, \"passwordHash\", \"fullName\", \"telegramChatId\", \"telegramUsername\", \"createdAt\", \"updatedAt\") VALUES (gen_random_uuid(), 'salaithantzawwin', 'salai.tz@ams-test.local', '$HASH', 'Salai Thant Zaw (Testing)', '$CHAT', 'salaithantzawwin', now(), now())" >/dev/null
 UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
 echo "user id: $UID_"
@@ -65,7 +66,7 @@ echo "employee dept: $DEPT"
 
 echo "=== 5) LOGIN + PERMISSION SANITY ==="
 LOGIN=$(curl -s -X POST -H 'Content-Type: application/json' -d '{"username":"salaithantzawwin","password":"Testing#2026"}' "$BASE/auth/login")
-echo "$LOGIN" | docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log('login:',j.user?j.user.username+' roles='+JSON.stringify(j.user.roles):JSON.stringify(j).slice(0,140))})"
+echo "$LOGIN" | docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log('login:',j.user?j.user.username+' roles='+JSON.stringify(j.user.roles):JSON.stringify(j).slice(0,140))})"
 TTOKEN=$(TOKEN_OF "$UID_" salaithantzawwin)
 echo "joins access (users.manage): $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TTOKEN" "$BASE/settings/telegram/joins") (expect 200)"
 echo "cars assign perm probe: $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TTOKEN" "$BASE/cars/requests/approved-unassigned") (expect 200)"

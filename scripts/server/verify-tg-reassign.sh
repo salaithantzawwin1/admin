@@ -4,8 +4,8 @@
 set -u
 BASE=http://127.0.0.1:3000/api
 
-q() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
-TOKEN_OF() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'10m'}))" "$1" "$2"; }
+q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'10m'}))" "$1" "$2"; }
 POST() { curl -s -X POST -H "Authorization: Bearer $STOKEN" -H 'Content-Type: application/json' -d "$2" "$BASE$1"; }
 
 SAID=$(q "SELECT u.id FROM users u JOIN user_roles ur ON ur.\"userId\"=u.id JOIN roles r ON r.id=ur.\"roleId\" WHERE r.name='SYSTEM_ADMIN' LIMIT 1")
@@ -22,7 +22,7 @@ echo "targets: '$EMPNAME' / '$OTHNAME' / driver '$DRVNAME'"
 echo "--- 0) reset test state (fresh PENDING join for chat $CHAT @e2emover):"
 q "DELETE FROM telegram_join_requests WHERE \"chatId\"='$CHAT'"
 q "UPDATE users SET \"telegramChatId\"=NULL, \"telegramUsername\"=NULL WHERE id='$EMPID'"
-printf 'INSERT INTO telegram_join_requests (id, "chatId", "tgUsername", "displayName", status, "updatedAt") VALUES (gen_random_uuid(), '\''%s'\'', '\''e2emover'\'', '\''E2E Mover'\'', '\''PENDING'\'', now());\n' "$CHAT" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' >/dev/null
+printf 'INSERT INTO telegram_join_requests (id, "chatId", "tgUsername", "displayName", status, "updatedAt") VALUES (gen_random_uuid(), '\''%s'\'', '\''e2emover'\'', '\''E2E Mover'\'', '\''PENDING'\'', now());\n' "$CHAT" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' >/dev/null
 JID=$(q "SELECT id FROM telegram_join_requests WHERE \"chatId\"='$CHAT'")
 echo "join=$JID"
 
@@ -32,7 +32,7 @@ echo "  $EMPNAME chat: $(q "SELECT COALESCE(\"telegramChatId\",'NULL') FROM user
 echo "  join row: $(q "SELECT status||' user='||COALESCE(\"boundUserId\"::text,'-') FROM telegram_join_requests WHERE id='$JID'")"
 
 echo "--- 2) listJoins drift enrichment (APPROVED):"
-curl -s -H "Authorization: Bearer $STOKEN" "$BASE/settings/telegram/joins?status=APPROVED" | docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s).find(x=>x.id===process.argv[1]);console.log('  bound =',j&&j.bound?j.bound.kind+':'+j.bound.name:'MISSING')})" "$JID"
+curl -s -H "Authorization: Bearer $STOKEN" "$BASE/settings/telegram/joins?status=APPROVED" | docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s).find(x=>x.id===process.argv[1]);console.log('  bound =',j&&j.bound?j.bound.kind+':'+j.bound.name:'MISSING')})" "$JID"
 
 echo "--- 3) approve again (expect 409 already approved):"
 POST "/settings/telegram/joins/$JID/approve" "{\"userId\":\"$EMPID\"}" | head -c 120; echo

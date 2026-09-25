@@ -1,12 +1,27 @@
 # =============================================================
-# AMS — Testing environment overrides (Testing Server)
+# AMS — TESTING overrides (project: ams-test)
+# Designation (2026-09-25): TESTING lives on
+#   http://192.168.100.110:8030 — disposable data, reseedable.
+#   PRODUCTION is the plain :80 URL (compose.prod.yaml).
 # Usage: docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build
 # =============================================================
+name: ams-test
+
 services:
   backend:
+    # base maps backend on 127.0.0.1:3000 — remap to 3011 so production's
+    # backend keeps :3000 and both stacks can run side by side.
+    ports: !override
+      - "127.0.0.1:3011:3000"
     environment:
       APP_ENV: testing
 
-  # Frontend port comes from the base compose.yaml ("80:80") — the plain
-  # URL http://192.168.100.110/ is the one and only AMS address. The old
-  # :8080 legacy mapping was removed (2026-09-24): update old bookmarks.
+  frontend:
+    # Testing serves the UI on :8030 — separate from production (:80).
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_ENV_LABEL: Testing
+    ports: !override
+      - "8030:80"

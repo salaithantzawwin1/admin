@@ -69,11 +69,11 @@ R "docker --version && docker compose version && free -h | head -2 && df -h / | 
 if [ "${PROVISION_DEPLOY:-0}" = "1" ]; then
   echo "== [6/6] Building & starting the $SETUP_ENV stack =="
   if [ "$SETUP_ENV" = "prod" ]; then
-    R "cd /opt/admin && docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod up -d --build && sleep 6 && curl -fsS http://127.0.0.1:3010/api/health"
-    echo "DONE — prod UI: http://$NEW_HOST:3080"
+    R "cd /opt/admin && docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod up -d --build && sleep 6 && curl -fsS http://127.0.0.1:3000/api/health"
+    echo "DONE — PRODUCTION UI: http://$NEW_HOST/ (plain port 80)"
   else
-    R "cd /opt/admin && docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build && sleep 6 && curl -fsS http://127.0.0.1:80/api/health"
-    echo "DONE — testing UI: http://$NEW_HOST/ (plain port 80)"
+    R "cd /opt/admin && docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test up -d --build && sleep 6 && curl -fsS http://127.0.0.1:3011/api/health"
+    echo "DONE — TESTING UI: http://$NEW_HOST:8030"
   fi
 else
   echo "== [6/6] skipped (set PROVISION_DEPLOY=1 to also start the stack) =="
@@ -84,4 +84,4 @@ echo "NEXT STEPS:"
 echo "  1. Edit secrets on the new server:  nano /opt/admin/.env.$SETUP_ENV"
 echo "     (POSTGRES_PASSWORD, JWT_SECRET, SEED_PASSWORD — use DIFFERENT values than 110!)"
 echo "  2. Start the stack (see docs/DEPLOYMENT.md §Deploy elsewhere)"
-echo "  3. Health check: curl http://$NEW_HOST/api/health  (or :3010 for prod backend)"
+echo "  3. Health check: curl http://$NEW_HOST/api/health (prod) or :3011/api/health (testing)"

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run on 192.168.100.110: verify RBAC deny-memory deployment state.
 set -e
-docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' <<'SQL'
+docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' <<'SQL'
 \pset pager off
 SELECT migration_name, finished_at IS NOT NULL AS applied
 FROM _prisma_migrations ORDER BY finished_at DESC NULLS LAST LIMIT 3;

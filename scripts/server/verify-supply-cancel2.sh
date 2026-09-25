@@ -3,8 +3,8 @@
 # supply stays PENDING (out-of-stock) → admin cancel → CANCELLED + requester notified.
 set -u
 BASE=http://127.0.0.1:3000/api
-q() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
-TOKEN_OF() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
+q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
 UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
 TTOKEN=$(TOKEN_OF "$UID_" salaithantzawwin)
 SAID=$(q "SELECT u.id FROM users u JOIN user_roles ur ON ur.\"userId\"=u.id JOIN roles r ON r.id=ur.\"roleId\" WHERE r.name='SYSTEM_ADMIN' LIMIT 1")
@@ -15,7 +15,7 @@ echo "item with lowest balance: $ITEM (balance=$BAL)"
 QTY=$((BAL + 500))
 SUP=$(curl -s -X POST -H "Authorization: Bearer $TTOKEN" -H 'Content-Type: application/json' \
   -d "{\"items\":[{\"itemId\":\"$ITEM\",\"quantity\":$QTY}],\"note\":\"out-of-stock cancel E2E\"}" "$BASE/inventory/requests")
-SREQ=$(printf '%s' "$SUP" | docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.requestId||j.id)})")
+SREQ=$(printf '%s' "$SUP" | docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.requestId||j.id)})")
 echo "doc: $(q "SELECT \"docNumber\" FROM request_documents WHERE id='$SREQ'") (qty $QTY > stock $BAL)"
 curl -s -X POST -H "Authorization: Bearer $TTOKEN" "$BASE/requests/$SREQ/submit" >/dev/null
 curl -s -X POST -H "Authorization: Bearer $STOKEN" -H 'Content-Type: application/json' -d '{}' "$BASE/requests/$SREQ/approve" >/dev/null

@@ -6,7 +6,7 @@
 #
 # Run on the server:  bash /opt/admin/scripts/server/purge-all-car-docs.sh
 set -u
-q() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
 
 echo "== 0. before =="
 q "SELECT '  CAR docs: ' || count(*) FROM request_documents WHERE \"docNumber\" LIKE 'CAR-%'"

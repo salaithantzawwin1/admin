@@ -2,9 +2,10 @@
 # Run on 192.168.100.110: verify prod RBAC with synthetic role-holder users
 # (prod DB has no real users yet — create temp ones, probe, then remove).
 set -e
-BASE=http://127.0.0.1:3010/api
-DB=ams-prod-db-1
-BE=ams-prod-backend-1
+BASE=http://127.0.0.1:3000/api
+# Production = project "ams" (UI :80, backend loopback :3000)
+DB=ams-db-1
+BE=ams-backend-1
 PH=$(docker exec $DB printenv POSTGRES_PASSWORD)
 
 mkuser() { # $1=username $2=role

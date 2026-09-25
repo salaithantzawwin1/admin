@@ -2,8 +2,8 @@
 # supply admin-cancel leg: approved supply request → admin cancel → requester notified
 set -u
 BASE=http://127.0.0.1:3000/api
-q() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
-TOKEN_OF() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
+q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
 UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
 TTOKEN=$(TOKEN_OF "$UID_" salaithantzawwin)
 SAID=$(q "SELECT u.id FROM users u JOIN user_roles ur ON ur.\"userId\"=u.id JOIN roles r ON r.id=ur.\"roleId\" WHERE r.name='SYSTEM_ADMIN' LIMIT 1")
@@ -12,7 +12,7 @@ ITEM=$(q "SELECT id FROM inventory_items WHERE balance > 5 ORDER BY \"createdAt\
 echo "item: $ITEM"
 SUP=$(curl -s -X POST -H "Authorization: Bearer $TTOKEN" -H 'Content-Type: application/json' \
   -d "{\"items\":[{\"itemId\":\"$ITEM\",\"quantity\":2}],\"note\":\"cancel E2E\"}" "$BASE/inventory/requests")
-SREQ=$(printf '%s' "$SUP" | docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.requestId||j.id)})")
+SREQ=$(printf '%s' "$SUP" | docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(j.requestId||j.id)})")
 echo "supply doc: $(q "SELECT \"docNumber\" FROM request_documents WHERE id='$SREQ'")"
 curl -s -X POST -H "Authorization: Bearer $TTOKEN" "$BASE/requests/$SREQ/submit" >/dev/null
 curl -s -X POST -H "Authorization: Bearer $STOKEN" -H 'Content-Type: application/json' -d '{}' "$BASE/requests/$SREQ/approve" >/dev/null

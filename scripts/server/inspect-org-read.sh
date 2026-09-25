@@ -1,7 +1,7 @@
 #!/bin/bash
 # Inspect: who holds org.read, where does myothiri's access come from
 set -e
-docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' <<'SQL'
+docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' <<'SQL'
 \pset pager off
 -- all roles holding org.read
 SELECT r.name AS role

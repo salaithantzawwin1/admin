@@ -1,6 +1,6 @@
 # AMS — Development & Deployment Guide
 
-> Last updated: 2026-09-23 (single-server topology + future-server playbook)
+> Last updated: **2026-09-25 — ENVIRONMENT REDESIGNATION (see §1b)**
 > Verified on: adminsrv (192.168.100.110, Ubuntu 22.04.5 LTS VM, Docker 29.8.1, Compose v5.5.1)
 
 ## 1. Servers & topology
@@ -20,20 +20,33 @@ everything is finished, deploy the same code to a **physical server** (§8).
 lives in git (GitHub `salaithantzawwin1/admin`, branch `main`) + the `.env.*`
 secrets that live only on servers (never in git).
 
-### Current stacks on 192.168.100.110
+## 1b. ⭐ ENVIRONMENT DESIGNATION — which URL is which (READ THIS FIRST)
 
-> **✅ CURRENT POLICY (2026-09-24) — ONE stack on this server.**
-> The VM runs the **testing stack only** (`ams`, UI on `:80`). The parallel
-> production stack (`ams-prod`, UI `:3080`) is **stopped/retired until the
-> physical server exists** — running both doubled RAM/CPU for no benefit and
-> made every deploy ambiguous (which stack am I updating?). The physical
-> server (§8) becomes the single production host; until then `:80` is the one
-> and only AMS URL. The prod compose files stay in git, ready for that day.
+> **Effective 2026-09-25 (user decision) — this reverses the old policy.**
+> Both stacks run side by side on 110 from the same checkout:
+>
+> | | URL | Compose project | Env label in header | Data |
+> |---|---|---|---|---|
+> | **PRODUCTION** | **`http://192.168.100.110/` (port 80, no port in URL)** | `ams` (`compose.prod.yaml` + `.env.prod`) | **Production** | **REAL data** — `ams_db_data`, `ams_uploads_data` |
+> | **TESTING** | **`http://192.168.100.110:8030`** | `ams-test` (`compose.test.yaml` + `.env.test`) | **Testing** | disposable/reseedable — `ams-test_db_data`, `ams-test_uploads_data` |
+>
+> - **Users work in `http://192.168.100.110/` — that is PRODUCTION now.** Treat its
+>   data as live: no destructive experiments, cleanup scripts must target `:8030`.
+> - Testing (`:8030`) is where new code is verified first; deploy to `:80` after.
+> - The header badge in the UI shows which environment you are on
+>   (`Production` on :80, `Testing` on :8030 — injected via `VITE_ENV_LABEL`).
+> - **Old `ams-prod` project (`:3080`/`:3010`) is retired** — its data volumes
+>   (`ams-prod_db_data`) were empty; the real production data always lived in
+>   `ams_db_data`, which the new `:80` production stack reuses. Nothing was lost.
+> - Old `:8080` and `:3080`/`:3010` mappings are gone — update bookmarks.
+
+### Current stacks on 192.168.100.110
 
 | Stack | Project | Compose files | UI | Backend (loopback) | Data volumes | Status |
 |---|---|---|---|---|---|---|
-| Testing | `ams` | `compose.yaml` + `compose.test.yaml` + `.env.test` | `:80` | `127.0.0.1:3000` | `ams_db_data`, `ams_uploads_data` | **RUNNING — the stack** |
-| Production (VM) | `ams-prod` | `compose.yaml` + `compose.prod.yaml` + `.env.prod` | `:3080` | `127.0.0.1:3010` | `ams-prod_db_data`, `ams-prod_uploads_data` | stopped (retired until physical server) |
+| **Production** | `ams` | `compose.yaml` + `compose.prod.yaml` + `.env.prod` | **`:80`** | `127.0.0.1:3000` | `ams_db_data`, `ams_uploads_data` (real data) | **RUNNING** |
+| **Testing** | `ams-test` | `compose.yaml` + `compose.test.yaml` + `.env.test` | **`:8030`** | `127.0.0.1:3011` | `ams-test_db_data`, `ams-test_uploads_data` | **RUNNING** |
+| (retired) | `ams-prod` | — | ~~`:3080`~~ | ~~`:3010`~~ | `ams-prod_*` (empty) | stopped — volumes kept for now, safe to delete |
 
 ## 2. Samba share = the same files
 
@@ -140,7 +153,7 @@ Daily flow:
 git add <files> && git commit -m "..." && git push
 ```
 
-## 5. Deploy — Testing (on 110)
+## 5. Deploy — Testing (`:8030`, project `ams-test`)
 
 ```bash
 cd /opt/admin
@@ -150,39 +163,38 @@ bash scripts/server/deploy-testing.sh        # pull + rebuild + health + bundle-
 
 - `--build` needed when code changed; plain `up -d` suffices for port/env-only changes.
 - Migrations + seed run automatically on backend start (idempotent).
-- Health: `curl -s http://localhost/api/health` → `{"status":"ok","db":"up","env":"testing"}`
+- Health: `curl -s http://127.0.0.1:3011/api/health` → `{"status":"ok","db":"up","env":"testing"}`
+- UI: **`http://192.168.100.110:8030`** — header badge shows **Testing**.
 - Browser needs **Ctrl+Shift+R** after a frontend deploy (cached old bundle).
+- Testing containers: `ams-test-backend-1`, `ams-test-db-1`, `ams-test-frontend-1`
+  (server scripts under `scripts/server/` target these for testing operations).
 
-> **The old `:8080` legacy mapping was removed (2026-09-24)** — `:80` is the one
-> and only testing URL. Update old bookmarks. If port 80 is ever taken by another
-> service, re-add a port line in `compose.test.yaml`.
-
-## 6. Deploy — Production (NOT on this VM — see §8)
-
-> **Per the current policy, do NOT run the prod stack on 110.** These commands
-> apply to the future physical server only.
+## 6. Deploy — Production (`:80`, project `ams`)
 
 ```bash
 cd /opt/admin
-bash scripts/server/deploy-prod.sh          # build + up + health check
+bash scripts/server/deploy-prod.sh           # pull + build + up + health check
 REBUILD=0 bash scripts/server/deploy-prod.sh # up without rebuild
 # equivalent manual command:
 docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod up -d --build
 ```
 
-- Health: `curl -s http://127.0.0.1:3010/api/health` → `{"status":"ok","env":"production","db":"up"}`
-- UI: `http://<server>:3080` (on the physical server)
-- First boot seeds the prod DB (sysadmin/admin1/head1/… with `SEED_PASSWORD` from `.env.prod`).
-- Prod DB is empty/separate from testing — set up departments/users once.
+- Health: `curl -s http://127.0.0.1:3000/api/health` → `{"status":"ok","env":"production","db":"up"}`
+- UI: **`http://192.168.100.110/`** (plain port 80) — header badge shows **Production**.
+- **This is the live-data stack** — migrations run automatically on boot; matrix
+  edits here are the authoritative RBAC state (deny-memory protects them).
+- Production containers: `ams-backend-1`, `ams-db-1`, `ams-frontend-1`.
+- Deploy order: verify on testing (`:8030`) first, then deploy prod (`:80`).
 
 ## 7. Ports cheat-sheet (current VM)
 
 | Port | Bound | What |
 |---|---|---|
-| 80 | `0.0.0.0` (testing frontend) | UI — plain `http://192.168.100.110` — **the** AMS URL (legacy `:8080` removed 2026-09-24) |
-| 3000 | `127.0.0.1` (testing backend) | API — internal only (nginx proxies `/api/`) |
-| 3080 | — | free (prod stack retired from this VM) |
-| 3010 | — | free (prod stack retired from this VM) |
+| 80 | `0.0.0.0` (ams frontend) | **PRODUCTION UI** — `http://192.168.100.110/` (header badge: Production) |
+| 3000 | `127.0.0.1` (ams backend) | Production API — internal only (nginx proxies `/api/`) |
+| 8030 | `0.0.0.0` (ams-test frontend) | **TESTING UI** — `http://192.168.100.110:8030` (header badge: Testing) |
+| 3011 | `127.0.0.1` (ams-test backend) | Testing API — internal only |
+| ~~3080 / 3010~~ | — | retired (old ams-prod stack) |
 | 5432 | docker networks only | postgres (never published) |
 
 ## 8. Future physical server — ready-to-deploy playbook
@@ -196,7 +208,7 @@ From the Windows dev machine (Git Bash):
 NEW_HOST=<new-server-ip> NEW_USER=glgadmin PW='<initial password>' \
   bash scripts/server/provision-new-server.sh
 # add PROVISION_DEPLOY=1 to also build & start the stack immediately
-# add SETUP_ENV=prod for the production stack (UI :3080) instead of testing
+# add SETUP_ENV=prod for the production stack (UI :80) instead of testing (:8030)
 ```
 The script: installs Docker + Compose, installs the SSH key, checks out
 `/opt/admin` from GitHub, creates `.env.<env>` from the template, and
@@ -225,14 +237,14 @@ The script: installs Docker + Compose, installs the SSH key, checks out
 ### 8.3 Migrating real data from the VM (when going live)
 
 ```bash
-# on 110 — dump prod data
-docker exec ams-prod-db-1 pg_dump -U ams ams > ams-prod-$(date +%F).sql
-docker run --rm -v ams-prod_uploads_data:/data -v $PWD:/backup alpine \
+# on 110 — dump PRODUCTION data (project ams, UI :80)
+docker exec ams-db-1 pg_dump -U ams ams > ams-prod-$(date +%F).sql
+docker run --rm -v ams_uploads_data:/data -v $PWD:/backup alpine \
   tar czf /backup/uploads-$(date +%F).tgz -C /data .
 
 # on the new server — restore
-docker exec -i ams-prod-db-1 psql -U ams ams < ams-prod-<date>.sql
-docker run --rm -v ams-prod_uploads_data:/data -v $PWD:/backup alpine \
+docker exec -i ams-db-1 psql -U ams ams < ams-prod-<date>.sql
+docker run --rm -v ams_uploads_data:/data -v $PWD:/backup alpine \
   tar xzf /backup/uploads-<date>.tgz -C /data
 ```
 (Compose file references `POSTGRES_DB`/`POSTGRES_USER` — adjust `-U ams ams` if
@@ -245,21 +257,21 @@ your `.env.prod` differs. Keep the dumps OFF git.)
 - [ ] Data migrated (§8.3) + spot-check: users, requests, inventory balances
 - [ ] DNS/hosts/clients pointed at the new IP
 - [ ] Backups scheduled on the new server
-- [ ] On 110: keep dev+testing; retire the VM prod stack
+- [ ] On 110: keep testing (`:8030`); stop the VM production stack
   (`docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod down`)
 
 ## 9. Health & logs
 
 ```bash
 cd /opt/admin
-# testing
+# TESTING (project ams-test — UI :8030)
 docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test ps
 docker compose -f compose.yaml -f compose.test.yaml --env-file .env.test logs -f backend
-curl -s http://127.0.0.1:3000/api/health && curl -s http://127.0.0.1:3000/api/docs  # Swagger (server-local)
-# prod
+curl -s http://127.0.0.1:3011/api/health && curl -s http://127.0.0.1:3011/api/docs  # Swagger (server-local)
+# PRODUCTION (project ams — UI :80)
 docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod ps
 docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod logs -f backend
-curl -s http://127.0.0.1:3010/api/health
+curl -s http://127.0.0.1:3000/api/health
 ```
 
 ## 10. Seeded users (Phase 1, password = SEED_PASSWORD)
@@ -284,6 +296,22 @@ curl -s http://127.0.0.1:3010/api/health
 - **Hard refresh** the browser after frontend deploys.
 
 ## 12. Recent decisions log
+
+- 2026-09-25 — **ENVIRONMENT REDESIGNATION (user decision)**: PRODUCTION is now
+  the plain `http://192.168.100.110/` (`:80`, project `ams`, real data in
+  `ams_db_data`); TESTING moved to `http://192.168.100.110:8030` (new project
+  `ams-test`, backend loopback `:3011`). The old `ams-prod` project (`:3080`)
+  is retired — its DB was empty; the real data always lived in `ams_db_data`,
+  which the `:80` production stack reuses. The UI header now shows a
+  Production/Testing badge injected at build time (`VITE_ENV_LABEL`). All
+  server scripts updated: testing scripts target `ams-test-*` containers and
+  `:3011`; production/probe scripts target `ams-db-1`/`ams-backend-1` and `:3000`.
+  Deploy testing first, then production.
+- 2026-09-25 — RBAC hardening landed on both stacks: deny-memory
+  (`role_permissions_denied`, migration 34) so matrix revocations survive
+  restarts; `/org/employees` + `/org/departments` gated by dedicated
+  `employees.read`/`departments.read` (migration 35); suppliers reads gated by
+  `suppliers.read` only; unit tests in `backend/test/rbac-deny-memory.test.ts` (21 cases).
 
 - 2026-09-24 — **added `scripts/server/deploy-testing.sh`** after the CarPanel React #310
   crash survived a manual deploy: a stale checkout (no `git pull`) silently re-deploys old

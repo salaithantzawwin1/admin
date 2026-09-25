@@ -2,12 +2,12 @@
 # =============================================================
 # Delete car request documents (by doc number) with every related row.
 #
-# Targets the TESTING stack (http://192.168.100.110/ — container ams-db-1)
-# by default; pass --prod for the production stack (ams-prod-db-1, UI :3080).
+# Targets the PRODUCTION stack (project ams — container ams-db-1, UI :80)
+# by default; pass --testing for the testing stack (ams-test-db-1, UI :8030).
 #
 # Usage:
 #   bash scripts/server/delete-car-docs.sh CAR-202609-0035 [CAR-202609-0036 ...]
-#   bash scripts/server/delete-car-docs.sh --prod CAR-202609-0035
+#   bash scripts/server/delete-car-docs.sh --testing CAR-202609-0035
 #   bash scripts/server/delete-car-docs.sh --all-testing   # wipe ALL car docs (testing only)
 #
 # FK-safe order: car_expenses → car_trips → car_assignments → notifications →
@@ -15,7 +15,7 @@
 # =============================================================
 set -u
 
-STACK="--testing"; DOCS=(); WIPE_ALL=0
+STACK="--prod"; DOCS=(); WIPE_ALL=0
 for a in "$@"; do
   case "$a" in
     --prod) STACK="--prod" ;;
@@ -25,9 +25,9 @@ for a in "$@"; do
   esac
 done
 
-if [ "$STACK" = "--prod" ]; then
-  DB_CONTAINER="ams-prod-db-1"
-  UI="http://192.168.100.110:3080"
+if [ "$STACK" = "--testing" ]; then
+  DB_CONTAINER="ams-test-db-1"
+  UI="http://192.168.100.110:8030"
 else
   DB_CONTAINER="ams-db-1"
   UI="http://192.168.100.110/"

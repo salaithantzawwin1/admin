@@ -3,9 +3,9 @@
 set -u
 BASE=http://127.0.0.1:3000/api
 
-q() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
-TOKEN_OF() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
-J() { docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);console.log(eval(process.argv[1]))}catch(e){console.log('')}})" "$1"; }
+q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
+J() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);console.log(eval(process.argv[1]))}catch(e){console.log('')}})" "$1"; }
 
 UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
 TTOKEN=$(TOKEN_OF "$UID_" salaithantzawwin)
@@ -19,7 +19,7 @@ echo "index:  $(q "SELECT count(*) FROM pg_indexes WHERE tablename='drivers' AND
 
 echo "=== 2) chat bind-history timeline (existing + fresh events) ==="
 echo "-- history endpoint for chat $CHAT:"
-curl -s -H "Authorization: Bearer $STOKEN" "$BASE/settings/telegram/chats/$CHAT/history" | docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s);console.log('rows:',r.length);r.slice(0,5).forEach(x=>console.log(' •',x.at,'|',x.label,'|',x.account??'-','| by',x.by))})"
+curl -s -H "Authorization: Bearer $STOKEN" "$BASE/settings/telegram/chats/$CHAT/history" | docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s);console.log('rows:',r.length);r.slice(0,5).forEach(x=>console.log(' •',x.at,'|',x.label,'|',x.account??'-','| by',x.by))})"
 echo "-- employee cannot read history (expect 403):"
 curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $TTOKEN" "$BASE/settings/telegram/chats/$CHAT/history"
 
@@ -48,7 +48,7 @@ DRV2=$(q "SELECT id FROM drivers WHERE \"employeeId\" IS NULL AND id <> '$DRVID'
 VEH=$(curl -s -H "Authorization: Bearer $TTOKEN" "$BASE/fleet/vehicles" | J "(j.items||j).filter(v=>v.status==='AVAILABLE')[0]?.id")
 curl -s -X POST -H "Authorization: Bearer $TTOKEN" -H 'Content-Type: application/json' -d "{\"vehicleId\":\"$VEH\",\"driverId\":\"$DRV2\"}" "$BASE/cars/requests/$CREQ/assign" | head -c 60; echo
 echo "-- correlated history of U Zaw Zaw (assignment was driven by the OTHER driver, requester linked):"
-curl -s -H "Authorization: Bearer $STOKEN" "$BASE/fleet/drivers/$DRVID/correlated-history" | docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log('employee:',j.employee?.fullName??'-','rows:',j.assignments.length);j.assignments.forEach(a=>console.log(' •',a.docNumber,'| drv',a.driver,'| viaEmployee',a.viaEmployee))})"
+curl -s -H "Authorization: Bearer $STOKEN" "$BASE/fleet/drivers/$DRVID/correlated-history" | docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log('employee:',j.employee?.fullName??'-','rows:',j.assignments.length);j.assignments.forEach(a=>console.log(' •',a.docNumber,'| drv',a.driver,'| viaEmployee',a.viaEmployee))})"
 
 echo "=== 5) audit + cleanup this round ==="
 q "SELECT action||' x'||count(*) FROM audit_logs WHERE action IN ('DRIVER_EMPLOYEE_LINKED','TELEGRAM_JOIN_APPROVED','TELEGRAM_JOIN_REASSIGNED') GROUP BY action"

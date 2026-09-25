@@ -7,9 +7,9 @@
 set -u
 BASE=http://127.0.0.1:3000/api
 
-tok() { docker exec ams-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$1" "$2"; }
-uid() { docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT id FROM users WHERE username = '$1'\"" | tr -d '\r\n '; }
-J() { docker exec -i ams-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})" "$1"; }
+tok() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken'); console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]}, process.env.JWT_SECRET||'dev_only_secret_change_me',{expiresIn:'10m'}))" "$1" "$2"; }
+uid() { docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT id FROM users WHERE username = '$1'\"" | tr -d '\r\n '; }
+J() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const j=JSON.parse(s);console.log(eval(process.argv[1]))})" "$1"; }
 
 ATOKEN=$(tok "$(uid admin1)" admin1)
 ETOKEN=$(tok "$(uid employee1)" employee1)
@@ -39,7 +39,7 @@ echo "== 5) publish =="
 curl -s -X POST -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$AID/publish" | J "'status='+j.status"
 
 echo "== 6) notifications sent (E2E ones) =="
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT COUNT(*) FROM notifications WHERE type='ANNOUNCEMENT' AND title LIKE '%E2E%'\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT COUNT(*) FROM notifications WHERE type='ANNOUNCEMENT' AND title LIKE '%E2E%'\""
 
 echo "== 7) employee /mine now sees it =="
 curl -s -H "Authorization: Bearer $ETOKEN" "$BASE/announcements/mine" | J "j.filter(x=>x.id==='$AID').map(x=>'seen='+x.title+' read='+x.read)[0]"
@@ -55,10 +55,10 @@ echo "== 10) read stats (target/read/unread/acked) =="
 curl -s -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$AID/read-stats" | J "'target='+j.target+' read='+j.read+' unread='+j.unread+' acked='+j.acked"
 
 echo "== 11) attachment upload (PNG) =="
-docker exec ams-backend-1 node -e "require('fs').writeFileSync('/tmp/a.png',Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mPcv5+hHgAGgwJ/lK3Q6wAAAABJRU5ErkJggg==','base64'))"
-docker cp ams-backend-1:/tmp/a.png /tmp/a.png
+docker exec ams-test-backend-1 node -e "require('fs').writeFileSync('/tmp/a.png',Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mPcv5+hHgAGgwJ/lK3Q6wAAAABJRU5ErkJggg==','base64'))"
+docker cp ams-test-backend-1:/tmp/a.png /tmp/a.png
 curl -s -X POST -H "Authorization: Bearer $ATOKEN" -F "file=@/tmp/a.png;type=image/png" "$BASE/attachments/upload?announcementId=$AID" | J "'size='+j.size+' mime='+j.mimeType"
-FID=$(docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT id FROM attachments WHERE \\\"announcementId\\\"='$AID' LIMIT 1\"" | tr -d '\r\n ')
+FID=$(docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT id FROM attachments WHERE \\\"announcementId\\\"='$AID' LIMIT 1\"" | tr -d '\r\n ')
 
 echo "== 12) attachment list for announcement =="
 curl -s -H "Authorization: Bearer $ATOKEN" "$BASE/attachments/announcement/$AID" | J "'files='+j.length"
@@ -75,7 +75,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X DELETE -H "Authorization: Bearer $AT
 echo "== 16) published edit allowed + audit-logged =="
 curl -s -X PATCH -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' \
   -d '{"endAt":"2030-06-01T00:00:00.000Z"}' "$BASE/announcements/$AID" | J "'endAt='+j.endAt"
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE module='ANNOUNCEMENT' ORDER BY \\\"createdAt\\\" DESC LIMIT 3\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE module='ANNOUNCEMENT' ORDER BY \\\"createdAt\\\" DESC LIMIT 3\""
 
 echo "== 17) rich text sanitized on create (script stripped, tags kept) =="
 R=$(curl -s -X POST -H "Authorization: Bearer $ATOKEN" -H 'Content-Type: application/json' \
@@ -95,16 +95,16 @@ echo "-- employee cannot unpublish (expect 403) =="
 curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $ETOKEN" "$BASE/announcements/$RID/unpublish"
 echo "-- republish after unpublish (expect PUBLISHED + notified) =="
 curl -s -X POST -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$AID/publish" | J "'status='+j.status"
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE action='ANNOUNCEMENT_UNPUBLISHED' ORDER BY \\\"createdAt\\\" DESC LIMIT 1\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT action FROM audit_logs WHERE action='ANNOUNCEMENT_UNPUBLISHED' ORDER BY \\\"createdAt\\\" DESC LIMIT 1\""
 
 echo "== 19) notification body is plain text (no tags) =="
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT body FROM notifications WHERE type='ANNOUNCEMENT' AND title LIKE '%E2E water%' ORDER BY \\\"createdAt\\\" DESC LIMIT 1\"" | head -c 120; echo
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT body FROM notifications WHERE type='ANNOUNCEMENT' AND title LIKE '%E2E water%' ORDER BY \\\"createdAt\\\" DESC LIMIT 1\"" | head -c 120; echo
 
 echo "== 20) cleanup =="
 curl -s -X DELETE -H "Authorization: Bearer $ATOKEN" "$BASE/attachments/$FID" | head -c 40; echo
 curl -s -X DELETE -H "Authorization: Bearer $ATOKEN" "$BASE/announcements/$SID" | head -c 40; echo
 # published ones are delete-guarded by the API → remove test rows directly (cascades targets/reads/attachment rows)
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -c \"DELETE FROM announcements WHERE title LIKE 'E2E%'\"" >/dev/null
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -c \"DELETE FROM notifications WHERE title LIKE '%E2E%'\"" >/dev/null
-docker exec ams-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT 'left='||COUNT(*) FROM announcements WHERE title LIKE 'E2E%'\""
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -c \"DELETE FROM announcements WHERE title LIKE 'E2E%'\"" >/dev/null
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -c \"DELETE FROM notifications WHERE title LIKE '%E2E%'\"" >/dev/null
+docker exec ams-test-db-1 sh -c "psql -U \$POSTGRES_USER -d \$POSTGRES_DB -tAc \"SELECT 'left='||COUNT(*) FROM announcements WHERE title LIKE 'E2E%'\""
 echo "DONE"

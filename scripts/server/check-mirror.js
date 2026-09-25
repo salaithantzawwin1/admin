@@ -1,4 +1,4 @@
-// Run inside ams-backend-1: node /tmp/check-mirror.js
+// Run inside ams-test-backend-1 (testing) or ams-backend-1 (prod): node /tmp/check-mirror.js
 const { PrismaClient } = require('@prisma/client');
 const p = new PrismaClient();
 

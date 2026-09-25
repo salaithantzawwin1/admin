@@ -1,7 +1,7 @@
 #!/bin/bash
 # Grant map for planning the employees/departments gate fix
 set -e
-docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' <<'SQL'
+docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB' <<'SQL'
 \pset pager off
 SELECT r.name AS role,
   bool_or(p.code='org.read')          AS "org.read",
