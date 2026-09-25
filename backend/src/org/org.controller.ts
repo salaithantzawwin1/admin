@@ -78,15 +78,20 @@ export class OrgController {
   }
 
   @Get('departments')
-  // OR: org.read (full org view) or the new departments.read (picker-only access)
-  @AnyPermission([PERMISSIONS.ORG_READ], [PERMISSIONS.DEPARTMENTS_READ])
+  // Dedicated departments.read controls the department lists (matrix-editable).
+  // org.read was an OR-leg here but it silently granted department lists to
+  // every legacy role holding it (FINANCE, PURCHASING, …) even with the
+  // matrix's Departments group unticked — same bypass class as the suppliers fix.
+  @RequirePermissions(PERMISSIONS.DEPARTMENTS_READ)
   departments() {
     return this.org.listDepartments();
   }
 
   @Get('employees')
-  // OR: org.read (full org view) or the new employees.read (directory access)
-  @AnyPermission([PERMISSIONS.ORG_READ], [PERMISSIONS.EMPLOYEES_READ])
+  // Dedicated employees.read controls the directory (matrix-editable).
+  // org.read was an OR-leg here, so roles like FINANCE (legacy org.read seed)
+  // saw the full employee list despite Employees being unticked in the matrix.
+  @RequirePermissions(PERMISSIONS.EMPLOYEES_READ)
   employees(@Query('page') page?: string, @Query('pageSize') pageSize?: string, @Query('departmentId') departmentId?: string) {
     return this.org.listEmployees(Number(page || 1), Math.min(100, Number(pageSize || 25)), departmentId);
   }
