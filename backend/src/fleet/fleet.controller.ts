@@ -1,6 +1,6 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { DriverStatus, VehicleStatus, VehicleType } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
@@ -50,8 +50,18 @@ class DriverDto {
 
 class AbsenceDto {
   @IsString() driverId!: string;
-  @IsDateString() startsAt!: string;
-  @IsDateString() endsAt!: string;
+  /** Calendar day of the leave (YYYY-MM-DD) — clock times come from the Company Time Table. */
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) date!: string;
+  @IsIn(['FULL', 'HALF']) dayType!: 'FULL' | 'HALF';
+  /** Required for HALF: which half of the working day. */
+  @IsIn(['FULL_DAY', 'MORNING', 'EVENING']) period!: 'FULL_DAY' | 'MORNING' | 'EVENING';
+  @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+class AbsenceUpdateDto {
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) date!: string;
+  @IsIn(['FULL', 'HALF']) dayType!: 'FULL' | 'HALF';
+  @IsIn(['FULL_DAY', 'MORNING', 'EVENING']) period!: 'FULL_DAY' | 'MORNING' | 'EVENING';
   @IsOptional() @IsString() @MaxLength(300) reason?: string;
 }
 
@@ -221,11 +231,26 @@ export class FleetController {
   async createAbsence(@Req() req, @Body() dto: AbsenceDto) {
     try {
       return await this.fleet.createAbsence(
-        { driverId: dto.driverId, startsAt: new Date(dto.startsAt), endsAt: new Date(dto.endsAt), reason: dto.reason?.trim() || undefined },
+        { driverId: dto.driverId, date: dto.date, dayType: dto.dayType, period: dto.period, reason: dto.reason?.trim() || undefined },
         this.actor(req),
       );
     } catch (e) {
-      if ((e as Error).message.includes('after start') || (e as Error).message.includes('not found')) throw new BadRequestException((e as Error).message);
+      if ((e as Error).message.includes('after start') || (e as Error).message.includes('not found') || (e as Error).message.includes('must be')) throw new BadRequestException((e as Error).message);
+      throw new ConflictException((e as Error).message);
+    }
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Patch('absences/:id')
+  async updateAbsence(@Req() req, @Param('id') id: string, @Body() dto: AbsenceUpdateDto) {
+    try {
+      return await this.fleet.updateAbsence(
+        id,
+        { date: dto.date, dayType: dto.dayType, period: dto.period, reason: dto.reason?.trim() || undefined },
+        this.actor(req),
+      );
+    } catch (e) {
+      if ((e as Error).message.includes('after start') || (e as Error).message.includes('not found') || (e as Error).message.includes('must be')) throw new BadRequestException((e as Error).message);
       throw new ConflictException((e as Error).message);
     }
   }
@@ -234,5 +259,12 @@ export class FleetController {
   @Post('absences/:id/cancel')
   cancelAbsence(@Req() req, @Param('id') id: string) {
     return this.fleet.cancelAbsence(id, this.actor(req));
+  }
+
+  /** Delete outright (admin cleanup) — unlike cancel, the row is removed. */
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Delete('absences/:id')
+  deleteAbsence(@Req() req, @Param('id') id: string) {
+    return this.fleet.deleteAbsence(id, this.actor(req));
   }
 }

@@ -2,13 +2,14 @@ import { Module, forwardRef } from '@nestjs/common';
 import { TelegramModule } from '../telegram/telegram.module';
 import { LdapService } from './ldap.service';
 import { HolidaysService } from './holidays.service';
+import { TimetableService } from './timetable.service';
 import { TelegramConfigService } from './telegram-config.service';
 import { SettingsController } from './settings.controller';
 
 @Module({
   imports: [forwardRef(() => TelegramModule)],
-  providers: [LdapService, HolidaysService, TelegramConfigService],
+  providers: [LdapService, HolidaysService, TimetableService, TelegramConfigService],
   controllers: [SettingsController],
-  exports: [LdapService, HolidaysService],
+  exports: [LdapService, HolidaysService, TimetableService],
 })
 export class SettingsModule {}

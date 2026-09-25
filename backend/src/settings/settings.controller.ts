@@ -6,6 +6,7 @@ import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { LdapService, AdConfig } from './ldap.service';
 import { HolidaysService, Holiday } from './holidays.service';
+import { TimetableService, CompanyTimetable } from './timetable.service';
 import { TelegramConfigService, TelegramConfig } from './telegram-config.service';
 
 class AdConfigDto {
@@ -45,12 +46,31 @@ class JoinApproveDto {
   @IsOptional() @IsString() driverId?: string;
 }
 
+class TimetableDto {
+  @IsString() workStart!: string;
+  @IsString() workEnd!: string;
+  @IsString() halfDaySplit!: string;
+  @IsOptional() @IsArray() workDays?: number[];
+}
+
 @ApiTags('settings')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('settings')
 export class SettingsController {
-  constructor(private ldap: LdapService, private holidays: HolidaysService, private telegramConfig: TelegramConfigService) {}
+  constructor(private ldap: LdapService, private holidays: HolidaysService, private timetable: TimetableService, private telegramConfig: TelegramConfigService) {}
+
+  /** Company Time Table — office hours used by leave/absence windows. */
+  @Get('timetable')
+  getTimetable() {
+    return this.timetable.get();
+  }
+
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Put('timetable')
+  setTimetable(@Body() dto: TimetableDto, @Req() req) {
+    return this.timetable.update(dto as Partial<CompanyTimetable>, { userId: req.user.id, username: req.user.username });
+  }
 
   @RequirePermissions(PERMISSIONS.USERS_MANAGE)
   @Get('ad')

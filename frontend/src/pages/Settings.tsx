@@ -90,19 +90,34 @@ function relTime(iso: string): string {
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
 
-type SettingsTab = 'ad' | 'holidays' | 'telegram' | 'joins';
+type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins';
+
+/** Company Time Table — office hours the leave windows are derived from. */
+interface Timetable {
+  workStart: string;
+  workEnd: string;
+  halfDaySplit: string;
+  workDays: number[];
+}
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export default function Settings() {
   // active tab lives in the URL (?tab=holidays) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as SettingsTab | null;
-  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' ? tabParam : 'ad';
+  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' ? tabParam : 'ad';
   const setTab = (t: SettingsTab) => setSearchParams(t === 'ad' ? {} : { tab: t }, { replace: false });
   const [cfg, setCfg] = useState<AdConfig | null>(null);
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null);
+
+  // ---------- Company Time Table state ----------
+  const [tt, setTt] = useState<Timetable | null>(null);
+  const [ttMsg, setTtMsg] = useState('');
+  const [ttError, setTtError] = useState('');
+  const [ttBusy, setTtBusy] = useState(false);
 
   // ---------- Public Holidays editor state ----------
   const now = new Date();
@@ -151,6 +166,24 @@ export default function Settings() {
   }, []);
 
   useEffect(load, [load]);
+
+  useEffect(() => {
+    api<Timetable>('/settings/timetable').then(setTt).catch((e) => setTtError(e instanceof Error ? e.message : 'Failed to load timetable'));
+  }, []);
+
+  const saveTimetable = async () => {
+    if (!tt) return;
+    setTtBusy(true); setTtMsg(''); setTtError('');
+    try {
+      const saved = await api<Timetable>('/settings/timetable', { method: 'PUT', body: tt });
+      setTt(saved);
+      setTtMsg('Company Time Table saved — leave windows now follow these hours.');
+    } catch (e) {
+      setTtError(e instanceof Error ? e.message : 'Failed to save the time table');
+    } finally {
+      setTtBusy(false);
+    }
+  };
 
   useEffect(() => {
     api<TelegramConfig>('/settings/telegram').then(setTgCfg).catch((e) => setTgError(e.message));
@@ -330,6 +363,7 @@ export default function Settings() {
       <div className="flex gap-1 border-b border-gray-200 mb-4">
         {([
           { key: 'ad' as SettingsTab, label: 'AD / LDAP' },
+          { key: 'timetable' as SettingsTab, label: 'Company Time Table' },
           { key: 'holidays' as SettingsTab, label: 'Public Holidays' },
           { key: 'telegram' as SettingsTab, label: 'Telegram' },
           { key: 'joins' as SettingsTab, label: 'Telegram Joins' },
@@ -412,6 +446,74 @@ export default function Settings() {
           </Button>
           <Button onClick={save}>Save settings</Button>
         </div>
+      </div>
+      )}
+
+      {/* ---------- Tab: Company Time Table ---------- */}
+      {tab === 'timetable' && (
+      <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-gray-800">Company Time Table</h2>
+          {tt && <Badge color="blue">{tt.workStart} – {tt.workEnd}</Badge>}
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Office hours used company-wide. Driver Absences (Fleet) derive their leave windows from these
+          times — Full day = {tt?.workStart ?? '…'}–{tt?.workEnd ?? '…'}, Morning half = start–{tt?.halfDaySplit ?? '…'},
+          Evening half = {tt?.halfDaySplit ?? '…'}–end. Times are 24h office time (Asia/Yangon).
+        </p>
+
+        {ttError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{ttError}</div>}
+        {ttMsg && <div className="mb-3 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{ttMsg}</div>}
+
+        {!tt ? (
+          <Empty />
+        ) : (
+        <>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Work start</label>
+            <Input type="time" value={tt.workStart} onChange={(e) => setTt({ ...tt, workStart: e.target.value })} />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Half-day split (Morning | Evening boundary)</label>
+            <Input type="time" value={tt.halfDaySplit} onChange={(e) => setTt({ ...tt, halfDaySplit: e.target.value })} />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">Work end</label>
+            <Input type="time" value={tt.workEnd} onChange={(e) => setTt({ ...tt, workEnd: e.target.value })} />
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <label className="block text-xs text-gray-500 mb-2">Working days</label>
+          <div className="flex flex-wrap gap-2">
+            {DAY_NAMES.map((name, idx) => {
+              const on = tt.workDays.includes(idx);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                    on ? 'bg-yellow-600 border-yellow-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:border-yellow-400'
+                  }`}
+                  onClick={() =>
+                    setTt({ ...tt, workDays: on ? tt.workDays.filter((d) => d !== idx) : [...tt.workDays, idx].sort((a, b) => a - b) })
+                  }
+                >
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex justify-end mt-4">
+          <Button onClick={saveTimetable} disabled={ttBusy || !tt.workStart || !tt.workEnd || !tt.halfDaySplit}>
+            {ttBusy ? 'Saving…' : 'Save time table'}
+          </Button>
+        </div>
+        </>
+        )}
       </div>
       )}
 

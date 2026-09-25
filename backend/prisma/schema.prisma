@@ -936,6 +936,11 @@ model DriverAbsence {
   driver    Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
   startsAt  DateTime
   endsAt    DateTime // exclusive end (e.g. leave ends 25th 00:00 → last full day is the 24th)
+  /// Leave model against the Company Time Table (Settings → Company Time
+  /// Table): FULL day or HALF day. The clock window is derived from the
+  /// timetable at write time; startsAt/endsAt stay the operational truth.
+  dayType   String   @default("FULL")    // FULL | HALF
+  period    String   @default("FULL_DAY") // FULL_DAY | MORNING | EVENING
   reason    String?
   status    String   @default("ACTIVE") // ACTIVE | CANCELLED
   createdById String @db.Uuid

@@ -25,9 +25,20 @@ interface Absence {
   driver?: { id: string; name: string };
   startsAt: string;
   endsAt: string;
+  /** Leave model against the Company Time Table */
+  dayType: 'FULL' | 'HALF';
+  period: 'FULL_DAY' | 'MORNING' | 'EVENING';
   reason?: string | null;
   status: string;
   createdAt: string;
+}
+
+/** The Company Time Table (Settings → Company Time Table). */
+interface Timetable {
+  workStart: string;
+  workEnd: string;
+  halfDaySplit: string;
+  workDays: number[];
 }
 
 /** One row of the correlated driver+employee assignment history. */
@@ -113,7 +124,18 @@ export default function Fleet() {
   const [empOptions, setEmpOptions] = useState<{ id: string; employeeNo: string; fullName: string; linkedDriver?: string | null }[]>([]);
   // planned absences (leave) — list + form state
   const [absences, setAbsences] = useState<Absence[]>([]);
-  const [absenceForm, setAbsenceForm] = useState({ driverId: '', startsAt: '', endsAt: '', reason: '' });
+  const [absenceForm, setAbsenceForm] = useState<{ driverId: string; date: string; dayType: 'FULL' | 'HALF'; period: 'MORNING' | 'EVENING'; reason: string }>({
+    driverId: '', date: '', dayType: 'FULL', period: 'MORNING', reason: '',
+  });
+  // editing an existing row (CRUD) — holds the absence being edited
+  const [editingAbsence, setEditingAbsence] = useState<Absence | null>(null);
+  const [deletingAbsence, setDeletingAbsence] = useState<Absence | null>(null);
+  // Company Time Table — shown in the form hint, used for window display
+  const [timetable, setTimetable] = useState<Timetable | null>(null);
+  // edit-in-row form (absence CRUD)
+  const [editForm, setEditForm] = useState<{ date: string; dayType: 'FULL' | 'HALF'; period: 'MORNING' | 'EVENING'; reason: string }>({
+    date: '', dayType: 'FULL', period: 'MORNING', reason: '',
+  });
   const canManage = hasPermission('fleet.manage');
   const canSetup = hasPermission('fleet.types.manage');
 
@@ -131,6 +153,7 @@ export default function Fleet() {
     api<Driver[]>('/fleet/drivers').then(setDrivers).catch(() => {});
     api<Absence[]>('/fleet/absences').then(setAbsences).catch(() => {});
     api<VehicleTypeRow[]>('/fleet/vehicle-types').then(setTypes).catch(() => {});
+    api<Timetable>('/settings/timetable').then(setTimetable).catch(() => {});
     if (hasPermission('fleet.manage')) {
       api<TgBinding[]>('/fleet/drivers/telegram-bindings')
         .then((list) => setBindings(Object.fromEntries(list.map((b) => [b.id, b]))))
@@ -363,6 +386,28 @@ export default function Fleet() {
           variant="danger"
           onConfirm={async () => { await deleteType(deletingType); }}
           onClose={() => setDeletingType(null)}
+        />
+      )}
+
+      {deletingAbsence && (
+        <ConfirmDialog
+          title={`Delete the absence record for ${deletingAbsence.driver?.name ?? '?'}?`}
+          description="Unlike Cancel, the row is removed outright. If the leave window is current, the driver returns to AVAILABLE."
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={async () => {
+            setError(''); setNotice('');
+            try {
+              await api(`/fleet/absences/${deletingAbsence.id}`, { method: 'DELETE' });
+              toast('Absence record deleted.');
+              setDeletingAbsence(null);
+              load();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Failed to delete absence');
+              setDeletingAbsence(null);
+            }
+          }}
+          onClose={() => setDeletingAbsence(null)}
         />
       )}
 
@@ -727,19 +772,34 @@ export default function Fleet() {
       <>
       {canManage ? (
       <Card className="mb-5 p-5">
-        <div className="text-xs font-semibold text-gray-500 uppercase mb-3">Record planned non-availability — the driver is skipped in assign pickers and auto-set to ON_LEAVE</div>
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+        <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Record driver leave — the driver is skipped in assign pickers and auto-set to ON_LEAVE</div>
+        <div className="text-xs text-gray-400 mb-3">
+          Leave windows follow the Company Time Table
+          {timetable ? `: full day ${timetable.workStart}–${timetable.workEnd} · morning until ${timetable.halfDaySplit} · evening from ${timetable.halfDaySplit}` : ' (Settings → Company Time Table)'}.
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
           <Select value={absenceForm.driverId} onChange={(e) => setAbsenceForm({ ...absenceForm, driverId: e.target.value })}>
             <option value="">— Driver —</option>
             {drivers.filter((d) => d.status !== 'INACTIVE').map((d) => (
               <option key={d.id} value={d.id}>{d.name}</option>
             ))}
           </Select>
-          <Input type="datetime-local" value={absenceForm.startsAt} onChange={(e) => setAbsenceForm({ ...absenceForm, startsAt: e.target.value })} />
-          <Input type="datetime-local" value={absenceForm.endsAt} onChange={(e) => setAbsenceForm({ ...absenceForm, endsAt: e.target.value })} />
+          <Input type="date" value={absenceForm.date} onChange={(e) => setAbsenceForm({ ...absenceForm, date: e.target.value })} />
+          <Select value={absenceForm.dayType} onChange={(e) => setAbsenceForm({ ...absenceForm, dayType: e.target.value as 'FULL' | 'HALF' })}>
+            <option value="FULL">Full day</option>
+            <option value="HALF">Half day</option>
+          </Select>
+          <Select
+            value={absenceForm.dayType === 'HALF' ? absenceForm.period : 'FULL_DAY'}
+            disabled={absenceForm.dayType === 'FULL'}
+            onChange={(e) => setAbsenceForm({ ...absenceForm, period: e.target.value as 'MORNING' | 'EVENING' })}
+          >
+            <option value="MORNING">Morning</option>
+            <option value="EVENING">Evening</option>
+          </Select>
           <Input placeholder="Reason (leave, training…)" value={absenceForm.reason} onChange={(e) => setAbsenceForm({ ...absenceForm, reason: e.target.value })} />
           <Button
-            disabled={!absenceForm.driverId || !absenceForm.startsAt || !absenceForm.endsAt}
+            disabled={!absenceForm.driverId || !absenceForm.date}
             onClick={async () => {
               setError(''); setNotice('');
               try {
@@ -747,16 +807,17 @@ export default function Fleet() {
                   method: 'POST',
                   body: {
                     driverId: absenceForm.driverId,
-                    startsAt: new Date(absenceForm.startsAt).toISOString(),
-                    endsAt: new Date(absenceForm.endsAt).toISOString(),
+                    date: absenceForm.date,
+                    dayType: absenceForm.dayType,
+                    period: absenceForm.dayType === 'HALF' ? absenceForm.period : 'FULL_DAY',
                     reason: absenceForm.reason || undefined,
                   },
                 });
-                toast(res.clashes?.length ? `Absence recorded — ⚠️ ${res.clashes.length} assigned trip(s) fall inside this window (${res.clashes.join(', ')}) — re-assign them.` : 'Absence recorded — driver is skipped in pickers for that window.', res.clashes?.length ? 'info' : 'success');
-                setAbsenceForm({ driverId: '', startsAt: '', endsAt: '', reason: '' });
+                toast(res.clashes?.length ? `Leave recorded — ⚠️ ${res.clashes.length} assigned trip(s) fall inside this window (${res.clashes.join(', ')}) — re-assign them.` : 'Leave recorded — driver is skipped in pickers for that window.', res.clashes?.length ? 'info' : 'success');
+                setAbsenceForm({ driverId: '', date: '', dayType: 'FULL', period: 'MORNING', reason: '' });
                 load();
               } catch (e) {
-                setError(e instanceof Error ? e.message : 'Failed to record absence');
+                setError(e instanceof Error ? e.message : 'Failed to record leave');
               }
             }}
           >
@@ -775,34 +836,118 @@ export default function Fleet() {
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Driver</th>
-              <th className="px-4 py-3 font-medium">From</th>
-              <th className="px-4 py-3 font-medium">To</th>
+              <th className="px-4 py-3 font-medium">Date</th>
+              <th className="px-4 py-3 font-medium">Leave</th>
+              <th className="px-4 py-3 font-medium">Window</th>
               <th className="px-4 py-3 font-medium">Reason</th>
-              {canManage && <th className="px-4 py-3 font-medium text-right">Action</th>}
+              {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {absences.filter((a) => a.status === 'ACTIVE').map((a) => (
-              <tr key={a.id} className="hover:bg-gray-50">
+            {absences.filter((a) => a.status === 'ACTIVE').map((a) => {
+              const editing = editingAbsence?.id === a.id;
+              return (
+              <tr key={a.id} className={`hover:bg-gray-50 ${editing ? 'bg-yellow-50/60' : ''}`}>
                 <td className="px-4 py-3 font-medium">{a.driver?.name ?? '?'}</td>
-                <td className="px-4 py-3 text-gray-600">{new Date(a.startsAt).toLocaleString()}</td>
-                <td className="px-4 py-3 text-gray-600">{new Date(a.endsAt).toLocaleString()}</td>
-                <td className="px-4 py-3 text-gray-500">{a.reason || '—'}</td>
-                {canManage && (
-                <td className="px-4 py-3 text-right">
-                  <button
-                    className="text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg px-2.5 py-1 transition-colors"
-                    onClick={async () => {
-                      setError(''); setNotice('');
-                      setCancelingAbsence(a);
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </td>
+                {editing ? (
+                <>
+                  <td className="px-2 py-2">
+                    <Input type="date" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
+                  </td>
+                  <td className="px-2 py-2 flex gap-1">
+                    <Select value={editForm.dayType} onChange={(e) => setEditForm({ ...editForm, dayType: e.target.value as 'FULL' | 'HALF' })}>
+                      <option value="FULL">Full</option>
+                      <option value="HALF">Half</option>
+                    </Select>
+                    <Select
+                      value={editForm.dayType === 'HALF' ? editForm.period : 'FULL_DAY'}
+                      disabled={editForm.dayType === 'FULL'}
+                      onChange={(e) => setEditForm({ ...editForm, period: e.target.value as 'MORNING' | 'EVENING' })}
+                    >
+                      <option value="MORNING">Morning</option>
+                      <option value="EVENING">Evening</option>
+                    </Select>
+                  </td>
+                  <td className="px-2 py-2 text-xs text-gray-400">auto</td>
+                  <td className="px-2 py-2">
+                    <Input placeholder="Reason" value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} />
+                  </td>
+                  <td className="px-2 py-2 text-right whitespace-nowrap">
+                    <button
+                      className="text-xs font-medium text-white bg-yellow-600 hover:bg-yellow-700 rounded-lg px-2.5 py-1 mr-2 transition-colors disabled:opacity-50"
+                      disabled={!editForm.date}
+                      onClick={async () => {
+                        setError(''); setNotice('');
+                        try {
+                          await api(`/fleet/absences/${a.id}`, {
+                            method: 'PATCH',
+                            body: {
+                              date: editForm.date,
+                              dayType: editForm.dayType,
+                              period: editForm.dayType === 'HALF' ? editForm.period : 'FULL_DAY',
+                              reason: editForm.reason || undefined,
+                            },
+                          });
+                          toast('Absence updated.');
+                          setEditingAbsence(null);
+                          load();
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : 'Failed to update absence');
+                        }
+                      }}
+                    >
+                      Save
+                    </button>
+                    <button className="text-xs text-gray-500 hover:text-gray-700 underline" onClick={() => setEditingAbsence(null)}>Cancel</button>
+                  </td>
+                </>
+                ) : (
+                <>
+                  <td className="px-4 py-3 text-gray-600">{new Date(a.startsAt).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</td>
+                  <td className="px-4 py-3">
+                    <Badge color={a.dayType === 'FULL' ? 'blue' : 'yellow'}>
+                      {a.dayType === 'FULL' ? 'Full day' : a.period === 'MORNING' ? 'Half · Morning' : 'Half · Evening'}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500">
+                    {new Date(a.startsAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} – {new Date(a.endsAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                  </td>
+                  <td className="px-4 py-3 text-gray-500">{a.reason || '—'}</td>
+                  {canManage && (
+                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <button
+                      className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1 mr-2 transition-colors"
+                      onClick={() => {
+                        setError(''); setNotice('');
+                        const local = new Date(a.startsAt);
+                        // the stored window is office-local; rebuild the YYYY-MM-DD day from it
+                        const day = new Date(local.getTime() - local.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+                        setEditingAbsence(a);
+                        setEditForm({ date: day, dayType: a.dayType, period: a.period === 'FULL_DAY' ? 'MORNING' : a.period, reason: a.reason ?? '' });
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg px-2.5 py-1 mr-2 transition-colors"
+                      onClick={() => { setError(''); setNotice(''); setCancelingAbsence(a); }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="text-xs font-medium text-red-700 hover:text-red-800 underline"
+                      title="Delete the record outright"
+                      onClick={() => { setError(''); setNotice(''); setDeletingAbsence(a); }}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                  )}
+                </>
                 )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
         )}

@@ -6,7 +6,12 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
+import { TimetableService } from '../settings/timetable.service';
 import { Actor } from '../org/org.service';
+
+/** Leave granularity against the Company Time Table. */
+export type AbsenceDayType = 'FULL' | 'HALF';
+export type AbsencePeriod = 'FULL_DAY' | 'MORNING' | 'EVENING';
 
 @Injectable()
 export class FleetService {
@@ -16,6 +21,7 @@ export class FleetService {
     private telegram: TelegramService,
     private notifications: NotificationsService,
     private permissions: PermissionsService,
+    private timetable: TimetableService,
   ) {}
 
   // ---------- vehicle type master data (Plan §6) ----------
@@ -471,45 +477,114 @@ export class FleetService {
     });
   }
 
-  /** Record a planned absence — auto-flips the driver to ON_LEAVE when it starts today/now. */
+  /**
+   * Derive the concrete leave window from the Company Time Table:
+   *  FULL day        → workStart … workEnd
+   *  HALF / MORNING  → workStart … halfDaySplit
+   *  HALF / EVENING  → halfDaySplit … workEnd
+   * `date` is a calendar day (YYYY-MM-DD); the timetable times are local
+   * office time (Asia/Yangon = server TZ, +06:30 without DST).
+   */
+  private async absenceWindow(date: string, dayType: AbsenceDayType, period: AbsencePeriod): Promise<{ startsAt: Date; endsAt: Date }> {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new BadRequestException('date must be YYYY-MM-DD');
+    const tt = await this.timetable.get();
+    const at = (time: string) => new Date(`${date}T${time}:00+06:30`); // office local time
+    if (dayType === 'FULL') return { startsAt: at(tt.workStart), endsAt: at(tt.workEnd) };
+    if (period === 'MORNING') return { startsAt: at(tt.workStart), endsAt: at(tt.halfDaySplit) };
+    if (period === 'EVENING') return { startsAt: at(tt.halfDaySplit), endsAt: at(tt.workEnd) };
+    throw new BadRequestException('Half-day leave needs a period: MORNING or EVENING');
+  }
+
+  /** Record a planned absence (leave) — window derived from the Company Time Table. */
   async createAbsence(
-    data: { driverId: string; startsAt: Date; endsAt: Date; reason?: string },
+    data: { driverId: string; date: string; dayType: AbsenceDayType; period: AbsencePeriod; reason?: string },
     actor: { userId: string; username: string },
   ) {
     const driver = await this.prisma.driver.findUnique({ where: { id: data.driverId } });
     if (!driver) throw new NotFoundException('Driver not found');
-    if (!(data.endsAt > data.startsAt)) throw new BadRequestException('Absence end must be after start');
+    if (data.dayType === 'HALF' && data.period !== 'MORNING' && data.period !== 'EVENING') {
+      throw new BadRequestException('Half-day leave needs a period: MORNING or EVENING');
+    }
+    if (data.dayType === 'FULL') data.period = 'FULL_DAY';
+    const { startsAt, endsAt } = await this.absenceWindow(data.date, data.dayType, data.period);
+    return this.writeAbsence({ driverId: data.driverId, startsAt, endsAt, dayType: data.dayType, period: data.period, reason: data.reason }, actor);
+  }
+
+  /** Update an absence (re-pick day/period or edit the reason). */
+  async updateAbsence(
+    id: string,
+    data: { date: string; dayType: AbsenceDayType; period: AbsencePeriod; reason?: string },
+    actor: { userId: string; username: string },
+  ) {
+    const absence = await this.prisma.driverAbsence.findUnique({ where: { id }, include: { driver: true } });
+    if (!absence) throw new NotFoundException('Absence not found');
+    if (absence.status !== 'ACTIVE') throw new BadRequestException('Absence already cancelled');
+    if (data.dayType === 'HALF' && data.period !== 'MORNING' && data.period !== 'EVENING') {
+      throw new BadRequestException('Half-day leave needs a period: MORNING or EVENING');
+    }
+    if (data.dayType === 'FULL') data.period = 'FULL_DAY';
+    const { startsAt, endsAt } = await this.absenceWindow(data.date, data.dayType, data.period);
+    const updated = await this.writeAbsence(
+      { driverId: absence.driverId, startsAt, endsAt, dayType: data.dayType, period: data.period, reason: data.reason, existingId: id },
+      actor,
+    );
+    return updated;
+  }
+
+  /** Shared create/update path: overlap + trip-clash checks, status flip, audit, notify. */
+  private async writeAbsence(
+    data: { driverId: string; startsAt: Date; endsAt: Date; dayType: AbsenceDayType; period: AbsencePeriod; reason?: string; existingId?: string },
+    actor: { userId: string; username: string },
+  ) {
+    const { startsAt, endsAt, existingId } = data;
+    const driver = await this.prisma.driver.findUnique({ where: { id: data.driverId } });
+    if (!driver) throw new NotFoundException('Driver not found');
+    if (!(endsAt > startsAt)) throw new BadRequestException('Absence end must be after start');
     // overlapping ACTIVE absence for the same driver is a mistake (double entry)
     const overlap = await this.prisma.driverAbsence.findFirst({
-      where: { driverId: data.driverId, status: 'ACTIVE', startsAt: { lt: data.endsAt }, endsAt: { gt: data.startsAt } },
+      where: {
+        driverId: data.driverId,
+        status: 'ACTIVE',
+        startsAt: { lt: endsAt },
+        endsAt: { gt: startsAt },
+        ...(existingId ? { id: { not: existingId } } : {}),
+      },
       select: { id: true, startsAt: true, endsAt: true },
     });
     if (overlap) throw new ConflictException(`Driver already has an absence ${overlap.startsAt.toISOString().slice(0, 10)} → ${overlap.endsAt.toISOString().slice(0, 10)}`);
     // future trips already assigned to this driver inside the window — warn loudly
     const trips = await this.prisma.carRequest.findMany({
       // base document status (single source of truth) — CarRequest.status is a mirror
-      where: { driverId: data.driverId, startDate: { lt: data.endsAt }, endDate: { gt: data.startsAt }, request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never } } },
+      where: { driverId: data.driverId, startDate: { lt: endsAt }, endDate: { gt: startsAt }, request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never } } },
       select: { requestId: true, request: { select: { docNumber: true } } },
     });
 
-    const absence = await this.prisma.driverAbsence.create({
-      data: {
-        driverId: data.driverId,
-        startsAt: data.startsAt,
-        endsAt: data.endsAt,
-        reason: data.reason,
-        createdById: actor.userId,
-      },
-    });
+    const absence = existingId
+      ? await this.prisma.driverAbsence.update({
+          where: { id: existingId },
+          data: { startsAt, endsAt, dayType: data.dayType, period: data.period, reason: data.reason ?? null },
+        })
+      : await this.prisma.driverAbsence.create({
+          data: {
+            driverId: data.driverId,
+            startsAt,
+            endsAt,
+            dayType: data.dayType,
+            period: data.period,
+            reason: data.reason,
+            createdById: actor.userId,
+          },
+        });
     // already started (recording a same-day absence) → flip status now
-    if (data.startsAt <= new Date() && driver.status === 'AVAILABLE') {
+    if (startsAt <= new Date() && driver.status === 'AVAILABLE') {
       await this.prisma.driver.update({ where: { id: driver.id }, data: { status: 'ON_LEAVE' } });
     }
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
-      action: 'DRIVER_ABSENCE_RECORDED', module: 'FLEET', recordId: absence.id,
-      newValue: { driver: driver.name, startsAt: data.startsAt, endsAt: data.endsAt, reason: data.reason ?? null },
+      action: existingId ? 'DRIVER_ABSENCE_UPDATED' : 'DRIVER_ABSENCE_RECORDED',
+      module: 'FLEET', recordId: absence.id,
+      newValue: { driver: driver.name, startsAt, endsAt, dayType: data.dayType, period: data.period, reason: data.reason ?? null },
     });
 
     // tell whoever manages the fleet — especially important when future trips clash
@@ -517,14 +592,35 @@ export class FleetService {
     const adminIds = await this.permissions.usersWithPermissions(['fleet.manage']);
     if (adminIds.length) {
       const clash = trips.length ? ` ⚠️ ${trips.length} assigned trip(s) fall inside this window (${trips.map((t) => t.request.docNumber).join(', ')}) — re-assign them.` : '';
+      const span = data.dayType === 'FULL' ? 'a full day' : `the ${data.period === 'MORNING' ? 'morning' : 'evening'} half`;
       await this.notifications.notifyMany(adminIds, {
         type: 'REMINDER' as never,
         title: `🗓 Driver absence — ${driver.name}`,
-        body: `${driver.name} is absent ${data.startsAt.toISOString().slice(0, 10)} → ${data.endsAt.toISOString().slice(0, 10)}${data.reason ? ` (${data.reason})` : ''}.${clash}`,
+        body: `${driver.name} is on leave ${span} on ${startsAt.toISOString().slice(0, 10)}${data.reason ? ` (${data.reason})` : ''}.${clash}`,
         link: '/fleet',
       });
     }
     return { ...absence, clashes: trips.map((t) => t.request.docNumber) };
+  }
+
+  /** Delete an absence outright (admin cleanup) — restore status when the window is current. */
+  async deleteAbsence(id: string, actor: { userId: string; username: string }) {
+    const absence = await this.prisma.driverAbsence.findUnique({ where: { id }, include: { driver: true } });
+    if (!absence) throw new NotFoundException('Absence not found');
+    await this.prisma.$transaction([
+      this.prisma.driverAbsence.delete({ where: { id } }),
+      // restore status only when the window is current and the driver is not on a trip
+      ...(absence.startsAt <= new Date() && absence.endsAt > new Date() && absence.driver.status === 'ON_LEAVE'
+        ? [this.prisma.driver.update({ where: { id: absence.driverId }, data: { status: 'AVAILABLE' } })]
+        : []),
+    ]);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'DRIVER_ABSENCE_DELETED', module: 'FLEET', recordId: id,
+      oldValue: { driver: absence.driver.name, startsAt: absence.startsAt, endsAt: absence.endsAt, dayType: absence.dayType, period: absence.period },
+      severity: 'WARNING',
+    });
+    return { ok: true };
   }
 
   /** Cancel a planned absence — driver returns to AVAILABLE (if not on a trip). */
