@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { Button, Card, Input, Select } from './ui';
+import { Button, Input, Select } from './ui';
 
 const EMPTY = {
   destination: '', purpose: '', startDate: '', endDate: '',
@@ -20,8 +20,11 @@ function toLocal(d: Date): string {
  * - End is optional (defaults to 5:00 PM same day server-side)
  * - Custom hours requires an explicit End
  * - Warns about clashing bookings for the same window before submitting
+ *
+ * Embeddable: pass `onCreated` to render inside a modal (no own navigation),
+ * otherwise it navigates to the created request as before.
  */
-export function CarRequestForm() {
+export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void } = {}) {
   const [form, setForm] = useState(() => ({ ...EMPTY, startDate: toLocal(new Date()) }));
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -89,7 +92,9 @@ export function CarRequestForm() {
       if (!id) throw new Error('Unexpected response');
       await api(`/requests/${id}/submit`, { method: 'POST' });
       setForm({ ...EMPTY, startDate: toLocal(new Date()) });
-      navigate(`/requests/${id}`);
+      setBusy(false);
+      if (onCreated) onCreated(id); // modal usage: let the caller close + toast
+      else navigate(`/requests/${id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
       setBusy(false);
@@ -99,7 +104,7 @@ export function CarRequestForm() {
   const hasClash = clashes.length > 0 && !forceSubmit;
 
   return (
-    <Card className="p-5 space-y-3">
+    <div className="space-y-3">
       {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input placeholder="Destination *" value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
@@ -166,6 +171,6 @@ export function CarRequestForm() {
       <Button onClick={submit} disabled={!valid || busy}>
         {busy ? 'Submitting…' : 'Submit Car Request'}
       </Button>
-    </Card>
+    </div>
   );
 }

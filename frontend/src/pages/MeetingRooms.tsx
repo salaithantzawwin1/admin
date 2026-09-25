@@ -104,7 +104,8 @@ export default function MeetingRooms() {
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(false); // "New meeting request" dialog
+  const [formError, setFormError] = useState(''); // request-dialog error (modalError = room/facility dialogs)
   const [error, setError] = useState('');
   const [modalError, setModalError] = useState(''); // submit errors show inside the dialog, not on the page
   const [busy, setBusy] = useState(false);
@@ -214,6 +215,7 @@ export default function MeetingRooms() {
   const submit = async () => {
     setBusy(true);
     setError('');
+    setFormError('');
     try {
       const created = await api<{ id?: string; request?: { id: string } }>('/meeting-rooms/requests', {
         method: 'POST',
@@ -242,9 +244,10 @@ export default function MeetingRooms() {
       setRoomHints(null);
       setShowForm(false);
       setSlotHint('');
+      toast('Meeting request submitted');
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setFormError(e instanceof Error ? e.message : 'Failed');
     } finally {
       setBusy(false);
     }
@@ -382,15 +385,16 @@ export default function MeetingRooms() {
         actions={
           <Button
             onClick={() => {
-              if (showForm && tab === 'requests') {
+              if (showForm) {
                 setShowForm(false);
               } else {
+                setFormError('');
                 setShowForm(true);
                 setTab('requests');
               }
             }}
           >
-            {showForm && tab === 'requests' ? 'Close' : '+ New Meeting Request'}
+            {showForm ? 'Close' : '+ New Meeting Request'}
           </Button>
         }
       />
@@ -418,7 +422,12 @@ export default function MeetingRooms() {
       {tab === 'requests' && (
         <>
           {showForm && (
-            <Card className="mb-5 p-5">
+            <Modal
+              title="New meeting request"
+              error={formError}
+              wide
+              onClose={() => { setShowForm(false); setFormError(''); }}
+            >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* (v) Meeting subject */}
                 <Input className="sm:col-span-2" placeholder="Meeting subject * (e.g. Weekly progress review)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
@@ -513,7 +522,7 @@ export default function MeetingRooms() {
               <div className="mt-3">
                 <Button onClick={submit} disabled={!valid || busy}>{busy ? 'Submitting…' : 'Submit Request'}</Button>
               </div>
-            </Card>
+            </Modal>
           )}
 
           <Card>

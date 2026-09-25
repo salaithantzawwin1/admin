@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
 import { Badge, Card, Empty, PageHeader } from '../components/ui';
+import { Modal } from '../components/Modal';
 import { CarRequestForm } from '../components/CarRequestForm';
+import { toast } from '../components/Toast';
 
 interface FleetVehicle {
   id: string;
@@ -60,8 +62,9 @@ export default function CarRequests() {
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [fleet, setFleet] = useState<FleetVehicle[]>([]);
-  const [showForm, setShowForm] = useState(false);
+  const [showForm, setShowForm] = useState(false); // "New car request" dialog
   const [error, setError] = useState('');
+  const navigate = useNavigate();
   const canAssign = hasPermission('cars.assign');
 
   const load = useCallback(() => {
@@ -94,7 +97,7 @@ export default function CarRequests() {
       <PageHeader
         title="Car Requests"
         subtitle="Request a company vehicle (Plan §6)"
-        actions={<button onClick={() => setShowForm(!showForm)} className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">{showForm ? 'Close' : '+ New Car Request'}</button>}
+        actions={<button onClick={() => setShowForm(true)} className="px-3 py-1.5 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700">+ New Car Request</button>}
       />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
@@ -123,10 +126,18 @@ export default function CarRequests() {
         </button>
       </div>
 
+      {/* New car request — dialog (clash warnings + errors show inside) */}
       {showForm && (
-        <div className="mb-5">
-          <CarRequestForm />
-        </div>
+        <Modal title="New car request" wide onClose={() => setShowForm(false)}>
+          <CarRequestForm
+            onCreated={(id) => {
+              setShowForm(false);
+              toast('Car request submitted');
+              load();
+              navigate(`/requests/${id}`);
+            }}
+          />
+        </Modal>
       )}
 
       {/* ============ Tab: Fleet Availability ============ */}

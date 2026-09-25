@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { Modal } from '../components/Modal';
 
 interface RequestRow {
   id: string;
@@ -33,6 +34,7 @@ export default function MyRequests() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState('');
   const [form, setForm] = useState({ title: '', description: '', docType: 'GENERIC_REQUEST' });
+  const [formError, setFormError] = useState(''); // create-dialog error
   const navigate = useNavigate();
   // in-app confirm dialog state (replaces window.confirm)
   const [confirming, setConfirming] = useState<{ kind: 'recall' | 'cancelApproved'; id: string } | null>(null);
@@ -52,14 +54,14 @@ export default function MyRequests() {
   }, [load]);
 
   const create = async () => {
-    setError('');
+    setFormError('');
     try {
       const created = await api<{ id: string }>('/requests', { method: 'POST', body: form });
       setShowForm(false);
       setForm({ title: '', description: '', docType: 'GENERIC_REQUEST' });
       navigate(`/requests/${created.id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setFormError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -114,31 +116,46 @@ export default function MyRequests() {
       <PageHeader
         title="My Requests"
         subtitle="Requests you have created"
-        actions={<Button onClick={() => setShowForm(!showForm)}>{showForm ? 'Close' : '+ New Request'}</Button>}
+        actions={<Button onClick={() => { setForm({ title: '', description: '', docType: 'GENERIC_REQUEST' }); setFormError(''); setShowForm(true); }}>+ New Request</Button>}
       />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
+      {/* New request — dialog (errors show inside) */}
       {showForm && (
-        <Card className="mb-5 p-5 space-y-3">
-          <Input placeholder="Request title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          <textarea
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            rows={3}
-            placeholder="Description / details"
-            value={form.description}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-          />
-          {/* CAR_REQUEST is created from the Car Requests page (needs car details) */}
-          <Select value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
-            <option value="GENERIC_REQUEST">General Request</option>
-            <option value="MEETING_ROOM_REQUEST">Meeting Room Request</option>
-            <option value="OFFICE_SUPPLY_REQUEST">Office Supply Request</option>
-            <option value="TRAVEL_REQUEST">Travel Request</option>
-            <option value="MAINTENANCE_REQUEST">Maintenance Request</option>
-          </Select>
-          <Button onClick={create} disabled={!form.title}>Create Draft</Button>
-        </Card>
+        <Modal title="New request" error={formError} onClose={() => { setShowForm(false); setFormError(''); }}>
+          <div className="space-y-3">
+            <div className="text-xs text-gray-500">Creates a draft — you review and submit it on the next page. Car requests have their own form on the Car Requests page.</div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Request title *</label>
+              <Input placeholder="e.g. Stationery for September" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Request type *</label>
+              <Select value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
+                <option value="GENERIC_REQUEST">General Request</option>
+                <option value="MEETING_ROOM_REQUEST">Meeting Room Request</option>
+                <option value="OFFICE_SUPPLY_REQUEST">Office Supply Request</option>
+                <option value="TRAVEL_REQUEST">Travel Request</option>
+                <option value="MAINTENANCE_REQUEST">Maintenance Request</option>
+              </Select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Description / details</label>
+              <textarea
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                rows={3}
+                placeholder="Details the approver should know"
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
+              <Button onClick={create} disabled={!form.title}>Create Draft</Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       <Card>

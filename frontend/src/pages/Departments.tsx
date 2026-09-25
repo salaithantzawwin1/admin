@@ -53,7 +53,7 @@ export default function Departments() {
   useEffect(load, [load]);
 
   const createBranch = async () => {
-    setError('');
+    setModalError('');
     try {
       await api('/org/branches', { method: 'POST', body: bForm });
       setShowBranchForm(false);
@@ -61,12 +61,12 @@ export default function Departments() {
       toast('Branch created');
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setModalError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
   const createDept = async () => {
-    setError('');
+    setModalError('');
     try {
       await api('/org/departments', { method: 'POST', body: dForm });
       setShowDeptForm(false);
@@ -74,7 +74,7 @@ export default function Departments() {
       toast('Department created');
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setModalError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -139,8 +139,8 @@ export default function Departments() {
         actions={
           canManage ? (
             <>
-              <Button onClick={() => setShowDeptForm(!showDeptForm)}>{showDeptForm ? 'Close' : '+ Department'}</Button>
-              <Button onClick={() => setShowBranchForm(!showBranchForm)}>{showBranchForm ? 'Close' : '+ Branch'}</Button>
+              <Button onClick={() => { setDForm({ code: '', name: '', branchId: '' }); setModalError(''); setShowDeptForm(true); }}>+ Department</Button>
+              <Button onClick={() => { setBForm({ code: '', name: '', address: '', phone: '' }); setModalError(''); setShowBranchForm(true); }}>+ Branch</Button>
             </>
           ) : undefined
         }
@@ -148,36 +148,69 @@ export default function Departments() {
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
+      {/* New branch — dialog (errors show inside) */}
       {showBranchForm && (
-        <div className="mb-5 bg-white border border-gray-200 rounded-xl p-5 space-y-3">
-          <div className="text-sm font-semibold text-gray-700">New Branch</div>
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <Input placeholder="Code (e.g. HQ)" value={bForm.code} onChange={(e) => setBForm({ ...bForm, code: e.target.value.toUpperCase() })} />
-            <Input placeholder="Branch name" value={bForm.name} onChange={(e) => setBForm({ ...bForm, name: e.target.value })} />
-            <Input placeholder="Address (optional)" value={bForm.address} onChange={(e) => setBForm({ ...bForm, address: e.target.value })} />
-            <Input placeholder="Phone (optional)" value={bForm.phone} onChange={(e) => setBForm({ ...bForm, phone: e.target.value })} />
+        <Modal title="New branch" error={modalError} onClose={() => { setShowBranchForm(false); setModalError(''); }}>
+          <div className="space-y-3">
+            <div className="text-xs text-gray-500">Branches group departments — e.g. head office vs. branches.</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Code *</label>
+                <Input placeholder="e.g. HQ" value={bForm.code} onChange={(e) => setBForm({ ...bForm, code: e.target.value.toUpperCase() })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Branch name *</label>
+                <Input placeholder="e.g. Head Office" value={bForm.name} onChange={(e) => setBForm({ ...bForm, name: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Address</label>
+                <Input placeholder="Optional" value={bForm.address} onChange={(e) => setBForm({ ...bForm, address: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input placeholder="Optional" value={bForm.phone} onChange={(e) => setBForm({ ...bForm, phone: e.target.value })} />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowBranchForm(false)}>Cancel</Button>
+              <Button onClick={createBranch} disabled={bForm.code.length < 2 || bForm.name.length < 2}>Create Branch</Button>
+            </div>
           </div>
-          <Button onClick={createBranch} disabled={bForm.code.length < 2 || bForm.name.length < 2}>Create Branch</Button>
-        </div>
+        </Modal>
       )}
 
+      {/* New department — dialog (errors show inside) */}
       {showDeptForm && (
-        <div className="mb-5 bg-white border border-gray-200 rounded-xl p-5 space-y-3">
-          <div className="text-sm font-semibold text-gray-700">New Department</div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <Input placeholder="Code (e.g. IT)" value={dForm.code} onChange={(e) => setDForm({ ...dForm, code: e.target.value.toUpperCase() })} />
-            <Input placeholder="Department name" value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
-            <select
-              className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              value={dForm.branchId}
-              onChange={(e) => setDForm({ ...dForm, branchId: e.target.value })}
-            >
-              <option value="">— Branch (optional) —</option>
-              {branches.filter((b) => b.isActive).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
+        <Modal title="New department" error={modalError} onClose={() => { setShowDeptForm(false); setModalError(''); }}>
+          <div className="space-y-3">
+            <div className="text-xs text-gray-500">Departments group employees and route their requests to the right approvers.</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Code *</label>
+                <Input placeholder="e.g. IT" value={dForm.code} onChange={(e) => setDForm({ ...dForm, code: e.target.value.toUpperCase() })} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Department name *</label>
+                <Input placeholder="e.g. IT Department" value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs text-gray-500 mb-1">Branch</label>
+                <select
+                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold w-full"
+                  value={dForm.branchId}
+                  onChange={(e) => setDForm({ ...dForm, branchId: e.target.value })}
+                >
+                  <option value="">— Branch (optional) —</option>
+                  {branches.filter((b) => b.isActive).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setShowDeptForm(false)}>Cancel</Button>
+              <Button onClick={createDept} disabled={dForm.code.length < 2 || dForm.name.length < 2}>Create Department</Button>
+            </div>
           </div>
-          <Button onClick={createDept} disabled={dForm.code.length < 2 || dForm.name.length < 2}>Create Department</Button>
-        </div>
+        </Modal>
       )}
 
       <Table head={['Department', 'Code', 'Branch', 'Head', 'Employees', 'Status', 'Actions']}>
