@@ -232,7 +232,9 @@ export class InventoryController {
   }
 
   /** Supplies issued to one employee (issued-items history on the Employees page). */
-  @AnyPermission([PERMISSIONS.ORG_READ], [PERMISSIONS.EMPLOYEES_READ])
+  // employees.read keeps this aligned with the directory gate: legacy org.read
+  // holders (FINANCE, PURCHASING…) must not read issue ledgers through it.
+  @RequirePermissions(PERMISSIONS.EMPLOYEES_READ)
   @Get('employees/:id/issued-items')
   employeeIssuedItems(@Param('id') id: string) {
     return this.inventory.employeeIssuedItems(id);

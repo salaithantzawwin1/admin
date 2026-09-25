@@ -41,9 +41,11 @@ const DENIED_BY_ROLE: Record<string, string[]> = {
  * table (idempotent, safe on every boot). Runs at startup before guards query it.
  * Also applies DEFAULT_GRANTS for codes a role has never been granted — unless
  * the code is recorded as deliberately denied for that role.
+ *
+ * Accepts an injected PrismaService (unit tests) or creates its own (boot).
  */
-export async function seedPermissions() {
-  const prisma = new PrismaService();
+export async function seedPermissions(injected?: PrismaService) {
+  const prisma = injected ?? new PrismaService();
   try {
     await prisma.$connect();
     for (const code of ALL_PERMISSION_CODES) {
@@ -77,7 +79,7 @@ export async function seedPermissions() {
   } catch (e) {
     console.error('RBAC: permission catalog sync failed:', e);
   } finally {
-    await prisma.$disconnect();
+    if (!injected) await prisma.$disconnect();
   }
 }
 

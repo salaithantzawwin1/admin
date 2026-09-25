@@ -70,9 +70,11 @@ export class OrgController {
     return { userId: req.user.id, username: req.user.username };
   }
 
-  // ----- read: org.read (branches/employees) or departments.read (department lists used by pickers) -----
+  // ----- read: department/branch pickers + directory, gated by the dedicated
+  // matrix-editable read codes (org.read is a legacy catch-all held by roles
+  // that must not see the directory — see migration 35) -----
   @Get('branches')
-  @RequirePermissions(PERMISSIONS.ORG_READ)
+  @AnyPermission([PERMISSIONS.DEPARTMENTS_READ], [PERMISSIONS.EMPLOYEES_READ])
   branches() {
     return this.org.listBranches();
   }
