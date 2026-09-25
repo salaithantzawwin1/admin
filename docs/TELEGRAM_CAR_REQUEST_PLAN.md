@@ -1,4 +1,4 @@
-# Plan — Telegram `/car` Conversational Request Flow (Phase 2)
+# Plan — Telegram `/car` Request Flow (Phase 2)
 
 **Goal:** a requester who is out of the office creates and submits a car
 request entirely inside Telegram — no VPN, no office WiFi, no browser.
@@ -6,6 +6,12 @@ After submission the existing chain takes over unchanged: approval buttons →
 `/assign` picker → driver ack stages → Back at Office.
 
 **Status:** plan only — not yet implemented. Estimate: 1–2 working days.
+
+**Design decision (revised after review):** the request arrives as **ONE form
+card showing every field at once** — not six one-question-at-a-time prompts.
+The user fills it by replying with the field name and value (or edits the
+previous message). One message = one place to look = fast for users who know
+what they need, and the card itself documents the expected format.
 
 ---
 
@@ -18,29 +24,42 @@ After submission the existing chain takes over unchanged: approval buttons →
 | Service-layer creation + validation | `CarsService.createCarRequest()` (dates, 17:00 default end, doc number, audit) | call it directly — bot never writes Prisma itself |
 | Submission | `WorkflowService.submit()` (guard: requester only, DRAFT only) | submit right after create, as the same actor |
 | Bound-user resolution | `TelegramCarActionsService.boundUser(chatId)` | identify the requester |
-| Permission gating | `PermissionsService.forUser()` | request permission check (`requests.create` / authenticated user) |
+| Permission gating | `PermissionsService.forUser()` | authenticated bound user is enough |
 | Clash warning | `CarsService` availability/conflicts logic (used by web form) | pre-submit double-booking hint |
 | Confirmation card + Open in AMS | `sendRaw` + `webUrl` deep link | final summary card with doc number |
 
-## 2. Conversation design
+## 2. Conversation design — one form card
 
 ```
 User: /car
-Bot:  🚗 New car request (type /cancel to abort)
-      1/6 — Destination?
-User: Mandalay site visit
-Bot:  2/6 — Start date & time?  (YYYY-MM-DD HH:MM, Yangon time)
-User: 2026-09-28 08:30
-Bot:  3/6 — Time slot?
-      [☀️ Full day] [🌅 Half AM] [🌆 Half PM] [⏱ Custom]   ← inline buttons
-      (Custom → asks "End date & time?")
-Bot:  4/6 — How many passengers?
-User: 3
-Bot:  5/6 — Pickup location?  (or /skip)
-Bot:  6/6 — Purpose?  (or /skip)
-Bot:  📋 Summary — destination, window, slot, passengers, pickup, purpose
+Bot:  🚗 New car request
+      ────────────────────────────
+      Reply with the values (any order, one per line):
+
+      Destination: 
+      Start:          2026-09-28 08:30   (Yangon, YYYY-MM-DD HH:MM)
+      Slot:           Full day | Half AM | Half PM | Custom
+      End:            (Custom only — else auto 17:00)
+      Passengers:     1
+      Pickup:         (optional — reply "Pickup: -" to omit)
+      Purpose:        (optional — reply "Purpose: -" to omit)
+
+      ✅ Reply "Done" to submit when finished.
+      /cancel aborts.
+User: Destination: Mandalay site visit
+      Start: 2026-09-28 08:30
+      Passengers: 3
+      Pickup: Head Office
+Bot:  📋 Current values —
+      Destination: Mandalay site visit
+      Start: Sun 2026-09-28 08:30
+      Slot: Full day (End 17:00 auto)
+      Passengers: 3
+      Pickup: Head Office
+      Purpose: —
       + ⚠️ clash hint if another booking overlaps this window
-      [✅ Submit] [❌ Cancel]                                 ← inline buttons
+      [✅ Submit] [❌ Cancel]                    ← inline buttons (re-shown)
+User: taps ✅ Submit
 Bot:  → CarsService.createCarRequest(...) as the bound user
       → WorkflowService.submit(...)
 Bot:  ✅ Submitted as CAR-202609-0042 — waiting for approval.
@@ -49,48 +68,58 @@ Bot:  ✅ Submitted as CAR-202609-0042 — waiting for approval.
 ```
 
 Rules:
-- One question per message; free text answers; step 3 uses inline buttons.
-- `/cancel` at any point aborts and clears state (supersedes an armed reject
-  conversation, same as approve already does).
-- Destination and start time are required; everything else has defaults
-  (slot = FULL_DAY, passengers = 1, end = 17:00 same day).
-- Slot buttons answer via callback — no free-text slot parsing.
-- Date parsing: accept `YYYY-MM-DD HH:MM` and `YYYY-MM-DD HHMM`; reply with a
-  re-ask message on garbage input (never guess).
+- **The user may answer all fields in one reply or several** — each reply is
+  parsed line-by-line (`Field: value`), updating whatever it names. Unknown
+  field names get a gentle re-echo of the field list, not an abort.
+- After every reply the bot re-renders the current-values card and re-shows
+  [✅ Submit][❌ Cancel] — the user always sees the live state.
+- Required before Submit: **Destination + Start** (both validated).
+  Missing ones are highlighted in the card (❌ Destination) instead of
+  prompting one by one.
+- `/cancel` aborts and clears state (supersedes an armed reject conversation,
+  same as approve already does).
+- Slot via free text (`Slot: half am`) OR by tapping a slot row rendered as a
+  small inline keyboard on the card (`wfa:slot:<SLOT>` callback) — both paths
+  set the same field.
+- Date parsing: accept `YYYY-MM-DD HH:MM` and `YYYY-MM-DD HHMM`; garbage →
+  field highlighted red in the re-render, never guessed.
+- State TTL 15 min, cap 200 chats, sweep on arm (same as REJECT_TTL_MS).
 
 ## 3. Implementation steps
 
-1. **State** — `pendingCarRequests: Map<chatId, { step, draft, at }>` in
-   `TelegramCarActionsService` (TTL 15 min, size cap 200, sweep on arm —
-   copy the `REJECT_TTL_MS` pattern).
-2. **Handlers** — `handleCarCommand(text, chatId)` returns true for `/car`;
-   `handleCarText(text, chatId)` advances the conversation; new callback
-   tokens `wfa:slot:<SLOT>` / `wfa:carsubmit` / `wfa:carcancel` wired into
-   `handleCallback`'s token switch.
+1. **State** — `pendingCarRequests: Map<chatId, { draft, at }>` in
+   `TelegramCarActionsService` (`draft` = plain object of the 7 fields; no
+   step counter needed — the form is stateless between replies).
+2. **Handlers** — `handleCarCommand(text, chatId)` returns true for `/car`
+   and renders the form card; `handleCarText(text, chatId)` parses
+   `Field: value` lines; callbacks `wfa:slot:<SLOT>` / `wfa:carsubmit` /
+   `wfa:carcancel` wired into `handleCallback`'s token switch.
 3. **Ordering** — in `TelegramService.handleUpdate`, the armed-conversation
    check runs BEFORE the slash-command fallback (mirrors the rejects hook),
-   so `/cancel` and answers are consumed while a /car conversation is open.
-4. **Actor** — every action runs as the bound AMS user (never a bot identity),
-   so audit trail + "requester only can submit" hold automatically.
-5. **Gates** — unlinked chat → "not linked" error; user without any roles →
-   reject; disable the flow entirely when `telegram.enabled` is false (already
-   the bot-wide gate).
-6. **Success card** — doc number + status + Open-in-AMS deep link; the
-   approval card goes to approvers through the existing `onSubmittedTelegram`
-   hook — zero new notification code.
-7. **Registration** — wire in `CarsModule.onApplicationBootstrap` next to the
+   so `/cancel`, `Done` and field replies are consumed while open.
+4. **Submit path** — validate Destination+Start → build the exact payload the
+   web DTO expects → `CarsService.createCarRequest(payload, boundUser as
+   actor)` → `WorkflowService.submit(request.id, same actor)` → success card
+   with doc number + Open-in-AMS. Validation errors (bad date, no workflow)
+   are echoed on the card and the conversation stays open for fixing.
+5. **Gates** — unlinked chat → "not linked" error; `telegram.enabled` false →
+   flow never starts (bot-wide gate already handles it).
+6. **Registration** — wire in `CarsModule.onApplicationBootstrap` next to the
    existing hooks; add `/car — request a vehicle` to the bot's command list.
 
 ## 4. Testing
 
-- **Unit (test/telegram-car-request.test.ts)** — happy path all steps;
-  `/cancel` mid-flow; TTL expiry; garbage date re-ask; slot via callback;
-  unlinked chat; user without permission; submit fails (no workflow) → error
-  shown, state cleared; supersede: opening /car while a reject conversation is
-  armed. Harness style: mock prisma + spy `call()`, same as telegram-assign-e2e.
+- **Unit (test/telegram-car-request.test.ts)** — renders form card on /car;
+  one-reply-all-fields parsing; multiple replies accumulate; unknown field
+  re-echo; bad date highlighted not guessed; slot free-text + callback paths;
+  missing-required blocks Submit with highlighted fields; `/cancel` clears;
+  TTL expiry; unlinked chat; supersede: opening /car while a reject
+  conversation is armed. Harness style: mock prisma + spy `call()`, same as
+  telegram-assign-e2e.
 - **E2E on testing stack (scripts/server/verify-tg-car-request.sh)** — real
-  bound user drives /car via the bot API against :3011, asserts doc number
-  arrives and the request lands as PENDING_APPROVAL with correct window.
+  bound user drives /car via the bot API against :3011, asserts the doc
+  number arrives and the request lands as PENDING_APPROVAL with the correct
+  window.
 
 ## 5. Out of scope (deliberate)
 
