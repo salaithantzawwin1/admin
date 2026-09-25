@@ -286,6 +286,13 @@ curl -s http://127.0.0.1:3000/api/health
 
 ## 11. Troubleshooting notes
 
+- **Backend `P1000 Authentication failed` after changing `POSTGRES_PASSWORD`:**
+  `POSTGRES_PASSWORD` only applies when the data volume is FIRST initialized — on an
+  existing volume the `ams` role keeps its original password, so a changed env file
+  breaks the backend's `DATABASE_URL` (crash loop). Fix with the one-shot script:
+  `bash scripts/server/fix-db-password.sh ams-db-1` (or `ams-test-db-1`), which
+  runs `ALTER USER ams WITH PASSWORD '<env value>'` over the container's local
+  socket. (Hit for real on 2026-09-25 during the :80/:8030 swap.)
 - **Prisma on alpine:** OpenSSL detection is broken here and picks 1.1 engines → runtime
   crash. Fix: backend uses `node:20-bookworm` (Debian, OpenSSL 3). Do not switch to alpine.
 - **Server network:** only HTTPS to npm/Docker Hub allowed; `deb.debian.org`,
