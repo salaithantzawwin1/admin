@@ -53,15 +53,18 @@ export class SuppliersController {
   }
 
   /** Supplier master list — active only by default, ?all=1 includes deactivated. */
-  // OR: inventory.read (store view) or the dedicated suppliers.read
-  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.SUPPLIERS_READ])
+  // Standalone Suppliers module → dedicated suppliers.read. Store staff reach the
+  // same master through /inventory/suppliers (inventory.read alias); keeping
+  // inventory.read out of this gate is what makes an RBAC-matrix revocation of
+  // "View suppliers" actually stick for roles like FINANCE.
+  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
   @Get()
   list(@Query('all') all?: string) {
     return this.suppliers.list(all === '1');
   }
 
   /** Purchase history for one supplier (Who/When/What of their PURCHASE txs). */
-  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.SUPPLIERS_READ])
+  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
   @Get(':id/history')
   history(@Param('id') id: string, @Query('start') start?: string, @Query('end') end?: string) {
     return this.suppliers.purchaseHistory(id, start || undefined, end || undefined);
@@ -87,7 +90,7 @@ export class SuppliersController {
 
   // ---------- vendor management (Purchasing) ----------
 
-  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.SUPPLIERS_READ])
+  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
   @Get(':id/contact-logs')
   contactLogs(@Param('id') id: string) {
     return this.suppliers.listContactLogs(id);
@@ -109,7 +112,7 @@ export class SuppliersController {
     return this.suppliers.deleteContactLog(id, logId, this.actor(req));
   }
 
-  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.SUPPLIERS_READ])
+  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
   @Get(':id/po-drafts')
   poDrafts(@Param('id') id: string) {
     return this.suppliers.listPurchaseDrafts(id);
