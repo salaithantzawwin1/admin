@@ -221,6 +221,37 @@ export function CarPanel({
               Cancel request
             </Button>
           </div>
+          {/* Quick actions — push the WHOLE window forward by a fixed amount.
+              Pre-fills the Shift-time fields; the actual move happens on the
+              confirmed Shift (availability is checked server-side there, and
+              the requester + driver get the change notices). */}
+          <div className="flex flex-wrap gap-1.5 items-center mt-2">
+            <span className="text-xs text-gray-400 mr-1">Push trip by:</span>
+            {[
+              { mins: 30, label: '+30 min' },
+              { mins: 60, label: '+1 hour' },
+              { mins: 180, label: '+3 hours' },
+            ].map((q) => (
+              <button
+                key={q.mins}
+                onClick={() => {
+                  const s = new Date(car.startDate);
+                  const e = new Date(car.endDate);
+                  s.setMinutes(s.getMinutes() + q.mins);
+                  e.setMinutes(e.getMinutes() + q.mins);
+                  const loc = (d: Date) => {
+                    const p = (n: number) => String(n).padStart(2, '0');
+                    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+                  };
+                  setShiftForm({ startDate: loc(s), endDate: loc(e) });
+                }}
+                className="px-2 py-1 text-xs rounded-full border border-gray-300 bg-white text-gray-600 hover:bg-gold/10 hover:border-gold transition-colors"
+              >
+                {q.label}
+              </button>
+            ))}
+            <span className="text-xs text-gray-400 ml-1">→ fills the Shift-time fields above, then press Shift time to confirm</span>
+          </div>
           <p className="text-xs text-gray-400 mt-1.5">Shift time moves the window (vehicle availability is checked). Cancel frees the car and notifies the requester.</p>
         </div>
       )}
