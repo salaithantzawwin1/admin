@@ -124,6 +124,12 @@ export function CarPanel({
       .catch(() => setCanManagerAck(false));
   }, [requestId]);
 
+  // a re-assign after a conflict alert needs the shared-trip toggle again.
+  // Rules of Hooks: must live ABOVE the early returns — a hook after `if (!car)
+  // return null` fired "fewer hooks than the previous render" (React #310)
+  // the moment the car data loaded/disappeared.
+  useEffect(() => { setShare(false); }, [status, car?.assignment?.id]);
+
   // trip window of the current request (fallbacks keep the hook call stable while loading)
   const tripStart = car ? new Date(car.startDate) : new Date(0);
   const tripEnd = car ? new Date(car.endDate) : new Date(8640000000000000);
@@ -157,8 +163,6 @@ export function CarPanel({
   const trip = assignment?.trip;
   const showAssign = canAssign && status === 'APPROVED' && !assignment;
   const canStart = canAssign && assignment && !trip;
-  // a re-assign after a conflict alert needs the shared-trip toggle again
-  useEffect(() => { setShare(false); }, [status, car.assignment?.id]);
   // change vehicle/driver on a live assignment (before the trip starts)
   const canReassign = canAssign && assignment && !trip;
   const canComplete = canAssign && trip?.status === 'STARTED';
