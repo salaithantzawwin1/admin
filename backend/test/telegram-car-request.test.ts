@@ -275,6 +275,33 @@ async function main() {
   check((lastText()).includes('လိုက်ပါသူ အရေအတွက် မမှန်ပါ'), 'passengers 999 warns with the 1–60 rule');
   await svc.handleCarText('/cancel', CHAT);
 
+  // 17. BARE answers (no label) — the exact flow from the user's screenshot:
+  // typing "Head Office" with no colon fills the destination, never an error
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarText('Head Office', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'Head Office', 'bare "Head Office" fills destination');
+  check(!sent('မသိပါသော အကွက်များ').length, 'bare destination raises NO unknown-field error');
+
+  // 17b. bare date fills Start; with Custom hours on, the second bare date fills End
+  await svc.handleCarText('5/10 09:00', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.start === '5/10 09:00', 'bare date fills Start');
+  await svc.handleCarText('custom', CHAT); // custom hours on — the next bare date is the End
+  await svc.handleCarText('5/10 12:00', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.end === '5/10 12:00', 'second bare date fills End (custom hours on)');
+
+  // 17c. bare slot keywords work too
+  await svc.handleCarText('full day', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.slot === 'FULL_DAY', 'bare "full day" sets slot');
+  await svc.handleCarText('custom', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.slot === 'CUSTOM_HOURS', 'bare "custom" sets slot');
+
+  // 17d. once destination exists, a second bare line is flagged (not silently swallowed)
+  apiLog.length = 0;
+  await svc.handleCarText('Yangon downtown', CHAT);
+  check(sent('မသိပါသော အကွက်များ').length === 1, 'second bare line still flagged so nothing is silently lost');
+  await svc.handleCarText('/cancel', CHAT);
+
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
     for (const f of failures) console.error(`  ✗ ${f}`);

@@ -532,6 +532,21 @@ export class TelegramCarActionsService {
    */
   private pendingCarRequests = new Map<string, { draft: Record<string, string | number | undefined>; at: number }>();
 
+  /** Bare one-word slot answers — "full day", "am", "custom" … (no label needed). */
+  private static readonly BARE_SLOTS: Record<string, string> = {
+    full: 'FULL_DAY',
+    fullday: 'FULL_DAY',
+    am: 'HALF_DAY_AM',
+    halfam: 'HALF_DAY_AM',
+    morning: 'HALF_DAY_AM',
+    pm: 'HALF_DAY_PM',
+    halfpm: 'HALF_DAY_PM',
+    afternoon: 'HALF_DAY_PM',
+    evening: 'HALF_DAY_PM',
+    custom: 'CUSTOM_HOURS',
+    customhours: 'CUSTOM_HOURS',
+  };
+
   /** Field aliases — Burmese-first + English, matched case-insensitively. */
   private static readonly CAR_FIELDS: { key: string; aliases: string[] }[] = [
     { key: 'destination', aliases: ['destination', 'dest', 'သွားမယ့်နေရာ', 'သွားရန်နေရာ'] },
@@ -587,7 +602,29 @@ export class TelegramCarActionsService {
       const line = rawLine.trim();
       if (!line) continue;
       const sep = line.indexOf(':');
-      if (sep <= 0) {
+      if (sep < 0) {
+        // bare answer (no colon) — plain typing just works:
+        // slot keyword → date/time (fills Start, then End) → Destination;
+        // anything else is flagged so the hint can teach the labelled form
+        const bareSlot = TelegramCarActionsService.BARE_SLOTS[line.toLowerCase().replace(/[\s_-]/g, '')];
+        if (bareSlot) {
+          entry.draft.slot = bareSlot;
+          continue;
+        }
+        if (TelegramCarActionsService.parseCarDateStatic(line)) {
+          // second bare date only fills End when Custom hours are on — otherwise
+          // the End value would silently change the meaning of a Full-day request
+          this.setCarField(entry.draft, entry.draft.slot === 'CUSTOM_HOURS' && entry.draft.start ? 'end' : 'start', line);
+          continue;
+        }
+        if (!entry.draft.destination) {
+          this.setCarField(entry.draft, 'destination', line);
+          continue;
+        }
+        unknownKeys.push(line.slice(0, 40));
+        continue;
+      }
+      if (sep === 0) {
         unknownKeys.push(line.slice(0, 40));
         continue;
       }
@@ -595,6 +632,18 @@ export class TelegramCarActionsService {
       const value = line.slice(sep + 1).trim();
       const field = TelegramCarActionsService.CAR_FIELDS.find((f) => f.aliases.includes(key));
       if (!field) {
+        // the "colon" may be the TIME separator of a bare date — "5/10 09:00"
+        // has no field label at all. Before flagging it unknown, try the bare
+        // date / slot readings so plain typing still lands in the right field.
+        const bareSlot2 = TelegramCarActionsService.BARE_SLOTS[line.toLowerCase().replace(/[\s_-]/g, '')];
+        if (bareSlot2) {
+          entry.draft.slot = bareSlot2;
+          continue;
+        }
+        if (TelegramCarActionsService.parseCarDateStatic(line)) {
+          this.setCarField(entry.draft, entry.draft.slot === 'CUSTOM_HOURS' && entry.draft.start ? 'end' : 'start', line);
+          continue;
+        }
         unknownKeys.push(key);
         continue;
       }
@@ -607,6 +656,7 @@ export class TelegramCarActionsService {
         chatId,
         `❓ မသိပါသော အကွက်များ — ${escapeHtml(unknownKeys.join(', '))}\n` +
           'အကွက်အမည် ရှေ့တွင် ထည့်ရေးပါ — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး\n' +
+          'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) / "5/10 09:00" (အချိန်)\n' +
           escapeHtml(TelegramCarActionsService.CAR_FIELDS.map((f) => f.aliases[0]).join(', ')),
       );
     }
@@ -792,9 +842,9 @@ export class TelegramCarActionsService {
       draft.purpose ? `✅ ရည်ရွယ်ချက်: ${escapeHtml(String(draft.purpose))}` : '➖ ရည်ရွယ်ချက်: —',
       draft.notes ? `✅ မှတ်ချက်: ${escapeHtml(String(draft.notes))}` : '➖ မှတ်ချက်: —',
       '────────────────',
-      'ဖြည့်ရန် — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး  (တစ်ကြောင်းချင်းလည်းရ / တစ်ခါတည်းလည်းရ)',
-      'ထွက်ချိန် ပုံစံများ — <b>2026-10-05 08:30</b> ဒါမှမဟုတ် <b>5/10 09:00</b>',
-      '<i>နောက်တစ်ကြိမ် အမြန်ရေးချင်ရင် — /car မန္တလေး</i>',
+      'ဖြည့်ရန် — ဒီ chat ထဲ ပြန်ရေးပါ — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး',
+      'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day"',
+      '<i>အမြန်စတင် — /car မန္တလေး</i>',
     ].join('\n');
     return lines;
   }
