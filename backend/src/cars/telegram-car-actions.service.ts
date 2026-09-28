@@ -611,6 +611,13 @@ export class TelegramCarActionsService {
       await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
       return;
     }
+    // re-issuing /car while the form is open re-opens a FRESH form (same as the
+    // first /car) — handleUpdate routes bare '/car' here instead of the command
+    // handler, so without this the command text became the destination.
+    if (text === '/car' || text.startsWith('/car ')) {
+      await this.handleCarCommand(text, chatId);
+      return;
+    }
 
     entry.at = Date.now(); // touch — an active conversation never TTLs mid-typing
     // keyboards vary: fullwidth colons, non-breaking spaces, Myanmar digits —
@@ -819,6 +826,22 @@ export class TelegramCarActionsService {
 
     const actor = { userId: user.id, username: user.username };
     try {
+      // pre-flight the workflow BEFORE creating the DRAFT document — a "no active
+      // workflow configured" failure used to leave a stray DRAFT request behind
+      // on every submit while the workflow was switched off in Settings.
+      // Mirrors WorkflowService.workflowFor: module-specific, else GENERIC_REQUEST.
+      const wf =
+        (await this.prisma.approvalWorkflow.findFirst({
+          where: { module: 'CAR_REQUEST', active: true },
+          select: { id: true, steps: { select: { id: true } } },
+        })) ??
+        (await this.prisma.approvalWorkflow.findFirst({
+          where: { module: 'GENERIC_REQUEST', active: true },
+          select: { id: true, steps: { select: { id: true } } },
+        }));
+      if (!wf || wf.steps.length === 0) {
+        throw new Error('Workflow for car requests is not configured — ask Administration to enable it (Settings → Workflows).');
+      }
       const created = await this.cars.createCarRequest(
         {
           destination: destination!,
@@ -921,7 +944,7 @@ export class TelegramCarActionsService {
         b(slot === 'HALF_DAY_PM' ? '🌆 Half PM ✓' : '🌆 Half PM', 'wfa:carslot:HALF_DAY_PM'),
         b(slot === 'CUSTOM_HOURS' ? '⏱ Custom ✓' : '⏱ Custom', 'wfa:carslot:CUSTOM_HOURS'),
       ],
-      [b(draft.showExtra ? '➖ ထပ်ဖြည့်ဖြည့်ဖျောက်' : '➕ ထပ်ဖြည့်မယ်', 'wfa:carextra')],
+      [b(draft.showExtra ? '➖ ထပ်ဖြည့်ဖျောက်' : '➕ ထပ်ဖြည့်မယ်', 'wfa:carextra')],
       [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
     ];
     return { inline_keyboard: rows };

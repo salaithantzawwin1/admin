@@ -32,6 +32,12 @@ const prisma: any = {
         : null,
   },
   systemSetting: { findUnique: async () => ({ value: 'https://ams.example.com' }) },
+  // submit pre-flight: the bot checks the CAR_REQUEST workflow (else GENERIC_REQUEST)
+  // is active with steps BEFORE creating a DRAFT document
+  approvalWorkflow: {
+    findFirst: async ({ where }: any) =>
+      where.module === 'CAR_REQUEST' ? { id: 'wf-car', steps: [{ id: 's1' }] } : null,
+  },
 };
 
 const createdRequests: any[] = [];
@@ -365,7 +371,65 @@ async function main() {
   // no explicit process.exit — let the event loop drain so all output flushes
 }
 
-main().catch((e) => {
-  console.error('HARNESS ERROR:', e);
-  process.exit(1);
+// 19. REGRESSION GUARDS (audit findings)
+async function regressionTests() {
+  console.log('\n— 19. audit regression guards —');
+
+  // 19a. re-issuing /car while the form is open resets the form (never becomes
+  // the destination, never "unknown field") — the bot routes bare '/car' here.
+  await svc.handleCarCommand('/car', CHAT);
+  await svc.handleCarText('Destination: old draft', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarText('/car', CHAT);
+  const d19a = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+  check(!d19a.destination, 'bare "/car" while open resets the form');
+  check(!sent('မသိပါသော အကွက်များ').length, 'bare "/car" raises NO unknown-field error');
+  check(!(d19a.destination === '/car'), 'command text never lands as the destination');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 19b. submit pre-flight: no active CAR_REQUEST workflow → friendly error,
+  // NO document created, conversation stays open for a retry.
+  const realWf = prisma.approvalWorkflow.findFirst;
+  prisma.approvalWorkflow.findFirst = async () => null;
+  await svc.handleCarCommand('/car', CHAT);
+  await svc.handleCarText('Destination: No workflow\nStart: 2026-10-05 08:30', CHAT);
+  const createdBefore = createdRequests.length;
+  apiLog.length = 0;
+  await tap('wfa:carsubmit', 'cb-sub-nowf');
+  check(createdRequests.length === createdBefore, 'no workflow → no document created (no stray DRAFT)');
+  check(allText().includes('Workflow for car requests is not configured'), 'no workflow → clear Burmese-context error on the card');
+  check(svc.pendingCarRequests.has(CHAT), 'conversation stays open after the workflow error');
+  prisma.approvalWorkflow.findFirst = realWf;
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 19c. GENERIC_REQUEST fallback counts as a usable workflow (mirrors workflowFor)
+  prisma.approvalWorkflow.findFirst = async ({ where }: any) =>
+    where.module === 'GENERIC_REQUEST' ? { id: 'wf-generic', steps: [{ id: 's1' }] } : null;
+  await svc.handleCarCommand('/car', CHAT);
+  await svc.handleCarText('Destination: Generic wf\nStart: 2026-10-05 09:00', CHAT);
+  createdRequests.length = 0; submittedIds.length = 0;
+  await tap('wfa:carsubmit', 'cb-sub-generic');
+  check(createdRequests.length === 1, 'GENERIC_REQUEST fallback workflow allows submit');
+  prisma.approvalWorkflow.findFirst = realWf;
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 19d. the toggle button label is spelled correctly
+  await svc.handleCarCommand('/car', CHAT);
+  const kb = JSON.stringify(apiLog.map((l) => l.payload?.reply_markup ?? []));
+  check(kb.includes('ထပ်ဖြည့်မယ်'), 'keyboard offers [➕ ထပ်ဖြည့်မယ်]');
+  check(!kb.includes('ထပ်ဖြည့်ဖြည့်'), 'keyboard never shows the duplicated typo label');
+  await svc.handleCarText('/cancel', CHAT);
+
+  console.log(`\n${checks} checks, ${failures.length} failed`);
+  if (failures.length > 0) {
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exitCode = 1;
+  }
+}
+
+main()
+  .then(() => regressionTests())
+  .catch((e) => {
+    console.error('HARNESS ERROR:', e);
+    process.exit(1);
 });
