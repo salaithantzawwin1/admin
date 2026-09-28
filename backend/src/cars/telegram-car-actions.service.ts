@@ -504,6 +504,7 @@ export class TelegramCarActionsService {
     try {
       await this.cars.assign(payload.requestId, { vehicleId: payload.vehicleId, driverId: driverId === '-' ? undefined : driverId }, actor as never);
       this.pickTokens.delete(token); // one-shot — a second tap must not double-assign
+
       const who = driverName ? `\n👤 ${escapeHtml(driverName)}` : '';
       await this.telegram.editCallbackMessage(chatId, callbackId, `✅ Assigned — ${escapeHtml(request.docNumber)}${who}\n· by ${escapeHtml(actor.username)} · ${stamp}`);
       await this.telegram.answer(callbackId, 'Assigned — driver notified');
@@ -544,15 +545,19 @@ export class TelegramCarActionsService {
     { key: 'notes', aliases: ['notes', 'description', 'မှတ်ချက်'] },
   ];
 
-  /** /car — open (or re-show) the request form card. */
-  async handleCarCommand(_text: string, chatId: string): Promise<void> {
+  /** /car — open (or re-show) the request form card. `/car <destination>` prefills the destination. */
+  async handleCarCommand(text: string, chatId: string): Promise<void> {
     const user = await this.boundUser(chatId);
     if (!user) {
       await this.telegram.sendRaw(chatId, '❌ Your Telegram is not linked to an AMS account.');
       return;
     }
-    // fresh draft (re-issuing /car resets the form — deliberate and predictable)
-    this.pendingCarRequests.set(chatId, { draft: {}, at: Date.now() });
+    // fresh draft (re-issuing /car resets the form — deliberate and predictable);
+    // `/car မန္တလေး` style starts with the destination already filled
+    const rest = text.split(/\s+/).slice(1).join(' ').trim();
+    const draft: Record<string, string | number | undefined> = {};
+    if (rest) draft.destination = rest;
+    this.pendingCarRequests.set(chatId, { draft, at: Date.now() });
     this.sweepCarDrafts();
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
@@ -573,8 +578,12 @@ export class TelegramCarActionsService {
     }
 
     entry.at = Date.now(); // touch — an active conversation never TTLs mid-typing
+    // keyboards vary: fullwidth colons, non-breaking spaces, Myanmar digits —
+    // normalise BEFORE parsing so none of them silently break a field answer
+    const normalized = TelegramCarActionsService.toAsciiDigits(text.replace(/：/g, ':').replace(/\u00A0/g, ' '));
     const unknownKeys: string[] = [];
-    for (const rawLine of text.split(/\r?\n/)) {
+    const fieldWarnings: string[] = [];
+    for (const rawLine of normalized.split(/\r?\n/)) {
       const line = rawLine.trim();
       if (!line) continue;
       const sep = line.indexOf(':');
@@ -589,7 +598,8 @@ export class TelegramCarActionsService {
         unknownKeys.push(key);
         continue;
       }
-      this.setCarField(entry.draft, field.key, value);
+      const warning = this.setCarField(entry.draft, field.key, value);
+      if (warning) fieldWarnings.push(warning);
     }
 
     if (unknownKeys.length > 0) {
@@ -600,10 +610,11 @@ export class TelegramCarActionsService {
           escapeHtml(TelegramCarActionsService.CAR_FIELDS.map((f) => f.aliases[0]).join(', ')),
       );
     }
-    await this.sendRawCard(chatId, this.renderCarCard(chatId));
+    await this.sendRawCard(chatId, (fieldWarnings.length > 0 ? `${fieldWarnings.join('\n')}\n\n` : '') + this.renderCarCard(chatId));
   }
 
-  private setCarField(draft: Record<string, unknown>, key: string, value: string): void {
+  /** Returns an optional warning line — silently ignored values were a UX trap. */
+  private setCarField(draft: Record<string, unknown>, key: string, value: string): string | undefined {
     const v = value.trim();
     const empty = v === '' || v === '-' || v === '/skip';
     switch (key) {
@@ -615,10 +626,21 @@ export class TelegramCarActionsService {
         else draft[key] = v;
         break;
       case 'start':
-      case 'end':
-        if (empty) delete draft[key];
-        else draft[key] = v; // validated at submit; card shows ❌ if unparseable
+      case 'end': {
+        if (empty) {
+          delete draft[key];
+          break;
+        }
+        const parsed = TelegramCarActionsService.parseCarDateStatic(v);
+        if (parsed) {
+          draft[key] = v; // keep the human-readable value; ISO derived at submit
+        } else if (/^\d{1,2}[/.]\d{1,2}([/.]\d{2,4})?$/.test(v.replace(/\s+.*$/, ''))) {
+          draft[key] = v; // d/m[/y] shape — parseCarDateStatic's day-first fallback reads it
+        } else {
+          return `⚠️ ${key === 'start' ? 'ထွက်မယ့်အချိန်' : 'ပြန်ရောက်မည့်အချိန်'} နားမလည်ပါ — ရက်စွဲပုံစံ ဥပမာ <b>2026-10-05 08:30</b> (ဒါမှမဟုတ် 5/10 08:30)`;
+        }
         break;
+      }
       case 'slot':
         if (empty) delete draft.slot;
         else {
@@ -637,6 +659,7 @@ export class TelegramCarActionsService {
         }
         const n = Number.parseInt(v, 10);
         if (Number.isFinite(n) && n >= 1 && n <= 60) draft.passengers = n;
+        else return '⚠️ လိုက်ပါသူ အရေအတွက် မမှန်ပါ — 1 မှ 60 အတွင်း ဂဏန်းဖြင့် ရေးပါ';
         break;
       }
       case 'vehicle': {
@@ -648,9 +671,11 @@ export class TelegramCarActionsService {
         const hit = TelegramCarActionsService.CAR_VEHICLE_TYPES.find((t) => t.replace(/[\s_-]/g, '') === wanted)
           ?? TelegramCarActionsService.CAR_VEHICLE_TYPES.find((t) => t.replace(/[\s_-]/g, '').startsWith(wanted) && wanted.length >= 3);
         if (hit) draft.vehicle = hit;
+        else return `⚠️ ကားအမျိုးအစား နားမလည်ပါ — ရွေးချယ်စရာများ- ${TelegramCarActionsService.CAR_VEHICLE_TYPES.join(', ')}`;
         break;
       }
     }
+    return undefined;
   }
 
   /** Slot chosen via the card's inline buttons. */
@@ -686,12 +711,12 @@ export class TelegramCarActionsService {
     const destination = str('destination');
     if (!destination || destination.trim().length < 2) problems.push('❌ သွားမယ့်နေရာ (Destination) လိုအပ်ပါသည်');
     const startRaw = str('start');
-    const startIso = startRaw ? this.parseCarDate(startRaw) : null;
-    if (!startIso) problems.push('❌ ထွက်မယ့်အချိန် (Start) — ဥပမာ 2026-09-28 08:30');
+    const startIso = startRaw ? TelegramCarActionsService.parseCarDateStatic(startRaw) : null;
+    if (!startIso) problems.push('❌ ထွက်မယ့်အချိန် (Start) — ဥပမာ 2026-09-28 08:30 ဒါမှမဟုတ် 5/10 09:00');
     let endIso: string | null = null;
     if (draft.slot === 'CUSTOM_HOURS') {
       const endRaw = str('end');
-      endIso = endRaw ? this.parseCarDate(endRaw) : null;
+      endIso = endRaw ? TelegramCarActionsService.parseCarDateStatic(endRaw) : null;
       if (!endIso) problems.push('❌ ပြန်ရောက်မည့်အချိန် (End) — Custom slot အတွက် လိုအပ်ပါသည်');
     }
     if (problems.length > 0) {
@@ -747,8 +772,8 @@ export class TelegramCarActionsService {
     const bad = (label: string) => `❌ ${label}: (မမှန်ပါ)`;
     const startRaw = sval('start');
     const endRaw = sval('end');
-    const startOk = startRaw ? this.parseCarDate(startRaw) != null : false;
-    const endOk = endRaw ? this.parseCarDate(endRaw) != null : false;
+    const startOk = startRaw ? TelegramCarActionsService.parseCarDateStatic(startRaw) != null : false;
+    const endOk = endRaw ? TelegramCarActionsService.parseCarDateStatic(endRaw) != null : false;
     const slotLabel: Record<string, string> = {
       FULL_DAY: 'Full day',
       HALF_DAY_AM: 'Half AM',
@@ -759,7 +784,7 @@ export class TelegramCarActionsService {
       '🚗 <b>ကားတောင်းခံမှု — New car request</b>',
       '────────────────',
       draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '➖ သွားမယ့်နေရာ: —',
-      draft.start ? (startOk ? `✅ ထွက်မယ့်အချိန်: ${escapeHtml(startRaw)}` : bad('ထွက်မယ့်အချိန်')) : '➖ ထွက်မယ့်အချိန်: —  (ဥပမာ 2026-09-28 08:30)',
+      draft.start ? (startOk ? `✅ ထွက်မယ့်အချိန်: ${escapeHtml(startRaw)}` : bad('ထွက်မယ့်အချိန်')) : '➖ ထွက်မယ့်အချိန်: —  (ဥပမာ 2026-10-05 08:30 / 5/10 09:00)',
       `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
       ok('လိုက်ပါသူ', draft.passengers ?? 1),
       draft.vehicle ? `✅ ကားအမျိုးအစား: ${escapeHtml(String(draft.vehicle))}` : '➖ ကားအမျိုးအစား: —',
@@ -768,6 +793,8 @@ export class TelegramCarActionsService {
       draft.notes ? `✅ မှတ်ချက်: ${escapeHtml(String(draft.notes))}` : '➖ မှတ်ချက်: —',
       '────────────────',
       'ဖြည့်ရန် — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး  (တစ်ကြောင်းချင်းလည်းရ / တစ်ခါတည်းလည်းရ)',
+      'ထွက်ချိန် ပုံစံများ — <b>2026-10-05 08:30</b> ဒါမှမဟုတ် <b>5/10 09:00</b>',
+      '<i>နောက်တစ်ကြိမ် အမြန်ရေးချင်ရင် — /car မန္တလေး</i>',
     ].join('\n');
     return lines;
   }
@@ -794,16 +821,41 @@ export class TelegramCarActionsService {
     await this.telegram.sendRaw(chatId, text, { reply_markup: this.carKeyboard(this.pendingCarRequests.get(chatId)?.draft ?? {}) });
   }
 
-  /** "YYYY-MM-DD HH:MM" / "YYYY-MM-DD HHMM" → ISO (Yangon = +06:30, no DST). */
-  private parseCarDate(raw: string): string | null {
-    const m = raw.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):?(\d{2})?$/);
-    if (!m) return null;
-    const [, y, mo, d, h, mi] = m;
-    const hour = Math.min(23, Number(h));
-    const minute = Number(mi ?? '0');
-    if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) return null;
-    const dt = new Date(`${y}-${mo}-${d}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+06:30`);
-    return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+  /** "YYYY-MM-DD HH:MM" / "DD/MM HH:MM" / "DD/MM/YYYY HHMM" → ISO (Yangon = +06:30, no DST).
+   *  Static so field parsing (setCarField) and submit validation share ONE parser. */
+  private static parseCarDateStatic(raw: string): string | null {
+    const t = raw.trim();
+    // full form: 2026-09-28 08:30 / 2026-09-28 0830 / 2026-09-28T08:30
+    const m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):?(\d{2})?$/);
+    if (m) {
+      const [, y, mo, d, h, mi] = m;
+      const hour = Math.min(23, Number(h));
+      const minute = Number(mi ?? '0');
+      if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) return null;
+      const dt = new Date(`${y}-${mo}-${d}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+06:30`);
+      return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+    }
+    // short form: D/M[/YY or YYYY] [HH[:]MM] — day-first (Myanmar usage),
+    // 09:00 default when the time is omitted; year <100 → 2000+
+    const s = t.match(/^(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?(?:\s+(\d{1,2})[:.]?(\d{2})?)?$/);
+    if (s) {
+      const [, dRaw, moRaw, yRaw, hRaw, miRaw] = s;
+      const day = Number(dRaw);
+      const month = Number(moRaw);
+      if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+      let year = yRaw ? Number(yRaw) : new Date().getFullYear();
+      if (year < 100) year += 2000;
+      const hour = hRaw != null ? Math.min(23, Number(hRaw)) : 9;
+      const minute = miRaw != null ? Number(miRaw) : 0;
+      const dt = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+06:30`);
+      return Number.isNaN(dt.getTime()) ? null : dt.toISOString();
+    }
+    return null;
+  }
+
+  /** Myanmar digits (၇ → 7 …) → ASCII digits. */
+  private static toAsciiDigits(text: string): string {
+    return text.replace(/[\u1040-\u1049]/g, (ch) => String(ch.charCodeAt(0) - 0x1040));
   }
 
   /** "Open in AMS" button row when a web URL is configured. */

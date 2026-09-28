@@ -123,10 +123,11 @@ async function main() {
   check(sent('မသိပါသော အကွက်များ').length === 1, 'unknown key flagged');
   check((lastText()).includes('မန္တလေး'), 'draft survives unknown key');
 
-  // 6. bad date renders ❌ in card
+  // 6. bad date warns inline; the previous valid start is kept (never clobbered)
   apiLog.length = 0;
   await svc.handleCarText('ထွက်မယ့်အချိန်: tomorrow morning', CHAT);
-  check((lastText()).includes('မမှန်ပါ'), 'bad date marked invalid');
+  check((lastText()).includes('နားမလည်ပါ'), 'bad date warns inline with the expected format');
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.start === '2026-09-28 08:30', 'unparseable value does NOT clobber the earlier valid start');
 
   // 7. missing required fields block Submit with the card re-shown
   apiLog.length = 0;
@@ -206,6 +207,73 @@ async function main() {
   await svc.handleCarText('Destination: first draft', CHAT);
   await svc.handleCarCommand('/car', CHAT);
   check(!(svc.pendingCarRequests.get(CHAT) as any).draft.destination, '/car resets draft');
+
+  // 16. UX fixes: quick /car <destination>, short dates, warnings, digit normalisation
+  // 16a. /car <destination> prefills the destination
+  await svc.handleCarCommand('/car မန္တလေး လုပ်ငန်းသွားရေး', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'မန္တလေး လုပ်ငန်းသွားရေး', '/car <destination> prefills destination');
+  await svc.handleCarCommand('/car', CHAT);
+
+  // 16b. short day-first date accepted (5/10 09:00 → 5 Oct, 09:00 Yangon)
+  apiLog.length = 0;
+  await svc.handleCarText('Destination: Short date trip\nStart: 5/10 09:00', CHAT);
+  check((lastText()).includes('Short date trip'), 'short-date answer renders the card');
+  await svc.handleCarText('Slot: custom', CHAT);
+  await svc.handleCarText('End: 5/10 12:00', CHAT);
+  apiLog.length = 0;
+  createdRequests.length = 0; submittedIds.length = 0;
+  await tap('wfa:carsubmit', 'cb-sub-short');
+  check(createdRequests.length === 1, 'short date 5/10 submits successfully');
+  const shortStart = new Date(createdRequests[0]?.data?.startDate ?? 0);
+  check(shortStart.getUTCHours() === 2 && shortStart.getUTCMinutes() === 30, '5/10 09:00 parsed as 02:30 UTC (09:00 Yangon)');
+  const shortEnd = new Date(createdRequests[0]?.data?.endDate ?? 0);
+  check(shortEnd.getUTCHours() === 5 && shortEnd.getUTCMinutes() === 30, '5/10 12:00 parsed as 05:30 UTC (12:00 Yangon)');
+  check(!svc.pendingCarRequests.has(CHAT), 'conversation cleared after short-date submit');
+
+  // 16c. d/m with omitted time defaults to 09:00
+  apiLog.length = 0;
+  await svc.handleCarCommand('/car', CHAT);
+  await svc.handleCarText('Destination: Date only\nStart: 7/10', CHAT);
+  apiLog.length = 0;
+  createdRequests.length = 0; submittedIds.length = 0;
+  await tap('wfa:carsubmit', 'cb-sub-dateonly');
+  const dateOnly = new Date(createdRequests[0]?.data?.startDate ?? 0);
+  check(createdRequests.length === 1 && dateOnly.getUTCHours() === 2 && dateOnly.getUTCMinutes() === 30, 'date-only 7/10 defaults to 09:00 Yangon');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 16d. unparseable start warns inline instead of failing silently at submit
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarText('Start: tomorrow morning', CHAT);
+  check((lastText()).includes('နားမလည်ပါ'), 'unparseable date warns with the expected format');
+  check((lastText()).includes('2026-10-05 08:30'), 'warning shows a concrete example');
+
+  // 16e. invalid vehicle type warns with the option list
+  apiLog.length = 0;
+  await svc.handleCarText('Vehicle: ROCKETSHIP', CHAT);
+  check((lastText()).includes('ကားအမျိုးအစား နားမလည်ပါ'), 'invalid vehicle warns');
+  check((lastText()).includes('MINIVAN'), 'vehicle warning lists valid options');
+
+  // 16f. Myanmar digits are normalised (၅ = 5)
+  apiLog.length = 0;
+  await svc.handleCarText('လိုက်ပါသူ: ၅', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.passengers === 5, 'Myanmar digit ၅ accepted for passengers');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 16g. non-breaking space after the field name must not break matching
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarText('destination\u00A0: Fullwidth trip\nStart\u00A0: 2026-10-06 08:00', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'Fullwidth trip', 'non-breaking space after field name tolerated');
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.start === '2026-10-06 08:00', 'start after NBSP also parsed');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 16h. too-many-passengers warning
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarText('Passengers: 999', CHAT);
+  check((lastText()).includes('လိုက်ပါသူ အရေအတွက် မမှန်ပါ'), 'passengers 999 warns with the 1–60 rule');
+  await svc.handleCarText('/cancel', CHAT);
 
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
