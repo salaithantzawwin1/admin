@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TripStatus, WorkflowStatus } from '@prisma/client';
+import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.module';
 import { PermissionsService } from '../auth/permissions.service';
 import { NumberingService } from '../numbering/numbering.service';
@@ -101,6 +102,21 @@ export class CarsService {
 
     if (!isOwner && !isSystemAdmin && !canAssign && !isApprover) {
       throw new ForbiddenException('No access');
+    }
+    // shared trip: the other riders of the same car+driver (panel badge + Telegram card)
+    if (car.sharedTripId) {
+      const riders = await this.prisma.requestDocument.findMany({
+        where: {
+          docType: 'CAR_REQUEST',
+          status: { in: ['APPROVED', 'IN_PROGRESS'] },
+          carRequest: { sharedTripId: car.sharedTripId },
+        },
+        select: { id: true, docNumber: true, requester: { select: { fullName: true } } },
+        orderBy: { docNumber: 'asc' },
+      });
+      (car as typeof car & { sharedRiders?: { requestId: string; docNumber: string; requester: string }[] }).sharedRiders = riders
+        .filter((r) => r.id !== requestId)
+        .map((r) => ({ requestId: r.id, docNumber: r.docNumber, requester: r.requester.fullName }));
     }
     return car;
   }
@@ -266,13 +282,28 @@ export class CarsService {
         startDate: { lt: end },
         endDate: { gt: start },
       },
-      select: { requestId: true, startDate: true, endDate: true, request: { select: { docNumber: true } } },
+      select: { requestId: true, sharedTripId: true, startDate: true, endDate: true, request: { select: { docNumber: true } } },
     });
+    // a shared-trip member only blocks rides OUTSIDE its own group — when the
+    // caller belongs to a group, same-group bookings are not conflicts
+    if (excludeRequestId) {
+      const own = await this.prisma.carRequest.findUnique({ where: { requestId: excludeRequestId }, select: { sharedTripId: true } });
+      if (own?.sharedTripId) {
+        const inGroup = conflicts.filter((c) => c.sharedTripId === own.sharedTripId);
+        if (inGroup.length > 0) {
+          const remaining = conflicts.filter((c) => c.sharedTripId !== own.sharedTripId);
+          return { available: remaining.length === 0, conflicts: remaining };
+        }
+      }
+    }
     return { available: conflicts.length === 0, conflicts };
   }
 
-  /** Administration assigns vehicle (+ optional driver) to an APPROVED car request. */
-  async assign(requestId: string, data: { vehicleId: string; driverId?: string }, actor: Actor) {
+  /** Administration assigns vehicle (+ optional driver) to an APPROVED car request.
+   *  `share=true` explicitly joins an overlapping request onto the same car+driver
+   *  (convoy mode) — the overlap/driver-busy guards deliberately step aside, but
+   *  maintenance/out-of-service vehicles and planned-absent drivers still block. */
+  async assign(requestId: string, data: { vehicleId: string; driverId?: string; share?: boolean }, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: { carRequest: { include: { assignment: true } } },
@@ -288,6 +319,11 @@ export class CarsService {
       throw new ConflictException('Vehicle already assigned to this request');
     }
 
+    const share = data.share === true; // explicit opt-in from the Car panel
+    if (share && !data.driverId) {
+      throw new BadRequestException('Shared trips need a driver — pick the driver of the trip you are joining');
+    }
+
     const vehicle = await this.prisma.vehicle.findUnique({ where: { id: data.vehicleId } });
     if (!vehicle) throw new NotFoundException('Vehicle not found');
     if (vehicle.status === 'OUT_OF_SERVICE' || vehicle.status === 'UNDER_MAINTENANCE') {
@@ -295,6 +331,7 @@ export class CarsService {
     }
 
     // planned-absence guard: a driver with ACTIVE absence covering the trip window cannot be assigned
+    // (shared trips included — a driver cannot convoy two trips while officially on leave)
     const start = request.carRequest.startDate;
     const end = request.carRequest.endDate;
     if (data.driverId) {
@@ -315,8 +352,33 @@ export class CarsService {
     }
 
     // double-booking prevention: transaction + overlap re-check
-
+    // (skipped for explicit shared trips — see the group stamp inside the tx)
     const assignment = await this.prisma.$transaction(async (tx) => {
+      // shared-trip group: join the overlapping booking already riding this car+driver
+      // (looked up INSIDE the tx; the stamped group makes overlaps() skip the pair)
+      let sharedTripId: string | null = null;
+      if (share) {
+        // join the overlapping booking already riding this car+driver. Matching on
+        // vehicleId only (not driverId — the first ride may have been assigned
+        // driver-less) and stamping the FIRST member too so both rows share the
+        // group id that overlaps() uses to skip the pair.
+        const group = await tx.carRequest.findFirst({
+          where: {
+            vehicleId: data.vehicleId,
+            requestId: { not: requestId },
+            request: { status: 'IN_PROGRESS' },
+            startDate: { lt: end },
+            endDate: { gt: start },
+          },
+          orderBy: { startDate: 'asc' },
+          select: { requestId: true, sharedTripId: true },
+        });
+        sharedTripId = group?.sharedTripId ?? crypto.randomUUID();
+        if (group && !group.sharedTripId) {
+          // first member of a new group gets its stamp here (B carries the same id below)
+          await tx.carRequest.update({ where: { requestId: group.requestId }, data: { sharedTripId } });
+        }
+      }
       // re-check overlap inside the transaction for race safety
       // same "Back at Office" exemption as checkAvailability — inside the tx for race safety
       const exempt = await tx.carAssignment.findMany({
@@ -333,7 +395,8 @@ export class CarsService {
           endDate: { gt: start },
         },
       });
-      if (conflicts.length > 0) {
+      // shared trips skip the overlap block — the admin explicitly linked the rides
+      if (conflicts.length > 0 && !share) {
         throw new ConflictException(
           `Vehicle ${vehicle.vehicleNo} is already booked ${conflicts[0].startDate.toISOString()} → ${conflicts[0].endDate.toISOString()}`,
         );
@@ -369,7 +432,9 @@ export class CarsService {
       });
       await tx.carRequest.update({
         where: { requestId },
-        data: { vehicleId: data.vehicleId, driverId: data.driverId, status: 'IN_PROGRESS' },
+        // sharedTripId is stamped (or cleared on a plain re-assign) right beside
+        // the vehicle links so availability queries can exclude the group
+        data: { vehicleId: data.vehicleId, driverId: data.driverId, sharedTripId, status: 'IN_PROGRESS' },
       });
       // keep the base document in step with the car-specific status (list badges,
       // dashboards and 'my requests' views read request_documents)
@@ -399,7 +464,7 @@ export class CarsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'CAR_ASSIGNED', module: 'CARS', recordId: requestId,
-      newValue: { vehicleId: data.vehicleId, driverId: data.driverId },
+      newValue: { vehicleId: data.vehicleId, driverId: data.driverId, ...(share ? { sharedTrip: true } : {}) },
     });
 
     return assignment;
@@ -594,7 +659,9 @@ export class CarsService {
       });
       await tx.carRequest.update({
         where: { requestId },
-        data: { vehicleId: data.vehicleId, driverId: data.driverId ?? null },
+        // moving off the shared car+driver clears the group stamp — this ride
+        // becomes a normal single booking again (re-assign as share to re-link)
+        data: { vehicleId: data.vehicleId, driverId: data.driverId ?? null, sharedTripId: null },
       });
       await tx.vehicle.update({ where: { id: data.vehicleId }, data: { status: 'IN_USE' } });
       if (data.driverId) {
@@ -658,7 +725,7 @@ export class CarsService {
 
     await this.prisma.$transaction(async (tx) => {
       await tx.carAssignment.update({ where: { id: assignment.id }, data: { releasedAt: new Date() } });
-      await tx.carRequest.update({ where: { requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } });
+      await tx.carRequest.update({ where: { requestId }, data: { vehicleId: null, driverId: null, sharedTripId: null, status: 'APPROVED' } });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'APPROVED' } });
       await tx.vehicle.update({ where: { id: assignment.vehicleId }, data: { status: 'AVAILABLE' } });
       if (assignment.driverId) {
@@ -717,7 +784,7 @@ export class CarsService {
       // availability checks / fleet overview immediately stop counting this booking
       await tx.carRequest.update({
         where: { requestId },
-        data: { vehicleId: null, driverId: null, status: 'CANCELLED' },
+        data: { vehicleId: null, driverId: null, sharedTripId: null, status: 'CANCELLED' },
       });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'CANCELLED' } });
       // (mirrored in the same transaction above)

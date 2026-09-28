@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
@@ -45,6 +45,8 @@ class UpdateCarRequestDto {
 class AssignDto {
   @IsString() vehicleId!: string;
   @IsOptional() @IsString() driverId?: string;
+  /** Shared trip: allow an overlapping same-car/driver assignment (convoy mode). */
+  @IsOptional() @IsBoolean() share?: boolean;
 }
 
 class StartTripDto {
@@ -144,7 +146,7 @@ export class CarsController {
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Post('requests/:requestId/assign')
   assign(@Req() req, @Param('requestId') requestId: string, @Body() dto: AssignDto) {
-    return this.cars.assign(requestId, dto, this.actor(req));
+    return this.cars.assign(requestId, { ...dto, share: dto.share === true }, this.actor(req));
   }
 
   /** Administration manual ack override — same effects as the driver's Telegram buttons

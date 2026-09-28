@@ -1115,9 +1115,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     a: {
       request: { docNumber: string; requester: { fullName: string; employee?: { phone: string | null } | null } };
       vehicle?: { brandModel: string; vehicleNo: string } | null;
-      carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null } | null;
+      carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; sharedTripId?: string | null } | null;
+      sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null;
     },
     stages?: { noted?: Date | null; arrived?: Date | null; back?: Date | null } | null,
+    sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null,
   ): string {
     const cr = a.carRequest;
     if (!cr) return escapeHtml(`🚗 Car Assigned — ${a.request.docNumber}`);
@@ -1133,6 +1135,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `🗺 Destination: ${escapeHtml(cr.destination)}`,
       `👤 Requester: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
       cr.purpose ? `📝 ${escapeHtml(cr.purpose)}` : '',
+      // shared trip — the driver sees who else is riding the same car
+      ...(a.sharedRiders && a.sharedRiders.length > 0
+        ? [``, `<b>🧑‍🤝‍🧑 Shared trip</b>`, ...a.sharedRiders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
+        : []),
     ].filter((l) => l !== undefined);
     if (stages) {
       if (stages.noted) lines.push(`✓ Noted · ${fmtTime(stages.noted)}`);
@@ -1152,7 +1158,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       include: {
         driver: true,
         vehicle: true,
-        carRequest: { select: { destination: true, pickupLocation: true, startDate: true, endDate: true, timeSlot: true, purpose: true } },
+        carRequest: { select: { destination: true, pickupLocation: true, startDate: true, endDate: true, timeSlot: true, purpose: true, sharedTripId: true } },
         request: {
           select: {
             docNumber: true,
@@ -1164,12 +1170,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (!a?.driver?.telegramChatId) return; // never assigned a driver, or not bound yet — silent
     const cr = a.carRequest;
     if (!cr) return;
+    // shared trip: list the other riders of the same group for the driver
+    let sharedRiders: { docNumber: string; destination: string; requester: { fullName: string } }[] | null = null;
+    if (cr.sharedTripId) {
+      const riders = await this.prisma.requestDocument.findMany({
+        where: {
+          docType: 'CAR_REQUEST',
+          status: { in: ['APPROVED', 'IN_PROGRESS'] },
+          carRequest: { sharedTripId: cr.sharedTripId },
+        },
+        select: { docNumber: true, requester: { select: { fullName: true } }, carRequest: { select: { destination: true } } },
+        orderBy: { docNumber: 'asc' },
+      });
+      sharedRiders = riders
+        .filter((r) => r.docNumber !== a.request.docNumber)
+        .map((r) => ({ docNumber: r.docNumber, destination: r.carRequest?.destination ?? '—', requester: { fullName: r.requester.fullName } }));
+    }
     const { token, enabled } = await this.config();
     if (!token || !enabled) return;
 
     const message = await this.call<{ message_id: number }>('sendMessage', {
       chat_id: a.driver.telegramChatId,
-      text: this.assignmentBody(a),
+      text: this.assignmentBody(a, undefined, sharedRiders),
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       reply_markup: this.assignmentKeyboard(a, a.id),

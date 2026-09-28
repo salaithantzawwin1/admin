@@ -19,6 +19,8 @@ interface CarRequest {
   managerAckBy?: { fullName: string } | null;
   vehicle?: { id: string; vehicleNo: string; brandModel: string } | null;
   driver?: { id: string; name: string } | null;
+  sharedTripId?: string | null;
+  sharedRiders?: { requestId: string; docNumber: string; requester: string }[];
   assignment?: {
     id: string;
     assignedAt: string;
@@ -80,6 +82,8 @@ export function CarPanel({
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [error, setError] = useState('');
   const [assignForm, setAssignForm] = useState({ vehicleId: '', driverId: '' });
+  // shared-trip opt-in: allow assigning the same car+driver as an overlapping request
+  const [share, setShare] = useState(false);
   const [shiftForm, setShiftForm] = useState({ startDate: '', endDate: '' });
   const [tripForm, setTripForm] = useState({ startMileage: '', endMileage: '', remarks: '' });
   const [expenseForm, setExpenseForm] = useState({ type: 'FUEL', amount: '', description: '' });
@@ -153,6 +157,8 @@ export function CarPanel({
   const trip = assignment?.trip;
   const showAssign = canAssign && status === 'APPROVED' && !assignment;
   const canStart = canAssign && assignment && !trip;
+  // a re-assign after a conflict alert needs the shared-trip toggle again
+  useEffect(() => { setShare(false); }, [status, car.assignment?.id]);
   // change vehicle/driver on a live assignment (before the trip starts)
   const canReassign = canAssign && assignment && !trip;
   const canComplete = canAssign && trip?.status === 'STARTED';
@@ -179,6 +185,11 @@ export function CarPanel({
             {car.driver && <div className="text-xs text-gray-500 mt-1">Driver: {car.driver.name}</div>}
           </div>
           {assignment && <DriverAckStages a={assignment} />}
+          {car.sharedTripId && car.sharedRiders && car.sharedRiders.length > 0 && (
+            <div className="mt-1 text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">
+              🧑‍🤝‍🧑 Shared trip with {car.sharedRiders.map((r) => `${r.docNumber} (${r.requester})`).join(', ')}
+            </div>
+          )}
         </div>
       </div>
 
@@ -304,11 +315,11 @@ export function CarPanel({
             </Select>
             <Select className="!w-48" value={assignForm.driverId} onChange={(e) => setAssignForm({ ...assignForm, driverId: e.target.value })}>
               <option value="">— Driver (optional) —</option>
-              {drivers.filter((d) => d.status === 'AVAILABLE').map((d) => {
+              {drivers.map((d) => {
                 const absent = d.absences?.some((a) => new Date(a.startsAt) < tripEnd && new Date(a.endsAt) > tripStart);
                 const onTrip = busyDrivers.includes(d.id);
                 return (
-                  <option key={d.id} value={d.id} disabled={absent || onTrip}>
+                  <option key={d.id} value={d.id} disabled={absent || (!share && onTrip)}>
                     {d.name}{onTrip ? ' · on the way (busy)' : absent ? ' · on planned absence' : ''}
                   </option>
                 );
@@ -316,11 +327,23 @@ export function CarPanel({
             </Select>
             <Button
               disabled={!assignForm.vehicleId}
-              onClick={() => act(() => api(`/cars/requests/${requestId}/assign`, { method: 'POST', body: { ...assignForm, driverId: assignForm.driverId || undefined } }))}
+              onClick={() => act(() => api(`/cars/requests/${requestId}/assign`, { method: 'POST', body: { ...assignForm, share, driverId: assignForm.driverId || undefined } }))}
             >
               Assign
             </Button>
           </div>
+          {/* Shared trip (convoy): same car+driver as an overlapping request.
+              The overlap error only appears WITHOUT the flag — with it, the
+              group is stamped server-side and the driver sees both riders. */}
+          <label className="flex items-center gap-2 mt-2 text-xs text-gray-500 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={share}
+              onChange={(e) => setShare(e.target.checked)}
+              className="h-3.5 w-3.5 rounded border-gray-300 text-gold focus:ring-gold/50"
+            />
+            Same car &amp; driver as another trip (shared ride — pick the vehicle and the driver of the trip you are joining)
+          </label>
         </div>
         );
       })()}

@@ -966,6 +966,7 @@ model CarRequest {
   managerAckById String?   @db.Uuid
   vehicleId   String?            @db.Uuid
   driverId    String?            @db.Uuid
+  sharedTripId String?           @db.Uuid // shared-trip group id — set when Administration assigns the same car+driver as another overlapping request
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
 
@@ -978,6 +979,7 @@ model CarRequest {
   @@index([startDate, endDate])
   @@index([vehicleId])
   @@index([driverId]) // driver-busy / driver-overlap queries (panel picker, absences, reassign)
+  @@index([sharedTripId]) // shared-trip group lookups (overlaps exclusion, release/cancel of one member)
   @@map("car_requests")
 }
 

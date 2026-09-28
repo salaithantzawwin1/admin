@@ -63,6 +63,8 @@ async function main() {
         captured.push(args);
         return seededConflicts;
       },
+      // overlaps() looks up the caller's own shared-trip group (null unless mocked)
+      findUnique: async () => null,
     },
     carAssignment: { findMany: async () => [] },
   };
@@ -152,6 +154,55 @@ async function main() {
     const r = await svcBao.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'));
     assert.strictEqual(captured[captured.length - 1].where.requestId.notIn[0], 'req-bao');
     assert.strictEqual(r.available, true);
+  });
+
+  await test('overlaps(): shared-trip group members do not block each other', async () => {
+    const GROUP = 'group-1';
+    const prismaShared: any = {
+      // DB row: the caller's shared-trip peer — the ONLY overlapping booking
+      carRequest: {
+        findMany: async () => [
+          { requestId: 'req-peer', sharedTripId: GROUP, startDate: new Date(), endDate: new Date(), request: { docNumber: 'CAR-1' } },
+        ],
+        findUnique: async () => ({ sharedTripId: GROUP }),
+      },
+      carAssignment: { findMany: async () => [] },
+    };
+    const svcShared: any = new CarsService(prismaShared, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const r = await svcShared.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'), 'req-mine');
+    assert.strictEqual(r.available, true, 'only the same-group peer overlapped → available');
+    assert.strictEqual(r.conflicts.length, 0);
+  });
+
+  await test('overlaps(): other bookings still block a shared-trip member', async () => {
+    const prismaShared: any = {
+      carRequest: {
+        findMany: async () => [
+          { requestId: 'req-stranger', sharedTripId: null, startDate: new Date(), endDate: new Date(), request: { docNumber: 'CAR-2' } },
+        ],
+        findUnique: async () => ({ sharedTripId: 'group-1' }),
+      },
+      carAssignment: { findMany: async () => [] },
+    };
+    const svcShared: any = new CarsService(prismaShared, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const r = await svcShared.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'), 'req-mine');
+    assert.strictEqual(r.available, false, 'a foreign booking still conflicts');
+    assert.strictEqual(r.conflicts[0].request.docNumber, 'CAR-2');
+  });
+
+  await test('assign(): share=true without a driver is refused', async () => {
+    const prismaAssign: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
+          carRequest: { id: 'cr1', requestId: 'r1', startDate: new Date(), endDate: new Date(), assignment: null },
+        }),
+      },
+    };
+    const svcAssign: any = new CarsService(prismaAssign, {} as any, {} as any, {} as any, {} as any, {} as any);
+    let msg = '';
+    try { await svcAssign.assign('r1', { vehicleId: 'v1', share: true }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.strictEqual(msg, 'Shared trips need a driver — pick the driver of the trip you are joining');
   });
 
   await test('requesterFleetOverview: Back-at-Office booking leaves the Booked list', async () => {
