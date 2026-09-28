@@ -217,9 +217,25 @@ export class TelegramCarActionsService {
       await this.telegram.answer(callbackId, 'Open AMS in your browser to view details');
       return true;
     }
-    // /car form buttons — slot pick, submit, cancel (no assignment involved)
+    // /car form buttons — slot pick, quick time, extra fields toggle, submit, cancel
     if (action === 'carslot') {
       await this.actCarSlot(arg1 ?? '', chatId, callbackId);
+      return true;
+    }
+    if (action === 'carquick') {
+      await this.actCarQuickTime(data.slice('wfa:carquick:'.length), chatId, callbackId);
+      return true;
+    }
+    if (action === 'carextra') {
+      const entry = this.pendingCarRequests.get(chatId);
+      if (!entry) {
+        await this.telegram.answer(callbackId, 'Expired — send /car again');
+        return true;
+      }
+      entry.at = Date.now();
+      entry.draft.showExtra = entry.draft.showExtra ? undefined : 1;
+      await this.telegram.answer(callbackId, entry.draft.showExtra ? 'ထပ်ဖြည့်ရန် ပြလိုက်ပါပြီ' : 'ဖျောက်လိုက်ပါပြီ');
+      await this.sendRawCard(chatId, this.renderCarCard(chatId));
       return true;
     }
     if (action === 'carsubmit') {
@@ -577,6 +593,10 @@ export class TelegramCarActionsService {
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
+  /** Track the live form card per chat so every answer EDITS that one card
+   *  instead of piling a new card per keystroke (the #1 UX complaint). */
+  private carCardMessages = new Map<string, number>();
+
   /** Text arriving while a /car conversation is open — field answers or /cancel. */
   async handleCarText(text: string, chatId: string): Promise<void> {
     const entry = this.pendingCarRequests.get(chatId);
@@ -741,6 +761,28 @@ export class TelegramCarActionsService {
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
+  /** Quick-pick time tapped on the card — fills Start (Yangon today/tomorrow). */
+  private async actCarQuickTime(raw: string, chatId: string, callbackId: string): Promise<void> {
+    const entry = this.pendingCarRequests.get(chatId);
+    if (!entry) {
+      await this.telegram.answer(callbackId, 'Expired — send /car again');
+      return;
+    }
+    entry.at = Date.now();
+    // payload `today:09:00` / `tomorrow:13:00` → "10/2 09:00"-style short date in the draft
+    const [when, hhmm] = raw.split('|');
+    const d = new Date();
+    if (when === 'tomorrow') d.setDate(d.getDate() + 1);
+    const hh = Math.min(23, Math.max(0, Number(hhmm?.slice(0, 2)) || 0));
+    const mm = Math.min(59, Math.max(0, Number(hhmm?.slice(3, 5)) || 0));
+    d.setHours(hh, mm, 0, 0);
+    const p = (n: number) => String(n).padStart(2, '0');
+    const label = `${d.getDate()}/${d.getMonth() + 1} ${p(hh)}:${p(mm)}`;
+    entry.draft.start = label;
+    await this.telegram.answer(callbackId, `Start: ${label}`);
+    await this.sendRawCard(chatId, this.renderCarCard(chatId));
+  }
+
   /** ✅ Submit — validate, create + submit as the bound user, confirm. */
   private async actCarSubmit(chatId: string, callbackId: string): Promise<void> {
     const entry = this.pendingCarRequests.get(chatId);
@@ -812,7 +854,8 @@ export class TelegramCarActionsService {
     await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
   }
 
-  /** The live form card — every field, ✅/➖/❌ markers, submit/cancel buttons. */
+  /** The live form card — required fields up top; optional fields hidden behind
+   *  [➕ ထပ်ဖြည့်မယ်] until the user opens them (9 always-on rows felt like homework). */
   private renderCarCard(chatId: string): string {
     const entry = this.pendingCarRequests.get(chatId);
     const draft = (entry?.draft ?? {}) as Record<string, string | number | undefined>;
@@ -830,45 +873,80 @@ export class TelegramCarActionsService {
       HALF_DAY_PM: 'Half PM',
       CUSTOM_HOURS: 'Custom',
     };
-    const lines = [
+    const required = [
       '🚗 <b>ကားတောင်းခံမှု — New car request</b>',
       '────────────────',
-      draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '➖ သွားမယ့်နေရာ: —',
-      draft.start ? (startOk ? `✅ ထွက်မယ့်အချိန်: ${escapeHtml(startRaw)}` : bad('ထွက်မယ့်အချိန်')) : '➖ ထွက်မယ့်အချိန်: —  (ဥပမာ 2026-10-05 08:30 / 5/10 09:00)',
+      draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '1️⃣ သွားမယ့်နေရာ — ဒီ chat မှာ ရေးပါ (ဥပမာ မန္တလေး)',
+      draft.start ? (startOk ? `✅ ထွက်မယ့်အချိန်: ${escapeHtml(startRaw)}` : bad('ထွက်မယ့်အချိန်')) : '2️⃣ ထွက်မယ့်အချိန် — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)',
       `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
+    ];
+    const optional = [
       ok('လိုက်ပါသူ', draft.passengers ?? 1),
       draft.vehicle ? `✅ ကားအမျိုးအစား: ${escapeHtml(String(draft.vehicle))}` : '➖ ကားအမျိုးအစား: —',
       draft.pickup ? `✅ တက်မည့်နေရာ: ${escapeHtml(String(draft.pickup))}` : '➖ တက်မည့်နေရာ: —',
       draft.purpose ? `✅ ရည်ရွယ်ချက်: ${escapeHtml(String(draft.purpose))}` : '➖ ရည်ရွယ်ချက်: —',
       draft.notes ? `✅ မှတ်ချက်: ${escapeHtml(String(draft.notes))}` : '➖ မှတ်ချက်: —',
+    ];
+    // auto-reveal once the user has actually filled an optional field
+    const showExtra = !!draft.showExtra || ['vehicle', 'pickup', 'purpose', 'notes'].some((k) => draft[k] != null);
+    const lines = [
+      ...required,
       '────────────────',
-      'ဖြည့်ရန် — ဒီ chat ထဲ ပြန်ရေးပါ — ဥပမာ <b>သွားမယ့်နေရာ:</b> မန္တလေး',
+      ...(showExtra ? optional : ['➕ ကားအမျိုးအစား / တက်မည့်နေရာ / ရည်ရွယ်ချက် / မှတ်ချက် ထပ်ဖြည့်ချင်ရင် — အောက်က [➕ ထပ်ဖြည့်မယ်] နှိပ်ပါ']),
+      '────────────────',
       'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day"',
       '<i>အမြန်စတင် — /car မန္တလေး</i>',
-    ].join('\n');
-    return lines;
+    ];
+    return lines.join('\n');
   }
 
-  /** Keyboard for the live card — slot shortcuts + submit/cancel. */
+  /** Keyboard for the live card — quick Start times, slot shortcuts,
+   *  [➕ ထပ်ဖြည့်မယ်] toggle and Submit/Cancel. */
   private carKeyboard(draft: Record<string, unknown>): { inline_keyboard: { text: string; callback_data: string }[][] } {
     const slot = draft.slot;
     const b = (text: string, data: string) => ({ text, callback_data: data });
-    return {
-      inline_keyboard: [
-        [
-          b(slot === 'FULL_DAY' ? '☀️ Full day ✓' : '☀️ Full day', 'wfa:carslot:FULL_DAY'),
-          b(slot === 'HALF_DAY_AM' ? '🌅 Half AM ✓' : '🌅 Half AM', 'wfa:carslot:HALF_DAY_AM'),
-          b(slot === 'HALF_DAY_PM' ? '🌆 Half PM ✓' : '🌆 Half PM', 'wfa:carslot:HALF_DAY_PM'),
-          b(slot === 'CUSTOM_HOURS' ? '⏱ Custom ✓' : '⏱ Custom', 'wfa:carslot:CUSTOM_HOURS'),
-        ],
-        [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
+    const rows: { text: string; callback_data: string }[][] = [
+      // one-tap office hours for Start — the trip that is "today 9" covers most requests
+      [
+        b('🕘 ယနေ့ 09:00', 'wfa:carquick:today|09:00'),
+        b('🕐 ယနေ့ 13:00', 'wfa:carquick:today|13:00'),
       ],
-    };
+      [
+        b('🌅 မနက်ဖြန် 09:00', 'wfa:carquick:tomorrow|09:00'),
+        b('🌆 မနက်ဖြန် 13:00', 'wfa:carquick:tomorrow|13:00'),
+      ],
+      [
+        b(slot === 'FULL_DAY' ? '☀️ Full day ✓' : '☀️ Full day', 'wfa:carslot:FULL_DAY'),
+        b(slot === 'HALF_DAY_AM' ? '🌅 Half AM ✓' : '🌅 Half AM', 'wfa:carslot:HALF_DAY_AM'),
+        b(slot === 'HALF_DAY_PM' ? '🌆 Half PM ✓' : '🌆 Half PM', 'wfa:carslot:HALF_DAY_PM'),
+        b(slot === 'CUSTOM_HOURS' ? '⏱ Custom ✓' : '⏱ Custom', 'wfa:carslot:CUSTOM_HOURS'),
+      ],
+      [b(draft.showExtra ? '➖ ထပ်ဖြည့်ဖြည့်ဖျောက်' : '➕ ထပ်ဖြည့်မယ်', 'wfa:carextra')],
+      [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
+    ];
+    return { inline_keyboard: rows };
   }
 
-  /** telegram.sendRaw + the /car inline keyboard in one call — same args as telegram.sendRaw. */
+  /** The live form card — EDIT the tracked message when we have it, send a new
+   *  one only as a fallback (first render, deleted message, other-chat glitch).
+   *  Keeps the whole conversation at ONE card, never a pile of stale cards. */
   private async sendRawCard(chatId: string, text: string): Promise<void> {
-    await this.telegram.sendRaw(chatId, text, { reply_markup: this.carKeyboard(this.pendingCarRequests.get(chatId)?.draft ?? {}) });
+    const keyboard = this.carKeyboard(this.pendingCarRequests.get(chatId)?.draft ?? {});
+    const tracked = this.carCardMessages.get(chatId);
+    if (tracked) {
+      try {
+        await this.telegram.editMessage(chatId, tracked, text, keyboard);
+        return; // edited in place — no new bubble
+      } catch {
+        this.carCardMessages.delete(chatId); // message gone (deleted/cleared) — fall back below
+      }
+    }
+    await this.telegram.sendRaw(chatId, text, { reply_markup: keyboard });
+    // sendRaw hides the sendMessage result — capture the message id via the bot API
+    // response mirror kept by TelegramService is unavailable, so track via lastCall hook:
+    const last = (this.telegram as unknown as { lastSentMessageId?: number }).lastSentMessageId;
+    if (last) this.carCardMessages.set(chatId, last);
+    if (this.carCardMessages.size > 500) this.carCardMessages.clear(); // bounded, like other state
   }
 
   /** "YYYY-MM-DD HH:MM" / "DD/MM HH:MM" / "DD/MM/YYYY HHMM" → ISO (Yangon = +06:30, no DST).

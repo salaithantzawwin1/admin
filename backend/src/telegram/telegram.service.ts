@@ -1321,8 +1321,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Raw HTML message with an arbitrary keyboard — used by the Telegram-approval flow. */
+  /** message_id of the most recent successful sendMessage via sendRaw/call —
+   *  lets the /car form track its live card without exposing call(). */
+  lastSentMessageId?: number;
+
   async sendRaw(chatId: string, text: string, extra: Record<string, unknown> = {}) {
-    await this.call('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra });
+    const sent = await this.call<{ message_id?: number }>('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra });
+    if (sent?.message_id) this.lastSentMessageId = sent.message_id;
   }
 
   /**

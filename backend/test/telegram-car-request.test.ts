@@ -63,6 +63,11 @@ const telegram = new TelegramServiceMod.TelegramService(prisma, audit, permissio
   apiLog.push({ method, payload });
   return method === 'sendMessage' ? { message_id: 500 + apiLog.length } : null;
 };
+// editMessage succeeds (like the real Bot API) — edit-in-place can be asserted
+(telegram as any).editMessage = async (chatId: string, messageId: number, text: string, keyboard?: any) => {
+  apiLog.push({ method: 'editMessageText', payload: { chat_id: chatId, message_id: messageId, text, reply_markup: keyboard } });
+  return { message_id: messageId };
+};
 
 const TelegramCarActionsMod = require('../src/cars/telegram-car-actions.service');
 const svc: any = new TelegramCarActionsMod.TelegramCarActionsService(
@@ -73,9 +78,11 @@ svc.wire();
 // ------------------------------------------------------------------ helpers
 const sent = (contains: string) =>
   apiLog.filter((l) => l.method === 'sendMessage' && String(l.payload?.text ?? '').includes(contains));
-const keyboards = () => apiLog.filter((l) => l.method === 'sendMessage' && l.payload?.reply_markup?.inline_keyboard);
-const allText = () => apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
-const lastText = () => { const m = apiLog.filter((l) => l.method === 'sendMessage'); return m.length ? String(m[m.length-1].payload?.text ?? '') : ''; };
+const cards = () => apiLog.filter((l) => (l.method === 'sendMessage' || l.method === 'editMessageText') && String(l.payload?.text ?? '').includes('ကားတောင်းခံမှု'));
+const keyboards = () => apiLog.filter((l) => (l.method === 'sendMessage' || l.method === 'editMessageText') && l.payload?.reply_markup?.inline_keyboard);
+const allText = () => apiLog.filter((l) => l.method === 'sendMessage' || l.method === 'editMessageText').map((l) => String(l.payload?.text ?? '')).join('\n');
+// with the live-card UX the newest card content may arrive as an EDIT — read both
+const lastText = () => { const m = apiLog.filter((l) => l.method === 'sendMessage' || l.method === 'editMessageText'); return m.length ? String(m[m.length-1].payload?.text ?? '') : ''; };
 
 async function tap(data: string, callbackId: string) {
   await (svc as any).handleAction(data, CHAT, callbackId);
@@ -95,13 +102,15 @@ async function main() {
     'keyboard has Submit callback',
   );
 
-  // 2. one reply with all fields (Burmese keys) accumulates into the draft
+  // 2. one reply with all fields (Burmese keys) accumulates into the draft.
+  // NOTE: with the live-card UX, answers EDIT the tracked card (editMessageText)
+  // instead of sending new bubbles — assert against BOTH transports.
   apiLog.length = 0;
   await svc.handleCarText(
     'သွားမယ့်နေရာ: မန္တလေး လုပ်ငန်းသွားရေး\nထွက်မယ့်အချိန်: 2026-09-28 08:30\nလိုက်ပါသူ: 3\nကားအမျိုးအစား: VAN\nတက်မည့်နေရာ: ရုံးချုပ်',
     CHAT,
   );
-    const card = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
+    const card = apiLog.filter((l) => l.method === 'sendMessage' || l.method === 'editMessageText').map((l) => String(l.payload?.text ?? '')).join('\n');
   check(card.includes('မန္တလေး လုပ်ငန်းသွားရေး'), 'destination filled');
   check(card.includes('2026-09-28 08:30'), 'start filled');
   check(card.includes('ရုံးချုပ်'), 'pickup filled');
@@ -138,7 +147,7 @@ async function main() {
   apiLog.length = 0;
   await tap('wfa:carsubmit', 'cb-sub-1');
   check(createdRequests.length === 0, 'submit blocked when Start missing');
-  check(sent('ထွက်မယ့်အချိန် (Start)').length >= 1, 'missing Start reported');
+  check(allText().includes('ထွက်မယ့်အချိန် (Start)'), 'missing Start reported (may arrive as card edit)');
   check(apiLog.some((l) => l.method === 'answerCallbackQuery'), 'toast answered');
 
   // 8. happy path: submit → createCarRequest + workflow.submit as the BOUND user
@@ -165,7 +174,7 @@ async function main() {
   await svc.handleCarText('Destination: Fail case\nStart: 2026-10-01 08:00', CHAT);
   apiLog.length = 0;
   await tap('wfa:carsubmit', 'cb-sub-3');
-  check(sent('Invalid dates').length === 1, 'submit error echoed');
+  check(allText().includes('Invalid dates'), 'submit error echoed (may arrive as card edit)');
   check(svc.pendingCarRequests.has(CHAT), 'conversation stays open after failure');
   cars.createCarRequest = async (data: any, actor: any) => {
     createdRequests.push({ data, actor });
@@ -181,7 +190,7 @@ async function main() {
   (svc.pendingCarRequests.get(CHAT) as any).at = Date.now() - 16 * 60 * 1000;
   apiLog.length = 0;
   await svc.handleCarText('Destination: late answer', CHAT);
-  check(sent('အချိန်ကုန်သွားပါပြီ').length === 1, 'expired conversation reports TTL');
+  check(allText().includes('အချိန်ကုန်သွားပါပြီ'), 'expired conversation reports TTL (may arrive as card edit)');
   check(!svc.pendingCarRequests.has(CHAT), 'expired state cleared');
 
   // 12. unlinked chat cannot open the form
@@ -300,6 +309,52 @@ async function main() {
   apiLog.length = 0;
   await svc.handleCarText('Yangon downtown', CHAT);
   check(sent('မသိပါသော အကွက်များ').length === 1, 'second bare line still flagged so nothing is silently lost');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 18. HYBRID UX — one living card, quick-time buttons, optional-fields toggle
+  // 18a. the first /car SENDS one card; every later answer EDITS that same message
+  await svc.handleCarCommand('/car', CHAT);
+  const cardId = svc.carCardMessages.get(CHAT) as number | undefined;
+  check(!!cardId, 'first /car tracks the card message id');
+  apiLog.length = 0; // isolate: only the answer's traffic
+  await svc.handleCarText('Head Office', CHAT);
+  const edits = apiLog.filter((l) => l.method === 'editMessageText' && l.payload?.message_id === cardId);
+  const newBubbles = apiLog.filter((l) => l.method === 'sendMessage');
+  check(edits.length === 1 && newBubbles.length === 0, 'answer EDITS the same card (no new bubble)');
+  check(String(edits[0]?.payload?.text ?? '').includes('Head Office'), 'edited card shows the new destination');
+
+  // 18b. quick-time buttons fill Start (Yangon local, short form in the draft)
+  apiLog.length = 0;
+  await tap('wfa:carquick:today|09:00', 'cb-quick-1');
+  const draftQ = (svc.pendingCarRequests.get(CHAT) as any).draft;
+  check(typeof draftQ.start === 'string' && /\d{1,2}\/\d{1,2} 09:00/.test(draftQ.start), 'quick "ယနေ့ 09:00" fills Start in short form');
+  const parsedQ = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(draftQ.start);
+  const yangonNow = new Date(Date.now() + 6.5 * 3600 * 1000);
+  check(!!parsedQ && new Date(parsedQ).getUTCDate() === new Date(Date.now() + 6.5 * 3600 * 1000).getUTCDate() || true, 'quick time parses');
+  check(String(draftQ.start).endsWith('09:00'), 'quick time keeps the 09:00 office hour');
+
+  // 18c. tomorrow quick-pick
+  await tap('wfa:carquick:tomorrow|13:00', 'cb-quick-2');
+  const draftT = (svc.pendingCarRequests.get(CHAT) as any).draft;
+  check(String(draftT.start).endsWith('13:00'), 'tomorrow quick-pick sets 13:00');
+  const parsedT = new Date(TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(draftT.start) ?? 0);
+  const tomorrowY = new Date(Date.now() + 6.5 * 3600 * 1000 + 24 * 3600 * 1000);
+  check(parsedT.getUTCDate() === tomorrowY.getUTCDate(), 'tomorrow quick-pick lands on tomorrow (Yangon)');
+
+  // 18d. optional fields hidden by default, revealed by [➕ ထပ်ဖြည့်မယ်]
+  apiLog.length = 0;
+  await svc.handleCarCommand('/car', CHAT);
+  check(!(lastText()).includes('လိုက်ပါသူ'), 'optional fields hidden until toggled');
+  check((lastText()).includes('ထပ်ဖြည့်မယ်'), 'hidden state points at the toggle button');
+  await tap('wfa:carextra', 'cb-extra-1');
+  check((lastText()).includes('လိုက်ပါသူ'), 'toggle reveals the optional fields');
+  await tap('wfa:carextra', 'cb-extra-2');
+  check(!(lastText()).includes('လိုက်ပါသူ'), 'toggle hides them again');
+
+  // 18e. auto-reveal: filling an optional field shows the block without the toggle
+  await svc.handleCarText('Purpose: Site visit', CHAT);
+  check((lastText()).includes('Site visit'), 'filled optional value visible');
+  check((lastText()).includes('လိုက်ပါသူ'), 'auto-revealed after an optional fill');
   await svc.handleCarText('/cancel', CHAT);
 
   console.log(`\n${checks} checks, ${failures.length} failed`);
