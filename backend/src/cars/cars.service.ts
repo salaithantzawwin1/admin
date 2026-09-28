@@ -205,12 +205,29 @@ export class CarsService {
         startDate: true,
         endDate: true,
         destination: true,
+        // Back-at-Office trim: a driver who signalled "Back at Office" freed the
+        // vehicle at that moment — the alert must not cover time after it.
+        assignment: { select: { driverBackAtOfficeAt: true } },
         request: { select: { docNumber: true } },
       },
       orderBy: { startDate: 'asc' },
       take: 10,
     });
-    return { conflicts };
+    // SQL already checked the PLANNED windows overlap; trim each clash to the
+    // actual absence (early Back at Office) and drop clashes that no longer
+    // reach the new window at all — same "Back at Office" exemption the
+    // availability/assign paths already apply, now also for the pre-warning.
+    const trimmed = conflicts
+      .map((c) => ({
+        ...c,
+        // effective end = the earlier of planned end and the driver's return
+        ...(c.assignment?.driverBackAtOfficeAt && c.assignment.driverBackAtOfficeAt < c.endDate
+          ? { endDate: c.assignment.driverBackAtOfficeAt }
+          : {}),
+      }))
+      .filter((c) => c.endDate > start)
+      .map(({ assignment: _assignment, ...rest }) => rest);
+    return { conflicts: trimmed };
   }
 
   /**

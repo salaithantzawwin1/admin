@@ -303,7 +303,7 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
     return USERS.filter((u) => ids.includes(u.id) && u.status === 'ACTIVE' && u.telegramChatId);
   };
   const mkAssignment = (id: string) => ({
-    id, vehicleId: 'v1', driverId: 'd1', assignedById: 'u1', // assigned via Telegram by u1
+    id, requestId: 'r1', vehicleId: 'v1', driverId: 'd1', assignedById: 'u1', // assigned via Telegram by u1
     driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, telegramMessageId: '555',
   });
   (prisma as any).carAssignment = {
@@ -318,6 +318,27 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   };
   (prisma.vehicle as any).update = async () => undefined; // freeVehicle
   (prisma.driver as any).update = async () => undefined;
+
+  // auto-complete mock: completeAfterReturn runs a small tx — request lookup + status writes
+  const txWrites: any[] = [];
+  let txTrip: string | null = null; // trip status seen by the auto-complete guard
+  (prisma as any).$transaction = async (fn: (tx: any) => Promise<unknown>) =>
+    fn({
+      requestDocument: {
+        findUnique: async ({ where: { id } }: any) => {
+          const d = docs.find((x) => x.id === id);
+          return d ? { id: d.id, status: d.status, docNumber: d.docNumber, requesterId: 'rq', carAssignment: { trip: txTrip ? { status: txTrip } : null } } : null;
+        },
+        update: async ({ where: { id }, data }: any) => {
+          const d = docs.find((x) => x.id === id);
+          if (d) d.status = data.status;
+          txWrites.push({ table: 'requestDocument', id, data });
+        },
+      },
+      carRequest: {
+        update: async ({ where: { requestId }, data }: any) => txWrites.push({ table: 'carRequest', requestId, data }),
+      },
+    });
 
   // 15. each driver stage mirrors into the ASSIGNER's chat (and Administration keeps getting theirs)
   await (telegram as any).manualAck('a1', 'noted', { userId: 'u9', username: 'admin1' });
@@ -334,8 +355,22 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   check(readyMirrors.some((m) => m.payload.chat_id === CHAT_OK), 'Ready stage mirrors to the assigner chat');
   check(sent('🚗 Car is ready — CAR-202609-0036').length === 1, 'requester still receives the car-ready message');
 
+  // trip under way (as it would be in production when the driver reports back)
+  docs.find((d) => d.id === 'r1')!.status = 'IN_PROGRESS';
   await (telegram as any).manualAck('a1', 'returned', { userId: 'u9', username: 'admin1' });
   check(sent('🏁 Car available — CAR-202609-0036').some((m) => m.payload.chat_id === CHAT_OK), 'Back-at-office mirrors to the assigner chat');
+  check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === 1, 'Back-at-office auto-completes the request (REQUEST_AUTO_COMPLETED audit)');
+  check(docs.find((d) => d.id === 'r1')!.status === 'COMPLETED', 'IN_PROGRESS request becomes COMPLETED after Back at Office');
+  check(txWrites.some((w) => w.table === 'requestDocument' && w.data.status === 'COMPLETED'), 'base document row is closed');
+  check(txWrites.some((w) => w.table === 'carRequest' && w.data.status === 'COMPLETED'), 'CarRequest mirror row also COMPLETED');
+
+  // 15a-2. a STARTED trip (mileage open) is NOT auto-completed — Admin closes it via the trip form
+  docs.find((d) => d.id === 'r1')!.status = 'IN_PROGRESS';
+  txTrip = 'STARTED';
+  await (telegram as any).manualAck('a5', 'returned', { userId: 'u9', username: 'admin1' });
+  check(docs.find((d) => d.id === 'r1')!.status === 'IN_PROGRESS', 'STARTED trip stays IN_PROGRESS after Back at Office (mileage close-out stays with Administration)');
+  check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === 1, 'no auto-complete audit for a STARTED trip');
+  txTrip = null;
 
   // 15b. assigner who IS Administration must get exactly ONE mirror (deduped):
   // roster shrinks to the assigner alone (u1) — he must receive exactly one
@@ -417,7 +452,7 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
     { key: 'telegram.enabled', value: 'true' },
   ];
   const fullAssignment = (id: string, driver = { id: 'd1', name: 'U Kyaw', telegramChatId: DRIVER_CHAT }) => ({
-    id, vehicleId: 'v1', driverId: driver.id, assignedById: 'u1',
+    id, requestId: 'r1', vehicleId: 'v1', driverId: driver.id, assignedById: 'u1',
     driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, telegramMessageId: '555',
     driver,
     vehicle: { id: 'v1', vehicleNo: 'YC-1234', brandModel: 'Toyota Hiace' },
@@ -463,13 +498,18 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   check(String(reqReady[0]?.payload?.text ?? '').includes('is ready. Pickup: Head Office'), 'requester message names the driver + vehicle + route');
   check(sent('🚦 Bound Driver ready — CAR-202609-0036').length === 2, 'Ready mirrors = 2 (assigner + Administration)');
 
-  // 19. driver taps Back → vehicle freed + mirrors
+  // 19. driver taps Back → vehicle freed + mirrors + AUTO-COMPLETE (IN_PROGRESS → COMPLETED)
   await tap('returned:a4', 'cb-back', 555, Number(DRIVER_CHAT));
   check(auditCalls.includes('DRIVER_RETURNED'), 'driver Back tap → DRIVER_RETURNED audit entry');
   const backMirrors = sent('🏁 Car available — CAR-202609-0036');
   check(backMirrors.length === 2 && backMirrors.every((m) => [CHAT_OK, ADMIN_CHAT].includes(m.payload.chat_id)), 'Back mirrors = 2 (assigner + Administration)');
   check(sent('Car is ready').length === 1, 'requester receives NO Back-at-office message');
   check(assignedMsgCount() === 1, 'requester/admin chats never receive the driver assignment card');
+  check(docs.find((d) => d.id === 'r1')!.status === 'COMPLETED', 'driver Back tap (real callback path) auto-completes the request');
+  check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === 2, 'auto-complete audit fired again via the driver callback path');
+  const autoBefore = auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length;
+  await (telegram as any).completeAfterReturn('r1');
+  check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === autoBefore, 're-running completion on a COMPLETED doc is a no-op (idempotent)');
 
   console.log(failures === 0 ? '\nALL CHECKS PASSED ✅' : `\n${failures} CHECK(S) FAILED ❌`);
   process.exit(failures === 0 ? 0 : 1);

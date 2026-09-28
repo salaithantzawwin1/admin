@@ -4,6 +4,7 @@ import { api, hasPermission } from '../api';
 import { Badge, Card, Empty, PageHeader } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { CarRequestForm } from '../components/CarRequestForm';
+import { DriverAckStages } from '../components/CarPanel';
 import { toast } from '../components/Toast';
 
 interface FleetVehicle {
@@ -32,6 +33,15 @@ interface RequestRow {
   createdAt: string;
   requester?: { fullName?: string } | null;
   department?: { name?: string } | null;
+  carRequest?: {
+    assignment?: {
+      id: string;
+      assignedAt: string;
+      driverNotedAt?: string | null;
+      driverArrivedAt?: string | null;
+      driverBackAtOfficeAt?: string | null;
+    } | null;
+  } | null;
 }
 
 interface QueueRow {
@@ -258,13 +268,18 @@ export default function CarRequests() {
                   </td>
                 )}
                 <td className="px-4 py-3">{r.title}</td>
-                <td className="px-4 py-3"><span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
-                  r.status === 'APPROVED' ? 'bg-green-100 text-green-700'
-                  : r.status === 'REJECTED' ? 'bg-red-100 text-red-700'
-                  : r.status === 'PENDING_APPROVAL' ? 'bg-yellow-100 text-yellow-700'
-                  : r.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700'
-                  : 'bg-gray-100 text-gray-600'
-                }`}>{r.status}</span></td>
+                <td className="px-4 py-3">
+                  <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
+                    r.status === 'APPROVED' ? 'bg-green-100 text-green-700'
+                    : r.status === 'REJECTED' ? 'bg-red-100 text-red-700'
+                    : r.status === 'PENDING_APPROVAL' ? 'bg-yellow-100 text-yellow-700'
+                    : r.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700'
+                    : 'bg-gray-100 text-gray-600'
+                  }`}>{r.status}</span>
+                  {r.status === 'IN_PROGRESS' && r.carRequest?.assignment && (
+                    <DriverAckStages a={r.carRequest.assignment} />
+                  )}
+                </td>
                 <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>
                 <td className="px-4 py-3 text-gray-500">{new Date(r.createdAt).toLocaleDateString()}</td>
               </tr>

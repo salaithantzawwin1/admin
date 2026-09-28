@@ -87,6 +87,54 @@ async function main() {
     assert.strictEqual(r.conflicts[0].request.docNumber, 'CAR-202609-0001');
   });
 
+  await test('checkWindowConflicts: Back-at-Office clash is trimmed to the actual return time', async () => {
+    // planned 10:45→11:45, driver returned 11:00 → effective clash window 10:45→11:00
+    const returned: any[] = [
+      {
+        startDate: new Date('2026-09-24T10:45Z'), endDate: new Date('2026-09-24T11:45Z'), destination: 'Office run',
+        assignment: { driverBackAtOfficeAt: new Date('2026-09-24T11:00Z') },
+        request: { docNumber: 'CAR-202609-0006' },
+      },
+    ];
+    const prismaBao: any = { carRequest: { findMany: async () => returned }, carAssignment: { findMany: async () => [] } };
+    const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
+    // new request 11:10→12:10: overlaps the PLANNED end (11:45) but NOT the actual absence (ends 11:00)
+    const r = await svcBao.checkWindowConflicts('2026-09-24T11:10Z', '2026-09-24T12:10Z');
+    assert.strictEqual(r.conflicts.length, 0, 'clash fully inside the early-return gap must NOT warn');
+  });
+
+  await test('checkWindowConflicts: partial overlap before the return time still warns', async () => {
+    const returned: any[] = [
+      {
+        startDate: new Date('2026-09-24T10:45Z'), endDate: new Date('2026-09-24T11:45Z'), destination: 'Office run',
+        assignment: { driverBackAtOfficeAt: new Date('2026-09-24T11:00Z') },
+        request: { docNumber: 'CAR-202609-0006' },
+      },
+    ];
+    const prismaBao: any = { carRequest: { findMany: async () => returned }, carAssignment: { findMany: async () => [] } };
+    const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
+    // new request 10:50→11:20: genuinely collides with the car until 11:00
+    const r = await svcBao.checkWindowConflicts('2026-09-24T10:50Z', '2026-09-24T11:20Z');
+    assert.strictEqual(r.conflicts.length, 1, 'genuine overlap before the return must still warn');
+    assert.strictEqual(new Date(r.conflicts[0].endDate).toISOString(), '2026-09-24T11:00:00.000Z', 'warning shows the ACTUAL return time, not the planned end');
+    assert.strictEqual(r.conflicts[0].assignment, undefined, 'internal assignment field must not leak to the UI payload');
+  });
+
+  await test('checkWindowConflicts: no Back-at-Office → planned window unchanged', async () => {
+    const planned: any[] = [
+      {
+        startDate: new Date('2026-09-24T10:45Z'), endDate: new Date('2026-09-24T11:45Z'), destination: 'Office run',
+        assignment: { driverBackAtOfficeAt: null },
+        request: { docNumber: 'CAR-202609-0007' },
+      },
+    ];
+    const prismaBao: any = { carRequest: { findMany: async () => planned }, carAssignment: { findMany: async () => [] } };
+    const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const r = await svcBao.checkWindowConflicts('2026-09-24T11:10Z', '2026-09-24T12:10Z');
+    assert.strictEqual(r.conflicts.length, 1, 'without a return tap the planned end still blocks');
+    assert.strictEqual(new Date(r.conflicts[0].endDate).toISOString(), '2026-09-24T11:45:00.000Z');
+  });
+
   await test('overlaps(): excludeRequestId targets requestId (not CarRequest.id)', async () => {
     await svc.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'), 'req-42');
     const w = captured[captured.length - 1].where;

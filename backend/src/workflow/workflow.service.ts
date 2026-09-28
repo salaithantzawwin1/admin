@@ -204,6 +204,11 @@ export class WorkflowService {
           requester: { select: { username: true, fullName: true } },
           department: { select: { name: true } },
           _count: { select: { attachments: true } },
+          // Car Requests list: driver ack stages (✓ Noted / 🚦 Ready / 🏁 Back)
+          // shown inline — the driver works through these while the doc sits IN_PROGRESS
+          ...(params.docType === 'CAR_REQUEST' ? {
+            carRequest: { select: { assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true } } } },
+          } : {}),
         },
       }),
       this.prisma.requestDocument.count({ where }),

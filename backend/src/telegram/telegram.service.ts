@@ -844,7 +844,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Already done' });
       return;
     }
-    if (action === 'returned') await this.freeVehicle(assignment.id);
+    if (action === 'returned') {
+      await this.freeVehicle(assignment.id);
+      await this.completeAfterReturn(assignment.requestId);
+    }
 
     const updated = await this.applyAckStage(assignment.id, patch, action);
     await this.editStageMessage(updated);
@@ -900,7 +903,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!assignment.driverNotedAt) patch.driverNotedAt = now;
       if (!assignment.driverArrivedAt) patch.driverArrivedAt = now;
     } else return null; // already done
-    if (action === 'returned') await this.freeVehicle(assignmentId);
+    if (action === 'returned') {
+      await this.freeVehicle(assignmentId);
+      await this.completeAfterReturn(assignment.requestId);
+    }
     const updated = await this.applyAckStage(assignmentId, patch, action);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -919,6 +925,55 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
     if (a.driverId) {
       await this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Auto-complete the request once the driver signalled "Back at Office".
+   * Previously only the vehicle/driver were freed while the document stayed
+   * IN_PROGRESS until Administration manually completed (or cancelled) it —
+   * list views showed a physically finished trip as still running.
+   * Guard: a trip the driver STARTED keeps its mileage close-out with the
+   * Administration trip form (completeTrip); anything not live is untouched.
+   * Best-effort — the driver's ack must never fail because of this.
+   */
+  private async completeAfterReturn(requestId: string | undefined) {
+    if (!requestId) return;
+    try {
+      const done = await this.prisma.$transaction(async (tx: {
+        requestDocument: { findUnique: (a: unknown) => Promise<{ status: string; docNumber: string; requesterId: string; carAssignment?: { trip?: { status: string } } | null } | null>; update: (a: unknown) => Promise<unknown> };
+        carRequest: { update: (a: unknown) => Promise<unknown> };
+      }) => {
+        const r = await tx.requestDocument.findUnique({
+          where: { id: requestId },
+          select: { status: true, docNumber: true, requesterId: true, carAssignment: { select: { trip: { select: { status: true } } } } },
+        });
+        if (!r || r.status !== 'IN_PROGRESS') return null;
+        if (r.carAssignment?.trip?.status === 'STARTED') return null; // mileage open — Admin completes via the trip form
+        await tx.carRequest.update({ where: { requestId }, data: { status: 'COMPLETED' } });
+        await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'COMPLETED' } });
+        return r;
+      });
+      if (!done) return;
+      await this.audit.log({
+        action: 'REQUEST_AUTO_COMPLETED',
+        module: 'CARS',
+        recordId: requestId,
+        newValue: { reason: 'Back at Office', auto: true },
+      });
+      await this.prisma.notification.create({
+        data: {
+          userId: done.requesterId,
+          type: 'TRIP_COMPLETED',
+          title: `✅ Trip completed — ${done.docNumber}`,
+          body: 'Driver is back at office — the car request was closed automatically.',
+          link: `/requests/${requestId}`,
+          requestId,
+        },
+      });
+      await this.mirrorToUser(done.requesterId, `✅ Trip completed — ${done.docNumber}`, 'Driver is back at office — the car request was closed automatically.', `/requests/${requestId}`).catch(() => undefined);
+    } catch {
+      /* best-effort — freeing the vehicle must never fail the driver's ack */
     }
   }
 
