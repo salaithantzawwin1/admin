@@ -116,17 +116,45 @@ async function tap(data: string, callbackId: string) {
   await (svc as any).handleAction(data, CHAT, callbackId);
 }
 
+// bare /car now lands on the two-button CHOOSER — every existing test wants the
+// FULL form, so this helper picks 🆕 (and doubles as the chooser-flow assertion)
+async function openFullForm() {
+  await svc.handleCarCommand('/car', CHAT);
+  if ((svc.pendingCarRequests.get(CHAT) as any)?.draft?.choose === 1) {
+    await tap('wfa:carnew', `cb-choose-${apiLog.length}`);
+  }
+}
+
 // ------------------------------------------------------------------ tests
 async function main() {
-  // 1. /car renders the bilingual form card + keyboard
+  // 1. /car shows the CHOOSER first (return vs new), then the full form
   apiLog.length = 0;
   await svc.handleCarCommand('/car', CHAT);
+  check((lastText()).includes('ဘယ်ဟာ လိုချင်လဲ'), 'bare /car opens the chooser');
+  const chooserKb = JSON.stringify(apiLog.filter((l) => l.method === 'sendMessage').map((l) => l.payload?.reply_markup ?? []));
+  check(chooserKb.includes('wfa:carback') && chooserKb.includes('wfa:carnew'), 'chooser offers exactly ရုံးချုပ်ပြန် + အသစ်တောင်းခံမယ်');
+  check(!chooserKb.includes('wfa:carsubmit'), 'chooser does NOT show Submit');
+  apiLog.length = 0;
+  await tap('wfa:carnew', 'cb-choose-full');
+  const fullCard = lastText();
+  check(fullCard.includes('ကားတောင်းခံမှု — New car request'), 'choosing 🆕 opens the FULL form');
+  check(JSON.stringify(apiLog.map((l) => l.payload?.reply_markup ?? [])).includes('wfa:carsubmit'), 'full form keyboard has Submit');
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.choose == null, 'chooser stage cleared after the pick');
+
+  // 1b. /car <destination> skips the chooser (intent already stated)
+  await svc.handleCarCommand('/car မန္တလေး', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.choose == null && (svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'မန္တလေး', '/car <destination> skips the chooser and prefills');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 1c. the original full-form assertions (now behind the chooser pick)
+  apiLog.length = 0;
+  await openFullForm();
   check(sent('ကားတောင်းခံ'), 'form card opens with Burmese title');
   check(sent('New car request'), 'card carries English subtitle');
   check(sent('သွားမယ့်နေရာ'), 'card lists Destination with Burmese label');
   check(keyboards().length >= 1, 'card carries inline keyboard');
   assert.ok(
-    JSON.stringify(lastText() && apiLog.filter((l) => l.method === 'sendMessage').map((l) => l.payload?.reply_markup?.inline_keyboard ?? [])).includes('wfa:carsubmit'),
+    JSON.stringify(apiLog.filter((l) => l.method === 'sendMessage' || l.method === 'editMessageText').map((l) => l.payload?.reply_markup?.inline_keyboard ?? [])).includes('wfa:carsubmit'),
     'keyboard has Submit callback',
   );
 
@@ -169,7 +197,7 @@ async function main() {
   // 7. missing required fields block Submit with the card re-shown
   apiLog.length = 0;
   await svc.handleCarText('/cancel', CHAT); // clear, start fresh
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await svc.handleCarText('Destination: Only destination', CHAT);
   apiLog.length = 0;
@@ -198,7 +226,7 @@ async function main() {
 
   // 9. submit failure keeps the conversation open with the error echoed
   cars.createCarRequest = async () => { throw new Error('Invalid dates'); };
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('Destination: Fail case\nStart: 2026-10-01 08:00', CHAT);
   apiLog.length = 0;
   await tap('wfa:carsubmit', 'cb-sub-3');
@@ -214,7 +242,7 @@ async function main() {
   check(!svc.pendingCarRequests.has(CHAT), '/cancel clears the conversation');
 
   // 11. TTL expiry
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   (svc.pendingCarRequests.get(CHAT) as any).at = Date.now() - 16 * 60 * 1000;
   apiLog.length = 0;
   await svc.handleCarText('Destination: late answer', CHAT);
@@ -228,7 +256,7 @@ async function main() {
   check(!svc.pendingCarRequests.has('unlinked-chat'), 'no state for unlinked chat');
 
   // 13. vehicle fuzzy match invalid → unchanged + card still renders
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('ကားအမျိုးအစား: ROCKETSHIP', CHAT);
   const draftAfterBadVehicle = (svc.pendingCarRequests.get(CHAT) as any).draft;
   check(!draftAfterBadVehicle.vehicle, 'invalid vehicle type not stored');
@@ -242,14 +270,14 @@ async function main() {
 
   // 15. supersede: /car resets an in-progress draft
   await svc.handleCarText('Destination: first draft', CHAT);
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   check(!(svc.pendingCarRequests.get(CHAT) as any).draft.destination, '/car resets draft');
 
   // 16. UX fixes: quick /car <destination>, short dates, warnings, digit normalisation
   // 16a. /car <destination> prefills the destination
   await svc.handleCarCommand('/car မန္တလေး လုပ်ငန်းသွားရေး', CHAT);
   check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'မန္တလေး လုပ်ငန်းသွားရေး', '/car <destination> prefills destination');
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
 
   // 16b. short day-first date accepted (5/10 09:00 → 5 Oct, 09:00 Yangon)
   apiLog.length = 0;
@@ -269,7 +297,7 @@ async function main() {
 
   // 16c. d/m with omitted time defaults to 09:00
   apiLog.length = 0;
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('Destination: Date only\nStart: 7/10', CHAT);
   apiLog.length = 0;
   createdRequests.length = 0; submittedIds.length = 0;
@@ -279,7 +307,7 @@ async function main() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 16d. unparseable start warns inline instead of failing silently at submit
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await svc.handleCarText('Start: tomorrow morning', CHAT);
   check((lastText()).includes('နားမလည်ပါ'), 'unparseable date warns with the expected format');
@@ -298,7 +326,7 @@ async function main() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 16g. non-breaking space after the field name must not break matching
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await svc.handleCarText('destination\u00A0: Fullwidth trip\nStart\u00A0: 2026-10-06 08:00', CHAT);
   check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'Fullwidth trip', 'non-breaking space after field name tolerated');
@@ -306,7 +334,7 @@ async function main() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 16h. too-many-passengers warning
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await svc.handleCarText('Passengers: 999', CHAT);
   check((lastText()).includes('လိုက်ပါသူ အရေအတွက် မမှန်ပါ'), 'passengers 999 warns with the 1–60 rule');
@@ -314,7 +342,7 @@ async function main() {
 
   // 17. BARE answers (no label) — the exact flow from the user's screenshot:
   // typing "Head Office" with no colon fills the destination, never an error
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await svc.handleCarText('Head Office', CHAT);
   check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'Head Office', 'bare "Head Office" fills destination');
@@ -341,7 +369,7 @@ async function main() {
 
   // 18. HYBRID UX — one living card, quick-time buttons, optional-fields toggle
   // 18a. the first /car SENDS one card; every later answer EDITS that same message
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   const cardId = svc.carCardMessages.get(CHAT) as number | undefined;
   check(!!cardId, 'first /car tracks the card message id');
   apiLog.length = 0; // isolate: only the answer's traffic
@@ -371,7 +399,7 @@ async function main() {
 
   // 18d. optional fields hidden by default, revealed by [➕ ထပ်ဖြည့်မယ်]
   apiLog.length = 0;
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   check(!(lastText()).includes('လိုက်ပါသူ'), 'optional fields hidden until toggled');
   check((lastText()).includes('ထပ်ဖြည့်မယ်'), 'hidden state points at the toggle button');
   await tap('wfa:carextra', 'cb-extra-1');
@@ -399,7 +427,7 @@ async function regressionTests() {
 
   // 19a. re-issuing /car while the form is open resets the form (never becomes
   // the destination, never "unknown field") — the bot routes bare '/car' here.
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('Destination: old draft', CHAT);
   apiLog.length = 0;
   await svc.handleCarText('/car', CHAT);
@@ -413,7 +441,7 @@ async function regressionTests() {
   // NO document created, conversation stays open for a retry.
   const realWf = prisma.approvalWorkflow.findFirst;
   prisma.approvalWorkflow.findFirst = async () => null;
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('Destination: No workflow\nStart: 2026-10-05 08:30', CHAT);
   const createdBefore = createdRequests.length;
   apiLog.length = 0;
@@ -427,7 +455,7 @@ async function regressionTests() {
   // 19c. GENERIC_REQUEST fallback counts as a usable workflow (mirrors workflowFor)
   prisma.approvalWorkflow.findFirst = async ({ where }: any) =>
     where.module === 'GENERIC_REQUEST' ? { id: 'wf-generic', steps: [{ id: 's1' }] } : null;
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('Destination: Generic wf\nStart: 2026-10-05 09:00', CHAT);
   createdRequests.length = 0; submittedIds.length = 0;
   await tap('wfa:carsubmit', 'cb-sub-generic');
@@ -436,7 +464,7 @@ async function regressionTests() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 19d. the toggle button label is spelled correctly
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   const kb = JSON.stringify(apiLog.map((l) => l.payload?.reply_markup ?? []));
   check(kb.includes('ထပ်ဖြည့်မယ်'), 'keyboard offers [➕ ထပ်ဖြည့်မယ်]');
   check(!kb.includes('ထပ်ဖြည့်ဖြည့်'), 'keyboard never shows the duplicated typo label');
@@ -454,7 +482,7 @@ async function returnTripTests() {
   console.log('\n— 20. return-trip express —');
 
   // 20a. the [↩️ ရုံးချုပ်ပြန်] card button
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await tap('wfa:carback', 'cb-back-1');
   const dBack = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
@@ -467,7 +495,7 @@ async function returnTripTests() {
   // NOTE: "head office" is deliberately NOT an intent — it must stay a plain
   // destination answer (the original screenshot typed it as one).
   for (const word of ['ပြန်မယ်', 'Back', 'return trip']) {
-    await svc.handleCarCommand('/car', CHAT);
+    await openFullForm();
     apiLog.length = 0;
     await svc.handleCarText(word, CHAT);
     const d = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
@@ -475,12 +503,12 @@ async function returnTripTests() {
   }
 
   // 20c. normal destination typing is NOT hijacked
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await svc.handleCarText('Mandalay', CHAT);
   check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'Mandalay', 'a real destination is not hijacked by the intent check');
 
   // 20d. the express path submits: tap return → quick time → submit
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-back-2');
   await tap('wfa:carquick:today|13:00', 'cb-back-3');
   createdRequests.length = 0; submittedIds.length = 0;
@@ -492,7 +520,7 @@ async function returnTripTests() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 20e. return trip prefills Start = TODAY (rounded up) — no day question needed
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-back-5');
   const dPref = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
   const yangonToday = new Date(Date.now() + 6.5 * 3600 * 1000);
@@ -513,7 +541,7 @@ async function returnTripTests() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 20f. ⚡ အခု button — today, rounded up to the next quarter hour
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await tap('wfa:carquick:now', 'cb-now-1');
   const dNow = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
@@ -694,7 +722,7 @@ async function shorthandTests() {
   check(parse('5/10 09:00') === null, 'date-only form is NOT a shorthand (stays a date)');
 
   // 22c. bare-line shorthand rewrites ONLY the time, keeps today's date
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-sh-1');
   const before = (svc.pendingCarRequests.get(CHAT) as any).draft.start as string;
   await svc.handleCarText('1:30 PM / 3 / Fortune Office', CHAT);
@@ -706,7 +734,7 @@ async function shorthandTests() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 22c2. a plain word on a return draft becomes the PICKUP (the "Chan Yin" case)
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-sh-1b');
   await svc.handleCarText('Chan Yin', CHAT);
   const dChan = (svc.pendingCarRequests.get(CHAT) as any).draft;
@@ -715,7 +743,7 @@ async function shorthandTests() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 22d. labelled Start: "3:30 PM" rewrites time only, keeps the day
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-sh-2');
   await svc.handleCarText('Start: 11:00 AM', CHAT);
   const dLbl = (svc.pendingCarRequests.get(CHAT) as any).draft;
@@ -726,7 +754,7 @@ async function shorthandTests() {
   // push the ETA forward — the exact flow: carback (Start 11:30/ETA 13:30) →
   // "3:30 PM / 2 / Chan Yin Factory" → Submit used to die on
   // "endDate must be after startDate".
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-sh-3');
   await svc.handleCarText('3:30 PM / 2 / Chan Yin Factory', CHAT);
   const dFix = (svc.pendingCarRequests.get(CHAT) as any).draft;
@@ -754,7 +782,7 @@ async function shorthandTests() {
   check(new Date(startIsoLate!).getTime() > yangon1700, '18:30 start is after 17:00 (rule triggers)');
 
   // 22g. RETURN MINI-CARD — the compact layout for the ရုံးချုပ်ပြန် flow
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-mini-1');
   apiLog.length = 0;
   await svc.handleCarText('  ', CHAT); // whitespace-only → card re-render only
@@ -769,7 +797,7 @@ async function shorthandTests() {
 
   // normal (non-return) card keeps the full layout
   await svc.handleCarText('/cancel', CHAT);
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   apiLog.length = 0;
   await svc.handleCarText('  ', CHAT);
   const full = lastText();
@@ -778,7 +806,7 @@ async function shorthandTests() {
   await svc.handleCarText('/cancel', CHAT);
 
   // 22h. [🆕 အသစ်တောင်းခံမယ်] — mini-card → full form, no /car re-typing
-  await svc.handleCarCommand('/car', CHAT);
+  await openFullForm();
   await tap('wfa:carback', 'cb-new-1');
   apiLog.length = 0;
   await tap('wfa:carnew', 'cb-new-2');

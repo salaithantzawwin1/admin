@@ -324,7 +324,12 @@ export class TelegramCarActionsService {
       await this.telegram.answer(callbackId, 'Open AMS in your browser to view details');
       return true;
     }
-    // /car form buttons — slot pick, quick time, extra fields toggle, submit, cancel
+    // /car form buttons — slot pick, quick time, extra fields toggle, submit, cancel.
+    // Any form-mode tap settles the chooser stage into that form.
+    if (['carslot', 'carquick', 'carextra', 'carback', 'carnew'].includes(action)) {
+      const e0 = this.pendingCarRequests.get(chatId);
+      if (e0) delete (e0.draft as Record<string, unknown>).choose;
+    }
     if (action === 'carslot') {
       await this.actCarSlot(arg1 ?? '', chatId, callbackId);
       return true;
@@ -720,11 +725,13 @@ export class TelegramCarActionsService {
       await this.telegram.sendRaw(chatId, '❌ Your Telegram is not linked to an AMS account.');
       return;
     }
-    // fresh draft (re-issuing /car resets the form — deliberate and predictable);
-    // `/car မန္တလေး` style starts with the destination already filled
+    // fresh draft (re-issuing /car resets the form — deliberate and predictable).
+    // `/car မန္တလေး` states the destination already → straight to the FULL form;
+    // bare /car → the two-button CHOOSER first (return vs new), then the form.
     const rest = text.split(/\s+/).slice(1).join(' ').trim();
     const draft: Record<string, string | number | undefined> = {};
     if (rest) draft.destination = rest;
+    else draft.choose = 1; // chooser stage — see renderChooserCard/carKeyboard
     this.pendingCarRequests.set(chatId, { draft, at: Date.now() });
     this.sweepCarDrafts();
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
@@ -757,6 +764,8 @@ export class TelegramCarActionsService {
     }
 
     entry.at = Date.now(); // touch — an active conversation never TTLs mid-typing
+    // any typed answer settles the chooser — they are filling the FULL form
+    delete (entry.draft as Record<string, unknown>).choose;
     // keyboards vary: fullwidth colons, non-breaking spaces, Myanmar digits —
     // normalise BEFORE parsing so none of them silently break a field answer
     const normalized = TelegramCarActionsService.toAsciiDigits(text.replace(/：/g, ':').replace(/\u00A0/g, ' '));
@@ -1005,17 +1014,18 @@ export class TelegramCarActionsService {
     if (draft.returnTrip === 1) draft.notes = `Return trip — pickup from ${String(draft.pickup)}`;
   }
 
-  /** [🆕 အသစ်တောင်းခံမယ်] on the return mini-card — back to the FULL /car form
-   *  (fresh draft, exactly like re-typing /car) without re-typing it. The tracked
-   *  card is edited in place, so the chat never grows a second bubble. */
+  /** [🆕 အသစ်တောင်းခံမယ်] (chooser / return mini-card) — open the FULL /car form
+   *  with a fresh draft (NOT via handleCarCommand — that would re-show the chooser). */
   private async actCarNew(chatId: string, callbackId: string): Promise<void> {
     const entry = this.pendingCarRequests.get(chatId);
     if (!entry) {
       await this.telegram.answer(callbackId, 'Expired — send /car again');
       return;
     }
-    await this.telegram.answer(callbackId, 'ပုံမှန် ကားတောင်းခံမှု ဖောင် ပြန်ဖွင့်လိုက်ပါပြီ');
-    await this.handleCarCommand('/car', chatId);
+    entry.at = Date.now();
+    entry.draft = {}; // fresh FULL form — the tap already says "new request"
+    await this.telegram.answer(callbackId, 'ပုံမှန် ကားတောင်းခံမှု ဖောင် ဖွင့်လိုက်ပါပြီ');
+    await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
   /** [↩️ ရုံးချုပ်ပြန်] on the card — instant return-trip draft. */
@@ -1173,6 +1183,7 @@ export class TelegramCarActionsService {
     // Return trips get a COMPACT mini-card — a rider heading back only answers
     // time / pax / place; vehicle-type, purpose and slot rows are noise for them
     // (and the ETA duplicated the Custom-slot row). Normal /car keeps the full card.
+    if (draft.choose === 1) return this.renderChooserCard();
     if (draft.returnTrip === 1) return this.renderReturnCard(draft);
     const sval = (k: string): string => (typeof draft[k] === 'string' ? (draft[k] as string) : '');
     const ok = (label: string, value: string | number | undefined) =>
@@ -1222,6 +1233,18 @@ export class TelegramCarActionsService {
     return lines.join('\n');
   }
 
+  /** The /car entry chooser: TWO flows, nothing else on screen. The forms only
+   *  appear after the user picks (their requested UX — the full card was noise
+   *  for someone who just wants the quick return trip). */
+  private renderChooserCard(): string {
+    return [
+      '🚗 <b>ကားတောင်းခံမှု</b> — ဘယ်ဟာ လိုချင်လဲ?',
+      '────────────────',
+      '↩️ <b>ရုံးချုပ်ပြန်မယ်</b> — လက်ရှိရောက်နေတဲ့နေရာကနေ ရုံးချုပ်ပြန်မယ် (အမြန် form)',
+      '🆕 <b>အသစ်တောင်းခံမယ်</b> — ခရီးအသစ်အတွက် ပုံမှန် form',
+    ].join('\n');
+  }
+
   /** The compact return-trip card: exactly what a rider must answer — nothing else.
    *  Three rows (time, place, pax) + one ETA line + one hint. */
   private renderReturnCard(draft: Record<string, string | number | undefined>): string {
@@ -1249,6 +1272,16 @@ export class TelegramCarActionsService {
   private carKeyboard(draft: Record<string, unknown>): { inline_keyboard: { text: string; callback_data: string }[][] } {
     const slot = draft.slot;
     const b = (text: string, data: string) => ({ text, callback_data: data });
+    // chooser stage: the two flows + cancel — nothing else on screen
+    if (draft.choose === 1) {
+      return {
+        inline_keyboard: [
+          [b('↩️ ရုံးချုပ်ပြန်', 'wfa:carback')],
+          [b('🆕 အသစ်တောင်းခံမယ်', 'wfa:carnew')],
+          [b('❌ Cancel', 'wfa:carcancel')],
+        ],
+      };
+    }
     // return mode: times + submit/cancel only — slot buttons and the extra-fields
     // toggle are noise when the ETA already covers the End
     if (draft.returnTrip === 1) {
