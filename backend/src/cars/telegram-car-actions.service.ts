@@ -766,13 +766,14 @@ export class TelegramCarActionsService {
           entry.draft.slot = bareSlot;
           continue;
         }
-        // "3:30 PM / 3" — time (+passengers) in one line; keeps the already-prefilled
-        // TODAY date (or defaults to today) — the express return-trip flow
+        // "1:30 PM / 3 / Fortune Office" — time (+passengers +pickup) in one line;
+        // keeps the already-prefilled TODAY date — the express return-trip flow
         const tShort = TelegramCarActionsService.parseTimeShorthandStatic(line);
         if (tShort) {
           const datePart = String(entry.draft.start ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
           entry.draft.start = `${datePart} ${tShort.time}`;
           if (tShort.pax != null) entry.draft.passengers = tShort.pax;
+          if (tShort.pickup) this.applyReturnPickup(entry.draft, tShort.pickup);
           continue;
         }
         if (TelegramCarActionsService.parseCarDateStatic(line)) {
@@ -783,6 +784,12 @@ export class TelegramCarActionsService {
         }
         if (!entry.draft.destination) {
           this.setCarField(entry.draft, 'destination', line);
+          continue;
+        }
+        // return trip: the only thing left to answer is WHERE the car fetches
+        // the rider — a plain word/phrase becomes the pickup, never "unknown"
+        if (entry.draft.returnTrip === 1) {
+          this.applyReturnPickup(entry.draft, line);
           continue;
         }
         unknownKeys.push(line.slice(0, 40));
@@ -808,12 +815,14 @@ export class TelegramCarActionsService {
           this.setCarField(entry.draft, entry.draft.slot === 'CUSTOM_HOURS' && entry.draft.start ? 'end' : 'start', line);
           continue;
         }
-        // "3:30 PM / 3" — the colon is the TIME separator; one line = time (+pax)
+        // "1:30 PM / 3 / Fortune Office" — the colon is the TIME separator;
+        // one line = time (+pax +pickup)
         const tShort2 = TelegramCarActionsService.parseTimeShorthandStatic(line);
         if (tShort2) {
           const datePart = String(entry.draft.start ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
           entry.draft.start = `${datePart} ${tShort2.time}`;
           if (tShort2.pax != null) entry.draft.passengers = tShort2.pax;
+          if (tShort2.pickup) this.applyReturnPickup(entry.draft, tShort2.pickup);
           continue;
         }
         unknownKeys.push(key);
@@ -866,6 +875,7 @@ export class TelegramCarActionsService {
             const datePart = String(draft[key] ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
             draft[key] = `${datePart} ${tShort.time}`;
             if (tShort.pax != null) draft.passengers = tShort.pax;
+            if (tShort.pickup) this.applyReturnPickup(draft as Record<string, unknown>, tShort.pickup);
             break;
           }
           return `⚠️ ${key === 'start' ? 'ထွက်မယ့်အချိန်' : 'ပြန်ရောက်မည့်အချိန်'} နားမလည်ပါ — ရက်စွဲပုံစံ ဥပမာ <b>2026-10-05 08:30</b> (ဒါမှမဟုတ် 5/10 08:30)`;
@@ -954,6 +964,12 @@ export class TelegramCarActionsService {
     }
   }
 
+  /** Set the fetch-place on a return draft and keep the admin note in step. */
+  private applyReturnPickup(draft: Record<string, unknown>, pickup: string): void {
+    draft.pickup = pickup.trim();
+    if (draft.returnTrip === 1) draft.notes = `Return trip — pickup from ${String(draft.pickup)}`;
+  }
+
   /** [↩️ ရုံးချုပ်ပြန်] on the card — instant return-trip draft. */
   private async actCarBack(chatId: string, callbackId: string): Promise<void> {
     const entry = this.pendingCarRequests.get(chatId);
@@ -963,7 +979,7 @@ export class TelegramCarActionsService {
     }
     entry.at = Date.now();
     await this.prefillReturnTrip(entry.draft, chatId);
-    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — ဥပမာ "3:30 PM / 3" ရေးပါ (လာခေါ်မယ့်အချိန် / လိုက်ပါသူ)');
+    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — ဥပမာ "1:30 PM / 3 / Fortune Office" ရေးပါ');
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
@@ -1127,7 +1143,7 @@ export class TelegramCarActionsService {
     const optional = [
       ok('လိုက်ပါသူ', draft.passengers ?? 1),
       draft.vehicle ? `✅ ကားအမျိုးအစား: ${escapeHtml(String(draft.vehicle))}` : '➖ ကားအမျိုးအစား: —',
-      draft.pickup ? `✅ ${draft.returnTrip === 1 ? 'ကားလာခေါ်ရမဲ့နေရာ' : 'တက်မည့်နေရာ'}: ${escapeHtml(String(draft.pickup))}` : `➖ ${draft.returnTrip === 1 ? 'ကားလာခေါ်ရမဲ့နေရာ' : 'တက်မည့်နေရာ'}: — (ရေးရန် ဥပမာ — Pickup: မန္တလေး ဘူတာ)`,
+      draft.pickup ? `✅ ${draft.returnTrip === 1 ? 'ကားလာခေါ်ရမဲ့နေရာ' : 'တက်မည့်နေရာ'}: ${escapeHtml(String(draft.pickup))}` : `➖ ${draft.returnTrip === 1 ? 'ကားလာခေါ်ရမဲ့နေရာ' : 'တက်မည့်နေရာ'}: — (ဥပမာ "1:30 PM / 3 / Fortune Office" ထဲမှာ ပါဝင်အောင် ရေးပါ)`,
       draft.purpose ? `✅ ရည်ရွယ်ချက်: ${escapeHtml(String(draft.purpose))}` : '➖ ရည်ရွယ်ချက်: —',
       draft.notes ? `✅ မှတ်ချက်: ${escapeHtml(String(draft.notes))}` : '➖ မှတ်ချက်: —',
     ];
@@ -1139,7 +1155,7 @@ export class TelegramCarActionsService {
       ...(showExtra ? optional : ['➕ ကားအမျိုးအစား / တက်မည့်နေရာ / ရည်ရွယ်ချက် / မှတ်ချက် ထပ်ဖြည့်ချင်ရင် — အောက်က [➕ ထပ်ဖြည့်မယ်] နှိပ်ပါ']),
       '────────────────',
       draft.returnTrip === 1
-        ? 'ရေးရန် — "3:30 PM / 3" (လာခေါ်မယ့်အချိန် / လိုက်ပါသူ) · "Pickup: ..." (လာခေါ်မည့်နေရာ)'
+        ? 'ရေးရန် — "1:30 PM / 3 / Fortune Office" (အချိန် / လိုက်ပါသူ / လာခေါ်မည့်နေရာ)'
         : 'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day" · "ပြန်မယ်" (ရုံးချုပ်ပြန်)',
       '<i>အမြန်စတင် — /car မန္တလေး</i>',
     ];
@@ -1211,23 +1227,34 @@ export class TelegramCarActionsService {
     return TelegramCarActionsService.shortYangonStatic(new Date(Date.now() + 6.5 * 3600 * 1000)).split(' ')[0];
   }
 
-  /** "3:30 PM / 3" → { time '15:30', pax 3 } — one-line time (+optional passengers),
-   *  12h or 24h. A lone number ("3") or plain words NEVER match — those stay
-   *  destination answers. */
-  private static parseTimeShorthandStatic(line: string): { time: string; pax?: number } | null {
-    const m = line.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\/\s*(\d{1,2}))?\s*$/i);
+  /** "1:30 PM / 3 / Fortune Office" → { time '13:30', pax 3, pickup 'Fortune Office' } —
+   *  one line = TIME [/ PAX] [/ PICKUP], 12h or 24h. A lone number ("3") or plain
+   *  words NEVER match — those stay destination/pickup answers. The date-only
+   *  forms ("5/10", "5/10 09:00") also never match: they lack minutes/am-pm. */
+  private static parseTimeShorthandStatic(line: string): { time: string; pax?: number; pickup?: string } | null {
+    const m = line.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\/(.*))?$/i);
     if (!m) return null;
-    const [, hRaw, mRaw, half, paxRaw] = m;
+    const [, hRaw, mRaw, half, rest] = m;
     if (!mRaw && !half) return null; // needs minutes or am/pm — a lone "3" is not a time
     let h = Number(hRaw);
     const mi = mRaw ? Number(mRaw) : 0;
     if (half?.toLowerCase() === 'pm' && h < 12) h += 12;
     if (half?.toLowerCase() === 'am' && h === 12) h = 0;
     if (h > 23 || mi > 59) return null;
-    const pax = paxRaw != null ? Number(paxRaw) : undefined;
-    if (pax != null && (pax < 1 || pax > 60)) return null;
     const p2 = (n: number) => String(n).padStart(2, '0');
-    return { time: `${p2(h)}:${p2(mi)}`, ...(pax != null ? { pax } : {}) };
+    let pax: number | undefined;
+    let pickup: string | undefined;
+    if (rest != null) {
+      const segs = rest.split('/').map((s) => s.trim()).filter((s) => s !== '');
+      if (segs[0] && /^\d{1,2}$/.test(segs[0])) {
+        pax = Number(segs[0]);
+        if (pax < 1 || pax > 60) return null;
+        pickup = segs.slice(1).join(' / ') || undefined;
+      } else {
+        pickup = segs.join(' / ') || undefined; // "1:30 PM / Fortune Office" — no pax given
+      }
+    }
+    return { time: `${p2(h)}:${p2(mi)}`, ...(pax != null ? { pax } : {}), ...(pickup ? { pickup } : {}) };
   }
 
   /** "YYYY-MM-DD HH:MM" / "DD/MM HH:MM" / "DD/MM/YYYY HHMM" → ISO (Yangon = +06:30, no DST).

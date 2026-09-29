@@ -628,7 +628,9 @@ async function shorthandTests() {
 
   // 22a. the exact shapes from the user's proposed flow
   check(JSON.stringify(parse('3:30 PM / 3')) === JSON.stringify({ time: '15:30', pax: 3 }), '"3:30 PM / 3" → 15:30 + 3 pax');
+  check(JSON.stringify(parse('1:30 PM / 3 / Fortune Office')) === JSON.stringify({ time: '13:30', pax: 3, pickup: 'Fortune Office' }), '"1:30 PM / 3 / Fortune Office" → time + pax + pickup');
   check(JSON.stringify(parse('3:30PM/3')) === JSON.stringify({ time: '15:30', pax: 3 }), 'no-space variant also parses');
+  check(parse('1:30 PM / Fortune Office')?.pickup === 'Fortune Office' && parse('1:30 PM / Fortune Office')?.pax === undefined, '"1:30 PM / place" → pickup without pax');
   check(parse('3:30 PM')?.time === '15:30' && parse('3:30 PM')?.pax === undefined, '"3:30 PM" → 15:30, no pax');
   check(parse('15:30')?.time === '15:30', '24h "15:30" parses');
   check(parse('9:00 am')?.time === '09:00', 'lowercase am parses');
@@ -641,15 +643,27 @@ async function shorthandTests() {
   check(parse('25:00') === null, '25:00 rejected');
   check(parse('3:75 PM') === null, '3:75 rejected');
   check(parse('3:30 PM / 99') === null, 'pax 99 out of range rejected');
+  check(parse('5/10 09:00') === null, 'date-only form is NOT a shorthand (stays a date)');
 
   // 22c. bare-line shorthand rewrites ONLY the time, keeps today's date
   await svc.handleCarCommand('/car', CHAT);
   await tap('wfa:carback', 'cb-sh-1');
   const before = (svc.pendingCarRequests.get(CHAT) as any).draft.start as string;
-  await svc.handleCarText('3:30 PM / 3', CHAT);
+  await svc.handleCarText('1:30 PM / 3 / Fortune Office', CHAT);
   const after = (svc.pendingCarRequests.get(CHAT) as any).draft;
-  check(after.start === `${String(before).split(' ')[0]} 15:30`, 'shorthand keeps the prefilled TODAY date, rewrites the time');
+  check(after.start === `${String(before).split(' ')[0]} 13:30`, 'shorthand keeps the prefilled TODAY date, rewrites the time');
   check(after.passengers === 3, 'shorthand sets passengers from the /3 part');
+  check(after.pickup === 'Fortune Office', 'shorthand sets the fetch place from the third segment');
+  check(String(after.notes).includes('Fortune Office'), 'admin note tracks the pickup');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 22c2. a plain word on a return draft becomes the PICKUP (the "Chan Yin" case)
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-sh-1b');
+  await svc.handleCarText('Chan Yin', CHAT);
+  const dChan = (svc.pendingCarRequests.get(CHAT) as any).draft;
+  check(dChan.pickup === 'Chan Yin', 'bare "Chan Yin" on a return draft fills the fetch place');
+  check(!sent('မသိပါသော အကွက်များ').length, 'bare pickup raises NO unknown-field error');
   await svc.handleCarText('/cancel', CHAT);
 
   // 22d. labelled Start: "3:30 PM" rewrites time only, keeps the day
