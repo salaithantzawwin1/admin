@@ -68,6 +68,10 @@ export class TelegramCarActionsService {
       await this.handleMyTrips(chatId);
       return true;
     }
+    if (command === '/help') {
+      await this.sendHelpCard(chatId);
+      return true;
+    }
     if (command !== '/assign') {
       this.logger.warn(`/assign handler: parsed command "${command}" did not match — ignoring`);
       return false;
@@ -114,6 +118,27 @@ export class TelegramCarActionsService {
   }
 
   // ============================================================ /mytrips — my car requests, cancel from the phone
+
+  /** /help — Burmese quick-reference for every car shortcut (new users start here). */
+  private async sendHelpCard(chatId: string): Promise<void> {
+    await this.telegram.sendRaw(
+      chatId,
+      [
+        '📖 <b>ကားတောင်းခံမှု — အသုံးပြုနည်း အမြန်လမ်းညွှန်</b>',
+        '',
+        '<b>/car</b> — ကားတောင်းခံမှု အသစ်',
+        '• ↩️ <b>ရုံးချုပ်ပြန်</b> — လက်ရှိနေရာကနေ ရုံးချုပ်ပြန် (အမြန်)',
+        '  ဥပမာ — <b>"4:00 PM / 2 / Fortune Office"</b> (အချိန် / လိုက်ပါသူ / နေရာ)',
+        '• 🆕 <b>အသစ်တောင်းခံမယ်</b> — ခရီးအသစ် (ပုံမှန် form)',
+        '  ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day"',
+        '',
+        '<b>/mytrips</b> — ကျွန်ုပ်၏ ခရီးများ ကြည့်ရန် + [❌ ပယ်ဖျက်]',
+        '  (ပယ်ဖျက်ရန် ခလုတ်ကို နှစ်ချက်နှိပ်)',
+        '',
+        '<i>အခြား — /help ဒီ card ကို ပြန်ပြမယ်</i>',
+      ].join('\n'),
+    );
+  }
 
   /** Pending /mytrips cancellations per chat — [❌ Cancel] arms, next [✅ Yes] confirms. */
   private tripCancels = new Map<string, { requestId: string; docNumber: string; messageId?: number; at: number }>();
@@ -276,10 +301,13 @@ export class TelegramCarActionsService {
       for (const a of approvers) {
         if (!a.telegramChatId) continue;
         await this.telegram.sendRaw(a.telegramChatId, text, {
-          reply_markup: {
-            inline_keyboard: [[
+          reply_markup:        {
+          inline_keyboard: [[
               { text: '✅ Approve', callback_data: `wfa:approve:${requestId}` },
               { text: '❌ Reject', callback_data: `wfa:rej:${requestId}` },
+            ], [
+              { text: '＋30 မိနစ်', callback_data: `wfa:ashift:${requestId}:30` },
+              { text: '＋1 နာရီ', callback_data: `wfa:ashift:${requestId}:60` },
             ], [
               { text: '👁 Open in AMS', callback_data: `wfa:noop:${requestId}` },
             ]],
@@ -382,6 +410,10 @@ export class TelegramCarActionsService {
       await this.actApprove(arg1 ?? '', chatId, callbackId, actor);
       return true;
     }
+    if (action === 'ashift') {
+      await this.actApproveShift(arg1 ?? '', data, chatId, callbackId);
+      return true;
+    }
     if (action === 'rej') {
       await this.actBeginReject(arg1 ?? '', chatId, callbackId);
       return true;
@@ -406,6 +438,89 @@ export class TelegramCarActionsService {
       return true;
     }
     return true;
+  }
+
+  // pending time-shifts on approval cards — [＋30 မိနစ်] arms, second tap confirms
+  private approveShifts = new Map<string, { requestId: string; minutes: number; at: number }>();
+  private static readonly SHIFT_TTL_MS = 10 * 60 * 1000;
+
+  /** [＋30 မိနစ်]/[＋1 နာရီ] on the approval card — move the trip window forward
+   *  BEFORE approving (the adjust-then-approve flow, no AMS detour). First tap
+   *  arms (asks to confirm), second tap shifts and re-paints the card. */
+  private async actApproveShift(arg1: string, data: string, chatId: string, callbackId: string): Promise<void> {
+    const requestId = arg1 ?? '';
+    // data = wfa:ashift:<requestId>:<minutes> — requestId itself has no colons (uuid)
+    const minutes = Number(data.split(':')[3]);
+    if (!requestId || !Number.isFinite(minutes)) {
+      await this.telegram.answer(callbackId, 'Bad shift request');
+      return;
+    }
+    const user = await this.boundUser(chatId);
+    if (!user) {
+      await this.telegram.answer(callbackId, 'Not authorized');
+      return;
+    }
+    const doc = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { docNumber: true, status: true } });
+    if (!doc || doc.status !== 'PENDING_APPROVAL') {
+      this.approveShifts.delete(`${chatId}:${requestId}`);
+      await this.telegram.answer(callbackId, 'Not pending anymore');
+      return;
+    }
+    const key = `${chatId}:${requestId}`;
+    const armed = this.approveShifts.get(key);
+    if (!armed || armed.minutes !== minutes || Date.now() - armed.at > TelegramCarActionsService.SHIFT_TTL_MS) {
+      if (this.approveShifts.size > 200) {
+        for (const [k, v] of this.approveShifts) {
+          if (Date.now() - v.at > TelegramCarActionsService.SHIFT_TTL_MS) this.approveShifts.delete(k);
+        }
+      }
+      this.approveShifts.set(key, { requestId, minutes, at: Date.now() });
+      await this.telegram.answer(callbackId, `❓ ${doc.docNumber} ကို +${minutes} မိနစ် ရွှေ့မှာလား? — ထပ်နှိပ်ပါ`);
+      return;
+    }
+    this.approveShifts.delete(key);
+    const cr = await this.prisma.carRequest.findUnique({ where: { requestId }, select: { startDate: true, endDate: true } });
+    if (!cr) {
+      await this.telegram.answer(callbackId, 'Car request not found');
+      return;
+    }
+    try {
+      await this.cars.adminShiftTime(
+        requestId,
+        { startDate: new Date(new Date(cr.startDate).getTime() + minutes * 60000).toISOString(), endDate: new Date(new Date(cr.endDate).getTime() + minutes * 60000).toISOString(), comment: `Time shifted +${minutes} min via Telegram by ${user.username}` },
+        { userId: user.id, username: user.username } as never,
+      );
+      // repaint the approval card with the NEW window (fresh read)
+      const fresh = await this.prisma.requestDocument.findUnique({
+        where: { id: requestId },
+        include: { requester: { select: { fullName: true } }, carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true, passengers: true } } },
+      });
+      if (fresh?.carRequest) {
+        const c = fresh.carRequest;
+        const when = `\n📅 ${new Date(c.startDate).toLocaleString('en-GB')} → ${new Date(c.endDate).toLocaleString('en-GB')} (✏️ +${minutes} min)`;
+        const dest = `\n🗺 ${escapeHtml(c.destination)}${c.pickupLocation ? ` (Pickup: ${escapeHtml(c.pickupLocation)})` : ''}${c.passengers ? ` · 👥 ${c.passengers}` : ''}`;
+        const why = fresh.description ? `\n📝 ${escapeHtml(fresh.description)}` : '';
+        await this.telegram.editCallbackMessage(
+          chatId,
+          callbackId,
+          `🆕 <b>New car request — ${escapeHtml(fresh.docNumber)}</b>\n${escapeHtml(fresh.title)}\n👤 ${escapeHtml(fresh.requester.fullName)}${when}${dest}${why}`,
+          {
+            inline_keyboard: [[
+              { text: '✅ Approve', callback_data: `wfa:approve:${requestId}` },
+              { text: '❌ Reject', callback_data: `wfa:rej:${requestId}` },
+            ], [
+              { text: '＋30 မိနစ်', callback_data: `wfa:ashift:${requestId}:30` },
+              { text: '＋1 နာရီ', callback_data: `wfa:ashift:${requestId}:60` },
+            ], [
+              { text: '👁 Open in AMS', callback_data: `wfa:noop:${requestId}` },
+            ]],
+          },
+        );
+      }
+      await this.telegram.answer(callbackId, `အချိန် +${minutes} မိနစ် ရွှေ့ပြီးပါပြီ — requester ကို အသိပေးလိုက်ပါပြီ`);
+    } catch (e) {
+      await this.telegram.answer(callbackId, `Shift failed: ${(e as Error).message}`);
+    }
   }
 
   /** [✅ Approve] — full AMS checks, then paint the outcome and offer vehicles. */

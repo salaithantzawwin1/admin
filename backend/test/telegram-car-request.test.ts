@@ -49,6 +49,13 @@ const prisma: any = {
     }),
     findMany: async () => [], // /mytrips + ETA history: overridden per-test
   },
+  carRequest: {
+    findUnique: async ({ where }: any) => carRows[where.requestId] ?? null,
+    update: async ({ where, data }: any) => {
+      carRows[where.requestId] = { startDate: data.startDate, endDate: data.endDate };
+      return carRows[where.requestId];
+    },
+  },
 };
 
 const createdRequests: any[] = [];
@@ -63,6 +70,9 @@ const workflow: any = {
   submit: async (id: string, actor: any) => {
     submittedIds.push({ id, actor });
   },
+  approve: async (id: string) => {
+    approvedIds.push(id);
+  },
   cancel: async (id: string, actor: any) => {
     cancelled.push({ id, via: 'cancel', actor });
   },
@@ -73,6 +83,11 @@ const workflow: any = {
   onSubmittedTelegram: () => undefined,
 };
 const cancelled: Array<{ id: string; via: string; actor: any }> = [];
+const approvedIds: string[] = [];
+// car rows visible to adminShiftTime during the approval shift test
+const carRows: Record<string, { startDate: Date; endDate: Date }> = {
+  'req-appr-shift': { startDate: new Date('2026-09-29T08:00:00Z'), endDate: new Date('2026-09-29T10:00:00Z') },
+};
 
 const apiLog: Array<{ method: string; payload: any }> = [];
 const audit: any = { log: async () => ({}) };
@@ -707,12 +722,57 @@ async function approvalCardTests() {
   // restore
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
     id: where.id,
-    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`, 
     status: 'PENDING_APPROVAL',
     requesterId: 'u1',
   });
   permissions.usersWithPermissions = async () => ['u2'];
   prisma.user.findMany = async () => [];
+
+  // 23b. [＋30 မိနစ်]/[＋1 နာရီ] on the approval card — two-tap shift
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: 'CAR-SHIFT-1',
+    title: 'Car to Head Office',
+    status: 'PENDING_APPROVAL',
+    requesterId: 'u1',
+    requester: { fullName: 'Salai' },
+    description: 'Return trip',
+    carRequest: carRows[where.id] ? { ...carRows[where.id], destination: 'Head Office', pickupLocation: 'Chan Yin', passengers: 2 } : null,
+  });
+  const shifted: any[] = [];
+  (svc as any).cars.adminShiftTime = async (id: string, data: any) => {
+    shifted.push({ id, data });
+    carRows[id] = { startDate: new Date(data.startDate), endDate: new Date(data.endDate) };
+    return { success: true };
+  };
+  apiLog.length = 0;
+  const baseStart = new Date(carRows['req-appr-shift'].startDate).getTime();
+  await tap('wfa:ashift:req-appr-shift:30', 'cb-as-1');
+  check(shifted.length === 0, 'first shift tap asks for confirmation only');
+  check(apiLog.some((l) => l.method === 'answerCallbackQuery' && String(l.payload?.text ?? '').includes('ထပ်နှိပ်ပါ')), 'shift toast asks to confirm');
+  await tap('wfa:ashift:req-appr-shift:30', 'cb-as-2');
+  const expectedStart = baseStart + 30 * 60000;
+  check(shifted.length === 1 && Math.abs(new Date(shifted[0].data.startDate).getTime() - expectedStart) < 1500, 'confirmed tap shifts the window +30 min');
+  const asCard = apiLog.filter((l) => l.method === 'editMessageText').map((l) => String(l.payload?.text ?? '')).join('\n');
+  check(asCard.includes('+30 min'), 'approval card repaints with the new window');
+  check(asCard.includes('wfa:approve') || JSON.stringify(apiLog.map((l) => l.payload?.reply_markup ?? [])).includes('wfa:approve'), 'Approve button still present after the shift');
+  // restore generic mocks
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+    status: 'PENDING_APPROVAL',
+    requesterId: 'u1',
+  });
+  delete (svc as any).cars.adminShiftTime;
+
+  // 23c. /help card
+  apiLog.length = 0;
+  await (svc as any).sendHelpCard(CHAT);
+  const help = allText();
+  check(help.includes('အသုံးပြုနည်း အမြန်လမ်းညွှန်'), '/help opens the Burmese quick-reference');
+  check(help.includes('/mytrips') && help.includes('ပယ်ဖျက်'), '/help documents /mytrips + cancel');
+  check(help.includes('4:00 PM / 2 / Fortune Office'), '/help shows the shorthand example');
 
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
@@ -855,6 +915,7 @@ main()
   .then(() => returnTripTests())
   .then(() => myTripsTests())
   .then(() => shorthandTests())
+  .then(() => approvalCardTests())
   .then(() => approvalCardTests())
   .catch((e) => {
     console.error('HARNESS ERROR:', e);
