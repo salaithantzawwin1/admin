@@ -781,6 +781,13 @@ export class TelegramCarActionsService {
     draft.destination = 'Head Office';
     delete draft.pickup; // stale value from a previous draft must not survive
     delete draft.notes;
+    // a return trip is almost always SAME-DAY: prefill Start = now (Yangon wall
+    // clock, rounded up to the next half hour) so the day question disappears —
+    // the quick-time buttons or typing remain there to change it
+    const now = new Date(Date.now() + 6.5 * 3600 * 1000); // Yangon = UTC+06:30, no DST
+    now.setMinutes(Math.ceil(now.getMinutes() / 30) * 30, 0, 0); // setMinutes(60) rolls into the next hour
+    const p = (n: number) => String(n).padStart(2, '0');
+    draft.start = `${now.getDate()}/${now.getMonth() + 1} ${p(now.getHours())}:${p(now.getMinutes())}`;
     let lastDest: string | null = null;
     try {
       const user = await this.boundUser(chatId);
@@ -837,15 +844,20 @@ export class TelegramCarActionsService {
       return;
     }
     entry.at = Date.now();
-    // payload `today:09:00` / `tomorrow:13:00` → "10/2 09:00"-style short date in the draft
+    // payload `today:09:00` / `tomorrow:13:00` / `now` → "29/9 14:30"-style short date in the draft
     const [when, hhmm] = raw.split('|');
     const d = new Date();
     if (when === 'tomorrow') d.setDate(d.getDate() + 1);
-    const hh = Math.min(23, Math.max(0, Number(hhmm?.slice(0, 2)) || 0));
-    const mm = Math.min(59, Math.max(0, Number(hhmm?.slice(3, 5)) || 0));
-    d.setHours(hh, mm, 0, 0);
+    if (when === 'now') {
+      // "heading out right now" — round UP to the next quarter hour
+      d.setMinutes(Math.ceil(d.getMinutes() / 15) * 15, 0, 0);
+    } else {
+      const hh = Math.min(23, Math.max(0, Number(hhmm?.slice(0, 2)) || 0));
+      const mm = Math.min(59, Math.max(0, Number(hhmm?.slice(3, 5)) || 0));
+      d.setHours(hh, mm, 0, 0);
+    }
     const p = (n: number) => String(n).padStart(2, '0');
-    const label = `${d.getDate()}/${d.getMonth() + 1} ${p(hh)}:${p(mm)}`;
+    const label = `${d.getDate()}/${d.getMonth() + 1} ${p(d.getHours())}:${p(d.getMinutes())}`;
     entry.draft.start = label;
     await this.telegram.answer(callbackId, `Start: ${label}`);
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
@@ -990,8 +1002,10 @@ export class TelegramCarActionsService {
     const slot = draft.slot;
     const b = (text: string, data: string) => ({ text, callback_data: data });
     const rows: { text: string; callback_data: string }[][] = [
-      // one-tap office hours for Start — the trip that is "today 9" covers most requests
+      // one-tap office hours for Start — the trip that is "today 9" covers most requests;
+      // ⚡ အခု covers "heading back/out right now" (no day thinking needed)
       [
+        b('⚡ အခု', 'wfa:carquick:now'),
         b('🕘 ယနေ့ 09:00', 'wfa:carquick:today|09:00'),
         b('🕐 ယနေ့ 13:00', 'wfa:carquick:today|13:00'),
       ],
@@ -1054,8 +1068,13 @@ export class TelegramCarActionsService {
     const s = t.match(/^(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?(?:\s+(\d{1,2})[:.]?(\d{2})?)?$/);
     if (s) {
       const [, dRaw, moRaw, yRaw, hRaw, miRaw] = s;
-      const day = Number(dRaw);
-      const month = Number(moRaw);
+      let day = Number(dRaw);
+      let month = Number(moRaw);
+      // month-first speakers (9/29 = Sep 29) hit an impossible 29th month —
+      // when only one side can be a month, read the other as the day
+      if (month > 12 && day <= 12) {
+        [day, month] = [month, day];
+      }
       if (month < 1 || month > 12 || day < 1 || day > 31) return null;
       let year = yRaw ? Number(yRaw) : new Date().getFullYear();
       if (year < 100) year += 2000;

@@ -471,6 +471,37 @@ async function returnTripTests() {
   check(createdRequests[0]?.data?.pickupLocation === 'Mandalay Site', 'submitted pickup is the prefilled last destination');
   await svc.handleCarText('/cancel', CHAT);
 
+  // 20e. return trip prefills Start = TODAY (rounded up) — no day question needed
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-back-5');
+  const dPref = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+  const yangonToday = new Date(Date.now() + 6.5 * 3600 * 1000);
+  check(/^\d{1,2}\/\d{1,2} \d{2}:\d{2}$/.test(String(dPref.start)), 'return prefill Start is a parseable short date with time');
+  check(String(dPref.start).startsWith(`${yangonToday.getDate()}/`), 'return prefill Start day = TODAY (Yangon)');
+  const parsedPref = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dPref.start));
+  check(!!parsedPref, 'prefilled Start parses');
+  const prefFuture = parsedPref ? new Date(parsedPref).getTime() >= Date.now() - 13 * 60 * 1000 : false;
+  check(prefFuture, 'prefilled Start is now-or-future (rounded up, not in the past)');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 20f. ⚡ အခု button — today, rounded up to the next quarter hour
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await tap('wfa:carquick:now', 'cb-now-1');
+  const dNow = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+  check(String(dNow.start).startsWith(`${yangonToday.getDate()}/`), '⚡ အခု sets today\'s date');
+  const minNow = dNow.start ? String(dNow.start).slice(-5) : '';
+  check(/\d{2}:\d{2}/.test(minNow) && (Number(minNow.slice(3, 5)) % 15 === 0), '⚡ အခု rounds to a quarter-hour boundary');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 20g. month-first dates (9/29 = Sep 29) — the exact typo from the user screenshot
+  const mFirst = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic('9/29 01:00');
+  check(!!mFirst, 'month-first 9/29 parses (was rejected as month 29)');
+  check(mFirst ? new Date(mFirst).getUTCMonth() === 8 && new Date(mFirst).getUTCDate() === 28 : false, '9/29 01:00 = Sep 29 01:00 Yangon (Aug 28 18:30 UTC)');
+  const dFirst = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic('29/9 01:00');
+  check(dFirst === mFirst, 'day-first 29/9 equals month-first 9/29');
+  await svc.handleCarText('/cancel', CHAT);
+
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
     for (const f of failures) console.error(`  ✗ ${f}`);
