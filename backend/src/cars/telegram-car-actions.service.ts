@@ -990,6 +990,44 @@ export class TelegramCarActionsService {
     } else {
       draft.notes = 'Return trip to Head Office';
     }
+    // smart ETA: reuse the rider's OWN typical round-trip duration to this place
+    // (median of past completed trips from the same pickup), else the flat +2h
+    const etaH = await this.typicalRoundTripHours(chatId, draft.pickup);
+    draft.slot = 'CUSTOM_HOURS';
+    draft.end = TelegramCarActionsService.shortYangonStatic(new Date(now.getTime() + etaH * 3600 * 1000));
+  }
+
+  /** Median round-trip duration (hours) of the user's past car trips that went to
+   *  `pickup` (their usual away-place), 0.25–24h window to reject outliers;
+   *  null when there is no history yet → caller falls back to the flat +2h. */
+  private async typicalRoundTripHours(chatId: string, pickup: unknown): Promise<number> {
+    try {
+      const user = await this.boundUser(chatId);
+      const place = typeof pickup === 'string' ? pickup.trim().toLowerCase() : '';
+      if (!user || !place) return 2;
+      const trips = await this.prisma.requestDocument.findMany({
+        where: {
+          requesterId: user.id,
+          docType: 'CAR_REQUEST',
+          status: { in: ['APPROVED', 'IN_PROGRESS', 'COMPLETED'] as never },
+          carRequest: { pickupLocation: { not: null } },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        select: { carRequest: { select: { pickupLocation: true, startDate: true, endDate: true } } },
+      });
+      const hours = trips
+        .filter((t) => (t.carRequest?.pickupLocation ?? '').trim().toLowerCase() === place)
+        .map((t) => (new Date(t.carRequest!.endDate).getTime() - new Date(t.carRequest!.startDate).getTime()) / 3600000)
+        .filter((h) => h >= 0.25 && h <= 24)
+        .sort((a, b) => a - b);
+      if (hours.length === 0) return 2; // no history — flat +2h
+      const mid = Math.floor(hours.length / 2);
+      const median = hours.length % 2 ? hours[mid] : (hours[mid - 1] + hours[mid]) / 2;
+      return Math.min(12, Math.max(0.5, Math.round(median * 2) / 2)); // 0.5h steps, capped 12h
+    } catch {
+      return 2; // estimate must never break the prefill
+    }
   }
 
   /** Keep End (ETA) ahead of Start. Any Start rewrite (shorthand, quick-time,

@@ -47,7 +47,7 @@ const prisma: any = {
       status: 'PENDING_APPROVAL',
       requesterId: 'u1',
     }),
-    findMany: async () => [], // /mytrips: overridden per-test
+    findMany: async () => [], // /mytrips + ETA history: overridden per-test
   },
 };
 
@@ -534,7 +534,32 @@ async function returnTripTests() {
   check(dPref.slot === 'CUSTOM_HOURS' && !!dPref.end, 'return prefill sets Custom hours + End ETA');
   check(!!dPref.showExtra, 'return prefill reveals the optional fields (pickup needs answering)');
   const endDriftH = dPref.end ? Math.abs(new Date(TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dPref.end)) ?? 0).getTime() - Date.now()) / 3600000 : 999;
-  check(endDriftH <= 2.6 && endDriftH >= 1.4, 'End ETA ≈ fetch time +2h');
+  check(endDriftH <= 2.6 && endDriftH >= 1.4, 'End ETA ≈ fetch time +2h (no history → flat default)');
+
+  // 20e2. SMART ETA — history of round trips to THIS pickup (median, 3h here)
+  prisma.requestDocument.findMany = async ({ where }: any) => {
+    if (where.requesterId) {
+      return [
+        { carRequest: { pickupLocation: 'Mandalay Site', startDate: new Date(Date.now() - 96 * 3600e3), endDate: new Date(Date.now() - 93 * 3600e3) } }, // 3h
+        { carRequest: { pickupLocation: 'Mandalay Site', startDate: new Date(Date.now() - 72 * 3600e3), endDate: new Date(Date.now() - 68.5 * 3600e3) } }, // 3.5h
+        { carRequest: { pickupLocation: 'Mandalay Site', startDate: new Date(Date.now() - 48 * 3600e3), endDate: new Date(Date.now() - 45.25 * 3600e3) } }, // 2.75h
+        { carRequest: { pickupLocation: 'Elsewhere', startDate: new Date(Date.now() - 24 * 3600e3), endDate: new Date(Date.now() - 22 * 3600e3) } }, // other place — ignored
+        { carRequest: { pickupLocation: 'Mandalay Site', startDate: new Date(Date.now() - 12 * 3600e3), endDate: new Date(Date.now() - 11.9 * 3600e3) } }, // 6min — outlier, filtered
+      ];
+    }
+    return [];
+  };
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-eta-1');
+  const dSmart = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+  const smartH = dSmart.end ? (new Date(TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dSmart.end)) ?? 0).getTime() - new Date(TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dSmart.start)) ?? 0).getTime()) / 3600000 : 999;
+  check(Math.abs(smartH - 3) < 0.01, `smart ETA = median history (3h, got ${smartH})`);
+  prisma.requestDocument.findMany = async () => [];
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 20e3. the return draft STILL labels Start as the fetch time (mini-card)
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-fetchlabel-1');
   apiLog.length = 0;
   await svc.handleCarText('  ', CHAT); // whitespace-only answer re-renders the card cheaply
   check((lastText()).includes('ကားလာခေါ်မယ့်အချိန်'), 'return draft labels Start as "ကားလာခေါ်မယ့်အချိန်" (car comes to fetch me)');

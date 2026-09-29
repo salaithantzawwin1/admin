@@ -1115,7 +1115,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     a: {
       request: { docNumber: string; requester: { fullName: string; employee?: { phone: string | null } | null } };
       vehicle?: { brandModel: string; vehicleNo: string } | null;
-      carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; sharedTripId?: string | null } | null;
+      carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; sharedTripId?: string | null; passengers?: number | null } | null;
       sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null;
     },
     stages?: { noted?: Date | null; arrived?: Date | null; back?: Date | null } | null,
@@ -1133,6 +1133,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `🚙 ${a.vehicle ? escapeHtml(`${a.vehicle.brandModel} · ${a.vehicle.vehicleNo}`) : '—'}`,
       `📍 Pickup: ${escapeHtml(pickup)}`,
       `🗺 Destination: ${escapeHtml(cr.destination)}`,
+      `👥 Passengers: ${cr.passengers ?? 1}`,
       `👤 Requester: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
       cr.purpose ? `📝 ${escapeHtml(cr.purpose)}` : '',
       // shared trip — the driver sees who else is riding the same car
@@ -1158,7 +1159,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       include: {
         driver: true,
         vehicle: true,
-        carRequest: { select: { destination: true, pickupLocation: true, startDate: true, endDate: true, timeSlot: true, purpose: true, sharedTripId: true } },
+        carRequest: { select: { destination: true, pickupLocation: true, startDate: true, endDate: true, timeSlot: true, purpose: true, sharedTripId: true, passengers: true } },
         request: {
           select: {
             docNumber: true,
