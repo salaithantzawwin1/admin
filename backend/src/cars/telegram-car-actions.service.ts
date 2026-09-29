@@ -64,6 +64,10 @@ export class TelegramCarActionsService {
       await this.handleCarCommand(text, chatId);
       return true;
     }
+    if (command === '/mytrips') {
+      await this.handleMyTrips(chatId);
+      return true;
+    }
     if (command !== '/assign') {
       this.logger.warn(`/assign handler: parsed command "${command}" did not match — ignoring`);
       return false;
@@ -107,6 +111,108 @@ export class TelegramCarActionsService {
       await this.telegram.sendRaw(chatId, '⚠️ Something went wrong — please try again.').catch(() => undefined);
     }
     return true;
+  }
+
+  // ============================================================ /mytrips — my car requests, cancel from the phone
+
+  /** Pending /mytrips cancellations per chat — [❌ Cancel] arms, next [✅ Yes] confirms. */
+  private tripCancels = new Map<string, { requestId: string; docNumber: string; messageId?: number; at: number }>();
+  private static readonly TRIP_CANCEL_TTL_MS = 5 * 60 * 1000;
+
+  /** /mytrips — the bound user's car requests that still matter (waiting/approved/on the road), with cancel buttons. */
+  private async handleMyTrips(chatId: string): Promise<void> {
+    const user = await this.boundUser(chatId);
+    if (!user) {
+      await this.telegram.sendRaw(chatId, '❌ Your Telegram is not linked to an AMS account.');
+      return;
+    }
+    const trips = await this.prisma.requestDocument.findMany({
+      where: {
+        requesterId: user.id,
+        docType: 'CAR_REQUEST',
+        status: { in: ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: 10,
+      select: {
+        id: true, docNumber: true, status: true,
+        carRequest: { select: { destination: true, startDate: true, endDate: true, vehicle: { select: { vehicleNo: true } }, driver: { select: { name: true } } } },
+      },
+    });
+    if (trips.length === 0) {
+      await this.telegram.sendRaw(chatId, '🎉 လက်ရှိ တောင်းခံထားတဲ့ ခရီး မရှိပါ။ (No open car requests — send /car to make one.)');
+      return;
+    }
+    const statusLabel: Record<string, string> = {
+      PENDING_APPROVAL: '⏳ ခွင့်ပြုချက် စောင့်နေ',
+      APPROVED: '✅ အတည်ဖြစ် — ကား စောင့်နေ',
+      IN_PROGRESS: '🚗 ခရီးဆက်နေ/လာချိန်',
+    };
+    const fmt = (d: Date) => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const lines = trips.map((t) => {
+      const cr = t.carRequest;
+      const car = cr?.vehicle ? `\n🚙 ${escapeHtml(cr.vehicle.vehicleNo)}${cr.driver ? ` · 👤 ${escapeHtml(cr.driver.name)}` : ''}` : '';
+      return `${statusLabel[t.status] ?? t.status} — <b>${escapeHtml(t.docNumber)}</b>\n🗺 ${escapeHtml(cr?.destination ?? '—')}\n📅 ${fmt(cr!.startDate)} → ${fmt(cr!.endDate)}${car}`;
+    });
+    // inline keyboard mirrors the list order; data = wfa:tripcancel:<requestId> (48–63 bytes ✓)
+    const keyboard = {
+      inline_keyboard: trips.map((t) => [{ text: `❌ ${t.docNumber} ပယ်ဖျက်`, callback_data: `wfa:tripcancel:${t.id}` }]),
+    };
+    await this.telegram.sendRaw(chatId, `🧳 <b>ကျွန်ုပ်၏ ခရီးများ (${trips.length})</b>\n\n${lines.join('\n\n')}`, { reply_markup: keyboard });
+  }
+
+  /** [❌ <doc> ပယ်ဖျက်] — first tap arms (5 min TTL), the second tap on the SAME
+   *  button confirms. Cancellation runs through the SAME workflow services as the
+   *  web UI (PENDING → cancel; APPROVED/IN_PROGRESS → cancelApproved → the car
+   *  hook frees the vehicle/driver and notifies everyone). */
+  private async actTripCancel(requestId: string, chatId: string, callbackId: string): Promise<void> {
+    const user = await this.boundUser(chatId);
+    if (!user) {
+      await this.telegram.answer(callbackId, 'Not authorized');
+      return;
+    }
+    const doc = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      select: { docNumber: true, status: true, requesterId: true },
+    });
+    if (!doc || doc.requesterId !== user.id) {
+      await this.telegram.answer(callbackId, 'Not your request');
+      return;
+    }
+    const pending = this.tripCancels.get(chatId);
+    const armed = pending?.requestId === requestId && Date.now() - pending.at <= TelegramCarActionsService.TRIP_CANCEL_TTL_MS;
+    if (!armed) {
+      // first tap → arm + ask for confirmation (bounded map like the other conversation state)
+      if (this.tripCancels.size > 200) {
+        for (const [k, v] of this.tripCancels) {
+          if (Date.now() - v.at > TelegramCarActionsService.TRIP_CANCEL_TTL_MS) this.tripCancels.delete(k);
+        }
+      }
+      this.tripCancels.set(chatId, { requestId, docNumber: doc.docNumber, messageId: this.telegram.peekCallbackMessage(chatId, callbackId), at: Date.now() });
+      await this.telegram.answer(callbackId, `❓ ${doc.docNumber} ကို ပယ်ဖျက်မှာလား? — အတည်ပြုရန် ထပ်နှိပ်ပါ`);
+      return;
+    }
+    // confirmed → cancel through the same engine as the web UI
+    this.tripCancels.delete(chatId);
+    const actor = { userId: user.id, username: user.username } as never;
+    const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    try {
+      if (['DRAFT', 'SUBMITTED', 'PENDING_APPROVAL'].includes(doc.status)) {
+        await this.workflow.cancel(requestId, actor);
+      } else if (['APPROVED', 'IN_PROGRESS'].includes(doc.status)) {
+        // car module hook (registered in CarsModule) frees vehicle+driver and notifies —
+        // a STARTED trip is refused by the hook, which lands in the catch below
+        await this.workflow.cancelApproved(requestId, actor);
+      } else {
+        await this.telegram.answer(callbackId, `Cannot cancel from ${doc.status}`);
+        return;
+      }
+      await this.telegram.editCallbackMessage(chatId, callbackId, `❌ ပယ်ဖျက်လိုက်ပါပြီ — ${escapeHtml(doc.docNumber)} · ${stamp}`);
+      await this.telegram.answer(callbackId, 'ပယ်ဖျက်ပြီးပါပြီ');
+    } catch (e) {
+      await this.telegram.editCallbackMessage(chatId, callbackId, `⚠️ ပယ်ဖျက်မရပါ — ${escapeHtml((e as Error).message || 'error')}`);
+      await this.telegram.answer(callbackId, 'Could not cancel');
+    }
   }
 
   /** List approved-unassigned car requests with ready-to-tap /assign commands. */
@@ -240,6 +346,10 @@ export class TelegramCarActionsService {
     }
     if (action === 'carback') {
       await this.actCarBack(chatId, callbackId);
+      return true;
+    }
+    if (action === 'tripcancel') {
+      await this.actTripCancel(arg1 ?? '', chatId, callbackId);
       return true;
     }
     if (action === 'carsubmit') {
@@ -571,7 +681,7 @@ export class TelegramCarActionsService {
    *  wants the return trip with minimum typing. Bare words, both languages. */
   private static readonly RETURN_INTENTS = new Set([
     'ပြန်မယ်', 'ပြန်ချင်တယ်', 'ရုံးပြန်', 'ရုံးချုပ်ပြန်', 'ပြန်ရံ',
-    'back', 'backoffice', 'headoffice', 'return', 'returntrip', 'goback',
+    'back', 'backoffice', 'return', 'returntrip', 'goback',
   ]);
 
   /** Field aliases — Burmese-first + English, matched case-insensitively. */
@@ -789,6 +899,11 @@ export class TelegramCarActionsService {
     now.setMinutes(Math.ceil(now.getMinutes() / 30) * 30, 0, 0); // setMinutes(60) rolls into the next hour
     const p = (n: number) => String(n).padStart(2, '0');
     draft.start = `${now.getDate()}/${now.getMonth() + 1} ${p(now.getHours())}:${p(now.getMinutes())}`;
+    // return ETA: fetch happens today; admins plan the car's freedom around the
+    // return — default 2h later (same day), editable like any End answer
+    const eta = new Date(now.getTime() + 2 * 3600 * 1000);
+    draft.slot = 'CUSTOM_HOURS';
+    draft.end = `${eta.getDate()}/${eta.getMonth() + 1} ${p(eta.getHours())}:${p(eta.getMinutes())}`;
     let lastDest: string | null = null;
     try {
       const user = await this.boundUser(chatId);
@@ -971,12 +1086,16 @@ export class TelegramCarActionsService {
       CUSTOM_HOURS: 'Custom',
     };
     const startLabel = draft.returnTrip === 1 ? 'ကားလာခေါ်မယ့်အချိန်' : 'ထွက်မယ့်အချိန်';
+    const returnEta = draft.returnTrip === 1 && draft.slot === 'CUSTOM_HOURS' && endOk
+      ? `\n• ပြန်ရောက်မည့်အချိန် (ETA): ${escapeHtml(String(endRaw))} — အဲ့ဒီအချိန် ကား ပြန်အသုံးပြုနိုင်ပါမယ်`
+      : '';
     const required = [
       '🚗 <b>ကားတောင်းခံမှု — New car request</b>',
       '────────────────',
       draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '1️⃣ သွားမယ့်နေရာ — ဒီ chat မှာ ရေးပါ (ဥပမာ မန္တလေး)',
       draft.start ? (startOk ? `✅ ${startLabel}: ${escapeHtml(startRaw)}` : bad(startLabel)) : `2️⃣ ${startLabel} — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)`,
       `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
+      ...(returnEta ? [returnEta] : []),
     ];
     const optional = [
       ok('လိုက်ပါသူ', draft.passengers ?? 1),

@@ -41,6 +41,13 @@ const prisma: any = {
   // return-trip prefill: the user's most recent car trip destination
   requestDocument: {
     findFirst: async () => ({ carRequest: { destination: 'Mandalay Site' } }),
+    findUnique: async ({ where }: any) => ({
+      id: where.id,
+      docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+      status: 'PENDING_APPROVAL',
+      requesterId: 'u1',
+    }),
+    findMany: async () => [], // /mytrips: overridden per-test
   },
 };
 
@@ -56,8 +63,16 @@ const workflow: any = {
   submit: async (id: string, actor: any) => {
     submittedIds.push({ id, actor });
   },
+  cancel: async (id: string, actor: any) => {
+    cancelled.push({ id, via: 'cancel', actor });
+  },
+  cancelApproved: async (id: string, actor: any) => {
+    if (id === 'req-started') throw new Error('Trip already started — complete the trip first');
+    cancelled.push({ id, via: 'cancelApproved', actor });
+  },
   onSubmittedTelegram: () => undefined,
 };
+const cancelled: Array<{ id: string; via: string; actor: any }> = [];
 
 const apiLog: Array<{ method: string; payload: any }> = [];
 const audit: any = { log: async () => ({}) };
@@ -95,6 +110,9 @@ const allText = () => apiLog.filter((l) => l.method === 'sendMessage' || l.metho
 const lastText = () => { const m = apiLog.filter((l) => l.method === 'sendMessage' || l.method === 'editMessageText'); return m.length ? String(m[m.length-1].payload?.text ?? '') : ''; };
 
 async function tap(data: string, callbackId: string) {
+  // register the callback's host message (handleUpdate does this in production) so
+  // editCallbackMessage knows which bubble to paint
+  (telegram as any).callbackMessages?.set(`${CHAT}:${callbackId}`, 900 + apiLog.length);
   await (svc as any).handleAction(data, CHAT, callbackId);
 }
 
@@ -445,8 +463,10 @@ async function returnTripTests() {
   check(String(dBack.notes ?? '').includes('Return trip'), 'notes explain the auto-pickup');
   check(apiLog.some((l) => l.method === 'answerCallbackQuery'), 'toast answered');
 
-  // 20b. bare intent words (Burmese + English), with punctuation noise
-  for (const word of ['ပြန်မယ်', 'Back', 'head office!', 'return trip']) {
+  // 20b. bare intent words (Burmese + English), with punctuation noise.
+  // NOTE: "head office" is deliberately NOT an intent — it must stay a plain
+  // destination answer (the original screenshot typed it as one).
+  for (const word of ['ပြန်မယ်', 'Back', 'return trip']) {
     await svc.handleCarCommand('/car', CHAT);
     apiLog.length = 0;
     await svc.handleCarText(word, CHAT);
@@ -512,9 +532,91 @@ async function returnTripTests() {
   }
 }
 
+// 21. /mytrips — list + two-tap cancel from the phone
+async function myTripsTests() {
+  console.log('\n— 21. /mytrips —');
+
+  // 21a. unlinked chat
+  await (svc as any).handleMyTrips('unlinked-chat');
+  check(sent('not linked').length >= 1, 'unlinked chat rejected');
+
+  // 21b. no trips → friendly empty state
+  prisma.requestDocument.findMany = async () => [];
+  apiLog.length = 0;
+  await (svc as any).handleMyTrips(CHAT);
+  check(allText().includes('မရှိပါ'), 'empty state is friendly Burmese');
+
+  // 21c. list renders with one cancel button per trip
+  prisma.requestDocument.findMany = async () => [
+    { id: 'req-p1', docNumber: 'CAR-DOC-P1', status: 'PENDING_APPROVAL', carRequest: { destination: 'Head Office', startDate: new Date(), endDate: new Date(), vehicle: null, driver: null } },
+    { id: 'req-r1', docNumber: 'CAR-DOC-R1', status: 'IN_PROGRESS', carRequest: { destination: 'Bago', startDate: new Date(), endDate: new Date(), vehicle: { vehicleNo: 'CAR-11' }, driver: { name: 'U Kyaw' } } },
+  ];
+  apiLog.length = 0;
+  await (svc as any).handleMyTrips(CHAT);
+  const listMsg = apiLog.find((l) => l.method === 'sendMessage');
+  const kbList = JSON.stringify(listMsg?.payload?.reply_markup ?? []);
+  check(allText().includes('ကျွန်ုပ်၏ ခရီးများ (2)'), 'list card carries a count');
+  check(allText().includes('Bago') && allText().includes('CAR-11'), 'trip details render (destination, vehicle)');
+  check(kbList.includes('wfa:tripcancel:req-p1') && kbList.includes('wfa:tripcancel:req-r1'), 'one cancel button per trip');
+
+  // 21d. cancel flow — first tap arms, second tap cancels via workflow.cancel (PENDING)
+  apiLog.length = 0;
+  await tap('wfa:tripcancel:req-p1', 'cb-tc-1');
+  check(apiLog.some((l) => l.method === 'answerCallbackQuery' && String(l.payload?.text ?? '').includes('ထပ်နှိပ်ပါ')), 'first tap asks for confirmation');
+  check(cancelled.length === 0, 'first tap does NOT cancel yet');
+  await tap('wfa:tripcancel:req-p1', 'cb-tc-2');
+  check(cancelled.length === 1 && cancelled[0].via === 'cancel' && cancelled[0].actor.userId === 'u1', 'confirmed tap cancels PENDING via workflow.cancel as the bound user');
+  check(apiLog.some((l) => l.method === 'editMessageText' && String(l.payload?.text ?? '').includes('ပယ်ဖျက်လိုက်ပါပြီ')), 'card paints the cancellation');
+
+  // 21e. IN_PROGRESS goes through cancelApproved (car hook frees car+driver)
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+    status: 'IN_PROGRESS',
+    requesterId: 'u1',
+  });
+  apiLog.length = 0;
+  await tap('wfa:tripcancel:req-r1', 'cb-tc-3');
+  await tap('wfa:tripcancel:req-r1', 'cb-tc-4');
+  check(cancelled.some((c) => c.id === 'req-r1' && c.via === 'cancelApproved'), 'IN_PROGRESS cancels via cancelApproved (car hook)');
+
+  // 21f. a started trip refuses to cancel — error lands on the card
+  apiLog.length = 0;
+  await tap('wfa:tripcancel:req-started', 'cb-tc-5');
+  await tap('wfa:tripcancel:req-started', 'cb-tc-6');
+  check(allText().includes('ပယ်ဖျက်မရပါ') && allText().includes('Trip already started'), 'started trip refuses with the reason on the card');
+
+  // 21g. someone else's request is refused
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id, docNumber: 'CAR-DOC-OTHER', status: 'PENDING_APPROVAL', requesterId: 'someone-else',
+  });
+  apiLog.length = 0;
+  const cancelledBefore = cancelled.length;
+  await tap('wfa:tripcancel:req-other', 'cb-tc-7');
+  await tap('wfa:tripcancel:req-other', 'cb-tc-8');
+  check(cancelled.length === cancelledBefore, 'another user\'s request is never cancelled');
+  check(apiLog.some((l) => l.method === 'answerCallbackQuery' && String(l.payload?.text ?? '').includes('Not your request')), 'foreign request answered with Not your request');
+
+  // restore mocks used by other suites
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+    status: 'PENDING_APPROVAL',
+    requesterId: 'u1',
+  });
+  prisma.requestDocument.findMany = async () => [];
+
+  console.log(`\n${checks} checks, ${failures.length} failed`);
+  if (failures.length > 0) {
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exitCode = 1;
+  }
+}
+
 main()
   .then(() => regressionTests())
   .then(() => returnTripTests())
+  .then(() => myTripsTests())
   .catch((e) => {
     console.error('HARNESS ERROR:', e);
     process.exit(1);
