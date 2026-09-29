@@ -511,6 +511,133 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   await (telegram as any).completeAfterReturn('r1');
   check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === autoBefore, 're-running completion on a COMPLETED doc is a no-op (idempotent)');
 
+  // ---------------------------------------------------------- shared-trip group flows
+  // REGRESSION (a8199d7 follow-up): when a second request joins as a SHARED trip,
+  // the FIRST driver card — rendered before the join — must repaint with the
+  // 🧑‍🤝‍🧑 Shared trip rider list (previously it stayed stale forever).
+  // Model: requestDocuments rA (first trip, driver has a live card) + rB (second,
+  // just joined) share sharedTripId 'grp-1'; one assignment row per request.
+  const GROUP = 'grp-1';
+  const sharedDocs = [
+    { id: 'rA', docNumber: 'CAR-202609-0050', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requester: { fullName: 'First Rider' }, carRequest: { id: 'crA', requestId: 'rA', destination: 'Taunggyi', pickupLocation: 'Head Office', startDate: new Date(), endDate: new Date(), timeSlot: 'AM', purpose: null, sharedTripId: GROUP, passengers: 2 } },
+    { id: 'rB', docNumber: 'CAR-202609-0051', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requester: { fullName: 'Second Rider' }, carRequest: { id: 'crB', requestId: 'rB', destination: 'Office Run', pickupLocation: 'Fortune', startDate: new Date(), endDate: new Date(), timeSlot: 'AM', purpose: null, sharedTripId: GROUP, passengers: 1 } },
+  ];
+  const sharedAssignments: Record<string, any> = {
+    aA: { id: 'aA', requestId: 'rA', vehicleId: 'v1', driverId: 'd9', assignedById: 'u1', driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, telegramMessageId: '8001', driver: { id: 'd9', name: 'Shared Driver', telegramChatId: DRIVER_CHAT }, vehicle: { id: 'v1', vehicleNo: 'YC-1234', brandModel: 'Toyota Hiace' }, carRequest: sharedDocs[0].carRequest, request: { id: 'rA', docNumber: 'CAR-202609-0050', requesterId: 'rqA', requester: { fullName: 'First Rider', employee: null } } },
+    aB: { id: 'aB', requestId: 'rB', vehicleId: 'v1', driverId: 'd9', assignedById: 'u1', driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, telegramMessageId: '8002', driver: { id: 'd9', name: 'Shared Driver', telegramChatId: DRIVER_CHAT }, vehicle: { id: 'v1', vehicleNo: 'YC-1234', brandModel: 'Toyota Hiace' }, carRequest: sharedDocs[1].carRequest, request: { id: 'rB', docNumber: 'CAR-202609-0051', requesterId: 'rqB', requester: { fullName: 'Second Rider', employee: null } } },
+  };
+  const sharedUpdateCalls: string[] = [];
+  const sharedSave = prisma.carAssignment;
+  const sharedFindUnique = sharedSave.findUnique;
+  prisma.carAssignment = {
+    ...sharedSave,
+    findUnique: async ({ where }: any) => {
+      if (where.id === 'aA') return sharedAssignments.aA;
+      if (where.id === 'aB') return sharedAssignments.aB;
+      return sharedFindUnique({ where });
+    },
+    update: async ({ where, data }: any) => {
+      const row = sharedAssignments[where.id];
+      if (row) {
+        sharedUpdateCalls.push(where.id);
+        Object.assign(row, data);
+        return { ...row };
+      }
+      return sharedSave.update({ where, data });
+    },
+  } as any;
+  const realReqDoc = prisma.requestDocument;
+  (prisma.requestDocument as any).findMany = async ({ where }: any) => {
+    const group = where?.carRequest?.sharedTripId;
+    if (group === GROUP) return sharedDocs.map((d) => ({ ...d, carAssignment: { id: d.id === 'rA' ? 'aA' : 'aB' } }));
+    return (realReqDoc as any).findMany({ where });
+  };
+  apiLog.length = 0; // isolate shared-trip traffic
+
+  // 24. joining repaints BOTH cards — the peer's stale first-trip card is the regression
+  await (telegram as any).repaintDriverCards('aB');
+  const sharedCards = apiLog.filter((e) => e.method === 'sendMessage' && typeof e.payload?.text === 'string' && e.payload.text.includes('🧑‍🤝‍🧑 Shared trip'));
+  check(sharedCards.length === 2, 'shared repaint sends BOTH member cards (the stale first-trip card included)');
+  // match on the card TITLE — every shared card also lists the peer's doc in its rider section
+  const firstCard = sharedCards.find((m) => String(m.payload.text).includes('Car Assigned — CAR-202609-0050'));
+  const secondCard = sharedCards.find((m) => String(m.payload.text).includes('Car Assigned — CAR-202609-0051'));
+  check(!!firstCard && String(firstCard.payload.text).includes('CAR-202609-0051 — Office Run · Second Rider'), 'first-trip card now lists the joining peer (regression fixed)');
+  check(!!secondCard && String(secondCard.payload.text).includes('CAR-202609-0050 — Taunggyi · First Rider'), 'joining card lists the first rider too');
+  const b2bRow = (msg: any) => (msg?.payload?.reply_markup?.inline_keyboard ?? []).flat().find((b: any) => b?.text === '🏁 Back at Office — BOTH trips');
+  check(!!b2bRow(firstCard) && b2bRow(firstCard).callback_data === 'b2b:aA', 'first card carries the combined Back button (b2b:aA)');
+  check(!!b2bRow(secondCard) && b2bRow(secondCard).callback_data === 'b2b:aB', 'second card carries the combined Back button (b2b:aB)');
+
+  // 25. assign() itself triggers the group repaint (CarsService → telegram fan-out)
+  const { CarsService } = require('../src/cars/cars.service');
+  const repaintCalls: string[] = [];
+  const svcSharedAssign: any = new CarsService(
+    {
+      requestDocument: { findUnique: async () => ({ id: 'rB', docNumber: 'CAR-202609-0051', status: 'APPROVED', requesterId: 'rqB', carRequest: { id: 'crB', requestId: 'rB', startDate: new Date(), endDate: new Date(), assignment: null } }), update: async () => undefined },
+      vehicle: { findUnique: async () => ({ id: 'v1', vehicleNo: 'YC-1234', brandModel: 'Toyota Hiace', status: 'AVAILABLE' }), update: async () => undefined },
+      driverAbsence: { findFirst: async () => null },
+      driver: { update: async () => undefined },
+      carRequest: { findFirst: async () => ({ requestId: 'rA', sharedTripId: GROUP }), findUnique: async () => ({ sharedTripId: GROUP }), update: async () => undefined, findMany: async () => [] },
+      carAssignment: { upsert: async () => ({ id: 'aB', requestId: 'rB' }), findUnique: async () => ({ id: 'aB' }), findMany: async () => [] },
+      $transaction: async (fn: any) => fn({
+        carRequest: { findFirst: async () => ({ requestId: 'rA', sharedTripId: null }), update: async () => undefined, findMany: async () => [] },
+        carAssignment: { upsert: async () => ({ id: 'aB', requestId: 'rB' }), findMany: async () => [] },
+        requestDocument: { update: async () => undefined },
+        vehicle: { update: async () => undefined },
+        driver: { update: async () => undefined },
+      }),
+      notification: { create: async () => undefined },
+    } as any,
+    { userHas: async () => true } as any,
+    {} as any,
+    { notify: async () => undefined } as any,
+    { log: async () => undefined } as any,
+    { sendAssignment: async () => undefined, repaintDriverCards: async (id: string) => { repaintCalls.push(id); } } as any,
+  );
+  await svcSharedAssign.assign('rB', { vehicleId: 'v1', driverId: 'd9', share: true }, { userId: 'u9', username: 'admin' });
+  check(repaintCalls.includes('aB'), 'share-assign calls repaintDriverCards (group fan-out wired in assign())');
+
+  // 26. combined Back — one tap (×2 confirm) completes BOTH shared trips
+  apiLog.length = 0;
+  auditCalls.length = 0;
+  txWrites.length = 0;
+  const statuses = () => sharedDocs.map((d) => d.status);
+  // make the tx read the SHARED docs so completeAfterReturn closes rA+rB
+  (prisma as any).$transaction = async (fn: any) => fn({
+    requestDocument: {
+      findUnique: async ({ where: { id } }: any) => {
+        const d = sharedDocs.find((x) => x.id === id);
+        return d ? { id: d.id, status: d.status, docNumber: d.docNumber, requesterId: d.requesterId, carAssignment: { trip: null } } : null;
+      },
+      update: async ({ where: { id }, data }: any) => {
+        const d = sharedDocs.find((x) => x.id === id);
+        if (d) d.status = data.status;
+        txWrites.push({ table: 'requestDocument', id, data });
+      },
+    },
+    carRequest: { update: async () => undefined },
+  });
+  (prisma as any).user.findUnique = async ({ where }: any) => (where.id === 'rqA' ? { telegramChatId: '555000881' } : where.id === 'rqB' ? { telegramChatId: '555000882' } : null);
+  // FIRST tap arms the confirm — nothing closes yet
+  await tap('b2b:aA', 'cb-b2b-1', 8001, Number(DRIVER_CHAT));
+  check(statuses().every((s) => s === 'IN_PROGRESS'), 'first b2b tap only ARMS the confirm — both trips still IN_PROGRESS');
+  check(last('answerCallbackQuery')?.payload?.text === 'Tap again to confirm BOTH trips are done', 'first tap answers with the confirm prompt');
+  // SECOND tap within 30s executes — both trips close with ONE logical action
+  await tap('b2b:aA', 'cb-b2b-2', 8001, Number(DRIVER_CHAT));
+  check(statuses().every((s) => s === 'COMPLETED'), 'confirmed b2b tap completes BOTH shared requests');
+  check(txWrites.filter((w) => w.table === 'requestDocument' && w.data.status === 'COMPLETED').length === 2, 'both base documents closed (COMPLETED)');
+  check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === 2, 'auto-complete audit fired for BOTH trips');
+  check(auditCalls.filter((a) => a === 'DRIVER_RETURNED').length === 2, 'DRIVER_RETURNED audit recorded per trip (combinedBack: true)');
+  check(sharedAssignments.aA.driverBackAtOfficeAt && sharedAssignments.aB.driverBackAtOfficeAt, 'both assignments carry driverBackAtOfficeAt');
+  check(sharedUpdateCalls.includes('aA') && sharedUpdateCalls.includes('aB'), 'stage machine ran for both assignment rows');
+  const b2bDone = [...apiLog].reverse().find((e) => e.method === 'answerCallbackQuery');
+  check(!!b2bDone && String(b2bDone.payload?.text ?? '').includes('BOTH trips completed'), 'final toast confirms BOTH trips are done');
+
+  // 27. stray chat cannot trigger the combined back (driver-binding enforced)
+  const strayBefore = statuses().join(',');
+  await tap('b2b:aB', 'cb-b2b-stray', 8002, Number(CHAT_STRANGER));
+  check(statuses().join(',') === strayBefore, 'stranger chat tapping b2b → nothing happens (not authorized)');
+  check(last('answerCallbackQuery')?.payload?.text === 'Not authorized', 'stranger tap answered with Not authorized');
+
   console.log(failures === 0 ? '\nALL CHECKS PASSED ✅' : `\n${failures} CHECK(S) FAILED ❌`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch((e) => {

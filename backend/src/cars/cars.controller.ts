@@ -161,6 +161,14 @@ export class CarsController {
   }
 
 
+  /** Combined "Back at Office — BOTH trips" for a shared-trip pair — frees the car
+   *  once, completes every still-active member request, repaints both driver cards. */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Post('requests/:requestId/combined-back')
+  combinedBack(@Req() req, @Param('requestId') requestId: string) {
+    return this.cars.combinedBack(requestId, this.actor(req));
+  }
+
   /** Administration: cancel an APPROVED/assigned car request (fleet plan change). */
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Post('requests/:requestId/admin-cancel')

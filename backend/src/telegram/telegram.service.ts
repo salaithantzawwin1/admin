@@ -834,6 +834,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Not authorized' });
       return;
     }
+    // "🏁 Back at Office — BOTH trips": two-tap confirm (arm → confirm within 30s)
+    // — completing two requests from one tap must never be a single accidental press.
+    // (AFTER the driver-binding check above — closing trips is a driver-only power.)
+    if (action === 'b2b') {
+      if (this.pendingCombinedBack.get(fromChatId) === assignmentId) {
+        this.pendingCombinedBack.delete(fromChatId);
+        try {
+          await this.combinedBackAtOffice(assignmentId, { username: assignment.driver.name || 'driver-telegram' });
+        } catch {
+          /* the toast below still answers — completion failures surface via the per-trip stamps */
+        }
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: '✅ Back at office — BOTH trips completed' });
+        return;
+      }
+      this.pendingCombinedBack.set(fromChatId, assignmentId);
+      setTimeout(() => this.pendingCombinedBack.delete(fromChatId), 30_000).unref?.();
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Tap again to confirm BOTH trips are done' });
+      return;
+    }
     // Stage machine: each action only fires from its own stage (or later, filling gaps)
     const now = new Date();
     const patch: Record<string, Date> = {};
@@ -1097,18 +1116,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private assignmentKeyboard(
     a: { driverNotedAt?: Date | null; driverArrivedAt?: Date | null; driverBackAtOfficeAt?: Date | null },
     assignmentId: string,
+    sharedCtx?: { sharedTripId: string | null },
   ) {
     const btn = (done: boolean, label: string, action: string) => ({
       text: done ? `✅ ${label}` : label,
       callback_data: done ? 'noop' : `${action}:${assignmentId}`,
     });
-    return {
-      inline_keyboard: [[
-        btn(!!a.driverNotedAt, '✓ Noted', 'noted'),
-        btn(!!a.driverArrivedAt, '🚦 Ready', 'arrived'),
-        btn(!!a.driverBackAtOfficeAt, '🏁 Back at Office', 'returned'),
-      ]],
-    };
+    const rows = [[
+      btn(!!a.driverNotedAt, '✓ Noted', 'noted'),
+      btn(!!a.driverArrivedAt, '🚦 Ready', 'arrived'),
+      btn(!!a.driverBackAtOfficeAt, '🏁 Back at Office', 'returned'),
+    ]];
+    // shared trip: a one-tap way to close BOTH rides at once (two-tap confirm).
+    // Only until this card's own Back is pressed — after that the peer keeps its
+    // own button and the regular per-card flow finishes it.
+    if (sharedCtx?.sharedTripId && !a.driverBackAtOfficeAt) {
+      rows.push([{ text: '🏁 Back at Office — BOTH trips', callback_data: `b2b:${assignmentId}` }]);
+    }
+    return { inline_keyboard: rows };
   }
 
   /**
@@ -1124,10 +1149,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null;
     },
     stages?: { noted?: Date | null; arrived?: Date | null; back?: Date | null } | null,
-    sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null,
-  ): string {
+    sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null,  ): string {
     const cr = a.carRequest;
     if (!cr) return escapeHtml(`🚗 Car Assigned — ${a.request.docNumber}`);
+    // the rider list arrives as the 3rd parameter (sendAssignment / editStageMessage);
+    // a.sharedRiders is kept as a legacy fallback — the prisma row never carries it,
+    // so the section silently never rendered before this was fixed.
+    const riders = sharedRiders ?? a.sharedRiders ?? null;
     const when = `${fmtDate(cr.startDate)} · ${fmtTime(cr.startDate)} – ${fmtTime(cr.endDate)} (${cr.timeSlot})`;
     const pickup = cr.pickupLocation || '—';
     const phone = a.request.requester.employee?.phone;
@@ -1142,8 +1170,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `👤 Requester: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
       cr.purpose ? `📝 ${escapeHtml(cr.purpose)}` : '',
       // shared trip — the driver sees who else is riding the same car
-      ...(a.sharedRiders && a.sharedRiders.length > 0
-        ? [``, `<b>🧑‍🤝‍🧑 Shared trip</b>`, ...a.sharedRiders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
+      ...(riders && riders.length > 0
+        ? [``, `<b>🧑‍🤝‍🧑 Shared trip</b>`, ...riders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
         : []),
     ].filter((l) => l !== undefined);
     if (stages) {
@@ -1177,21 +1205,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const cr = a.carRequest;
     if (!cr) return;
     // shared trip: list the other riders of the same group for the driver
-    let sharedRiders: { docNumber: string; destination: string; requester: { fullName: string } }[] | null = null;
-    if (cr.sharedTripId) {
-      const riders = await this.prisma.requestDocument.findMany({
-        where: {
-          docType: 'CAR_REQUEST',
-          status: { in: ['APPROVED', 'IN_PROGRESS'] },
-          carRequest: { sharedTripId: cr.sharedTripId },
-        },
-        select: { docNumber: true, requester: { select: { fullName: true } }, carRequest: { select: { destination: true } } },
-        orderBy: { docNumber: 'asc' },
-      });
-      sharedRiders = riders
-        .filter((r) => r.docNumber !== a.request.docNumber)
-        .map((r) => ({ docNumber: r.docNumber, destination: r.carRequest?.destination ?? '—', requester: { fullName: r.requester.fullName } }));
-    }
+    const sharedRiders = await this.sharedRidersFor(a.request.docNumber, cr.sharedTripId);
     const { token, enabled } = await this.config();
     if (!token || !enabled) return;
 
@@ -1200,7 +1214,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       text: this.assignmentBody(a, undefined, sharedRiders),
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      reply_markup: this.assignmentKeyboard(a, a.id),
+      reply_markup: this.assignmentKeyboard(a, a.id, { sharedTripId: cr.sharedTripId ?? null }),
     });
     if (message?.message_id) {
       await this.prisma.carAssignment.update({
@@ -1208,6 +1222,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         data: { telegramMessageId: String(message.message_id) },
       });
     }
+    // NOTE: no automatic group fan-out here — sendAssignment is called per-card BY
+    // repaintDriverCards(); fanning out from inside would recurse forever. Entry
+    // points (share-assign, combined Back) call repaintDriverCards() explicitly.
   }
 
   /** Repaint the driver's message for the current stage — same card, progress lines + grayed buttons. */
@@ -1215,15 +1232,133 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (!a.telegramMessageId || !a.driver?.telegramChatId) return;
     const { token, enabled } = await this.config();
     if (!token || !enabled) return;
+    const sharedCtx = await this.sharedCtx(a.id);
+    // stage repaints must keep the 🧑‍🤝‍🧑 rider section (and the combined Back button
+    // stays until this card's own Back) — fetch riders for shared groups here too
+    const riders = await this.sharedRidersFor(a.request.docNumber, sharedCtx?.sharedTripId).catch(() => null);
 
     await this.call('editMessageText', {
       chat_id: a.driver.telegramChatId,
       message_id: Number(a.telegramMessageId),
-      text: this.assignmentBody(a, { noted: a.driverNotedAt, arrived: a.driverArrivedAt, back: a.driverBackAtOfficeAt }),
+      text: this.assignmentBody(a, { noted: a.driverNotedAt, arrived: a.driverArrivedAt, back: a.driverBackAtOfficeAt }, riders),
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      reply_markup: this.assignmentKeyboard(a, a.id),
+      reply_markup: this.assignmentKeyboard(a, a.id, sharedCtx),
     });
+  }
+
+  /** sharedTripId of an assignment's car request (null when unshared / row missing). */
+  private async sharedCtx(assignmentId: string): Promise<{ sharedTripId: string | null } | undefined> {
+    try {
+      const row = await this.prisma.carAssignment.findUnique({
+        where: { id: assignmentId },
+        select: { carRequest: { select: { sharedTripId: true } } },
+      });
+      return { sharedTripId: row?.carRequest?.sharedTripId ?? null };
+    } catch {
+      return undefined; // unmocked prisma in tests — plain keyboard, no combined row
+    }
+  }
+
+  /** Other riders of a shared-trip group (doc, destination, requester) — null for solo trips. */
+  private async sharedRidersFor(
+    ownDocNumber: string,
+    group: string | null | undefined,
+  ): Promise<Array<{ docNumber: string; destination: string; requester: { fullName: string } }> | null> {
+    if (!group) return null;
+    const riders = await this.prisma.requestDocument.findMany({
+      where: {
+        docType: 'CAR_REQUEST',
+        status: { in: ['APPROVED', 'IN_PROGRESS'] },
+        carRequest: { sharedTripId: group },
+      },
+      select: { docNumber: true, requester: { select: { fullName: true } }, carRequest: { select: { destination: true } } },
+      orderBy: { docNumber: 'asc' },
+    });
+    return riders
+      .filter((r) => r.docNumber !== ownDocNumber)
+      .map((r) => ({ docNumber: r.docNumber, destination: r.carRequest?.destination ?? '—', requester: { fullName: r.requester.fullName } }));
+  }
+
+  /**
+   * Shared-trip repaint — re-render EVERY active member's driver card through the
+   * real sendAssignment() so all cards carry the full 🧑‍🤝‍🧑 Shared trip rider list
+   * and the combined Back button. Idempotent: cards already showing the same
+   * content are a Telegram "message is not modified" no-op. Never throws.
+   */
+  async repaintDriverCards(assignmentId: string) {
+    try {
+      const row = await this.prisma.carAssignment.findUnique({
+        where: { id: assignmentId },
+        select: { carRequest: { select: { sharedTripId: true } } },
+      });
+      const group = row?.carRequest?.sharedTripId;
+      if (!group) return; // plain solo trip — nothing to fan out
+      const members = await this.prisma.requestDocument.findMany({
+        where: {
+          docType: 'CAR_REQUEST',
+          status: 'IN_PROGRESS',
+          carRequest: { sharedTripId: group },
+        },
+        select: { carAssignment: { select: { id: true } } },
+        orderBy: { docNumber: 'asc' },
+      });
+      for (const m of members) {
+        if (m.carAssignment?.id) await this.sendAssignment(m.carAssignment.id).catch(() => undefined);
+      }
+    } catch {
+      /* repaint is a nicety — must never break assign/ack flows */
+    }
+  }
+
+  /**
+   * Combined "Back at Office — BOTH trips" for a shared pair: free the car+driver
+   * ONCE, stage the ack timestamps on every still-active member, auto-complete
+   * each request (same guards as a single Back), repaint both cards ✅.
+   * Returns the per-trip outcomes for the audit log.
+   */
+  async combinedBackAtOffice(assignmentId: string, actor: { userId?: string; username: string }) {
+    const first = await this.prisma.carAssignment.findUnique({ where: { id: assignmentId } });
+    if (!first) return [];
+    const row = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { carRequest: { select: { sharedTripId: true } } },
+    });
+    const group = row?.carRequest?.sharedTripId;
+    const members: Array<{ carAssignment: { id: string } | null }> = group
+      ? await this.prisma.requestDocument.findMany({
+          where: { docType: 'CAR_REQUEST', status: 'IN_PROGRESS', carRequest: { sharedTripId: group } },
+          select: { carAssignment: { select: { id: true } } },
+          orderBy: { docNumber: 'asc' },
+        })
+      : [{ carAssignment: { id: assignmentId } }];
+    const ids = [...new Set(members.map((m) => m.carAssignment?.id).filter((v): v is string => !!v))];
+    if (!ids.includes(assignmentId)) ids.push(assignmentId);
+
+    await this.freeVehicle(assignmentId); // one car, one driver — freeing once is enough
+    const now = new Date();
+    const results: Array<{ requestId: string; done: boolean }> = [];
+    for (const id of ids) {
+      const a = await this.prisma.carAssignment.findUnique({ where: { id } });
+      if (!a || a.driverBackAtOfficeAt) {
+        if (a) results.push({ requestId: a.requestId, done: false }); // already closed — skip
+        continue;
+      }
+      await this.applyAckStage(id, {
+        driverBackAtOfficeAt: now,
+        ...(a.driverNotedAt ? {} : { driverNotedAt: now }),
+        ...(a.driverArrivedAt ? {} : { driverArrivedAt: now }),
+      }, 'returned');
+      await this.completeAfterReturn(a.requestId);
+      await this.audit.log({
+        ...(actor.userId ? { userId: actor.userId } : {}), username: actor.username,
+        action: 'DRIVER_RETURNED', module: 'CARS', recordId: a.requestId,
+        newValue: { combinedBack: true, groupId: group ?? null, ...actor },
+      });
+      results.push({ requestId: a.requestId, done: true });
+    }
+    await this.repaintDriverCards(assignmentId);
+    return results;
   }
 
   /**
@@ -1472,6 +1607,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   /** message_id per (chat, callback) seen in the poll loop — for editCallbackMessage. */
   private callbackMessages = new Map<string, number>();
+  /** chatId → assignmentId armed for the two-tap "Back at Office — BOTH trips" confirm (30s TTL). */
+  private pendingCombinedBack = new Map<string, string>();
 
   /** Shared notification payload — text plus an optional "Open in AMS" deep link. */
   private async sendToChat(chatId: string, title: string, body?: string, link?: string) {

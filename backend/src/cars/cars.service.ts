@@ -464,26 +464,28 @@ export class CarsService {
     // was rendered before this request joined the group and must show the new
     // 🧑‍🤝‍🧑 Shared trip section (and the peer requester's panel refetches via SSE).
     this.telegram.sendAssignment(assignment.id).catch(() => undefined);
-    if (share && assignment && (assignment as { sharedTripId?: string | null }).sharedTripId) {
-      const group = (assignment as { sharedTripId?: string | null }).sharedTripId!;
-      const peer = await this.prisma.carRequest.findFirst({
-        where: { sharedTripId: group, requestId: { not: requestId }, vehicleId: data.vehicleId },
-        select: { requestId: true },
-      });
-      if (peer) {
-        await this.prisma.carAssignment.findUnique({ where: { requestId: peer.requestId }, select: { id: true } })
-          .then((pa) => (pa ? this.telegram.sendAssignment(pa.id) : undefined))
-          .catch(() => undefined);
-      }
-    }
-
-    await this.audit.log({
+    if (share) {
+      // sharedTripId was stamped on the CAR REQUEST inside the tx (assignment rows
+      // carry no such column) — read it there, then repaint the whole group via the
+      // TelegramService helper (covers this card AND the peer's).
+      await this.prisma.carRequest.findUnique({ where: { requestId }, select: { sharedTripId: true } })
+        .then((row) => (row?.sharedTripId ? this.telegram.repaintDriverCards(assignment.id) : undefined))
+        .catch(() => undefined);
+    }    await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'CAR_ASSIGNED', module: 'CARS', recordId: requestId,
       newValue: { vehicleId: data.vehicleId, driverId: data.driverId, ...(share ? { sharedTrip: true } : {}) },
     });
-
     return assignment;
+  }
+
+  /** Combined "Back at Office — BOTH trips" for a shared pair (Administration override; mirrors manualAck). */
+  async combinedBack(requestId: string, actor: Actor) {
+    const a = await this.prisma.carAssignment.findUnique({ where: { requestId } });
+    if (!a) throw new NotFoundException('Assignment not found');
+    const results = await this.telegram.combinedBackAtOffice(a.id, { userId: actor.userId, username: actor.username });
+    const done = results.filter((r) => r.done).length;
+    return { done, results, freedVehicleId: a.vehicleId };
   }
 
   /**
