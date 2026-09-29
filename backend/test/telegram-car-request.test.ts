@@ -38,6 +38,10 @@ const prisma: any = {
     findFirst: async ({ where }: any) =>
       where.module === 'CAR_REQUEST' ? { id: 'wf-car', steps: [{ id: 's1' }] } : null,
   },
+  // return-trip prefill: the user's most recent car trip destination
+  requestDocument: {
+    findFirst: async () => ({ carRequest: { destination: 'Mandalay Site' } }),
+  },
 };
 
 const createdRequests: any[] = [];
@@ -427,8 +431,56 @@ async function regressionTests() {
   }
 }
 
+// 20. RETURN TRIP — a rider at an offsite destination wants Head Office NOW
+async function returnTripTests() {
+  console.log('\n— 20. return-trip express —');
+
+  // 20a. the [↩️ ရုံးချုပ်ပြန်] card button
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await tap('wfa:carback', 'cb-back-1');
+  const dBack = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+  check(dBack.destination === 'Head Office', 'carback button fills Destination = Head Office');
+  check(dBack.pickup === 'Mandalay Site', 'pickup prefilled from the last trip destination');
+  check(String(dBack.notes ?? '').includes('Return trip'), 'notes explain the auto-pickup');
+  check(apiLog.some((l) => l.method === 'answerCallbackQuery'), 'toast answered');
+
+  // 20b. bare intent words (Burmese + English), with punctuation noise
+  for (const word of ['ပြန်မယ်', 'Back', 'head office!', 'return trip']) {
+    await svc.handleCarCommand('/car', CHAT);
+    apiLog.length = 0;
+    await svc.handleCarText(word, CHAT);
+    const d = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+    check(d.destination === 'Head Office', `bare "${word}" triggers the return-trip prefill`);
+  }
+
+  // 20c. normal destination typing is NOT hijacked
+  await svc.handleCarCommand('/car', CHAT);
+  await svc.handleCarText('Mandalay', CHAT);
+  check((svc.pendingCarRequests.get(CHAT) as any).draft.destination === 'Mandalay', 'a real destination is not hijacked by the intent check');
+
+  // 20d. the express path submits: tap return → quick time → submit
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-back-2');
+  await tap('wfa:carquick:today|13:00', 'cb-back-3');
+  createdRequests.length = 0; submittedIds.length = 0;
+  apiLog.length = 0;
+  await tap('wfa:carsubmit', 'cb-back-4');
+  check(createdRequests.length === 1, 'return-trip express submits in 3 taps');
+  check(createdRequests[0]?.data?.destination === 'Head Office', 'submitted destination is Head Office');
+  check(createdRequests[0]?.data?.pickupLocation === 'Mandalay Site', 'submitted pickup is the prefilled last destination');
+  await svc.handleCarText('/cancel', CHAT);
+
+  console.log(`\n${checks} checks, ${failures.length} failed`);
+  if (failures.length > 0) {
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exitCode = 1;
+  }
+}
+
 main()
   .then(() => regressionTests())
+  .then(() => returnTripTests())
   .catch((e) => {
     console.error('HARNESS ERROR:', e);
     process.exit(1);

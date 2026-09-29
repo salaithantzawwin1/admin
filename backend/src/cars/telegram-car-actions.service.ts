@@ -238,6 +238,10 @@ export class TelegramCarActionsService {
       await this.sendRawCard(chatId, this.renderCarCard(chatId));
       return true;
     }
+    if (action === 'carback') {
+      await this.actCarBack(chatId, callbackId);
+      return true;
+    }
     if (action === 'carsubmit') {
       await this.actCarSubmit(chatId, callbackId);
       return true;
@@ -563,6 +567,13 @@ export class TelegramCarActionsService {
     customhours: 'CUSTOM_HOURS',
   };
 
+  /** "Heading back to Head Office" intents — a rider at an offsite destination
+   *  wants the return trip with minimum typing. Bare words, both languages. */
+  private static readonly RETURN_INTENTS = new Set([
+    'ပြန်မယ်', 'ပြန်ချင်တယ်', 'ရုံးပြန်', 'ရုံးချုပ်ပြန်', 'ပြန်ရံ',
+    'back', 'backoffice', 'headoffice', 'return', 'returntrip', 'goback',
+  ]);
+
   /** Field aliases — Burmese-first + English, matched case-insensitively. */
   private static readonly CAR_FIELDS: { key: string; aliases: string[] }[] = [
     { key: 'destination', aliases: ['destination', 'dest', 'သွားမယ့်နေရာ', 'သွားရန်နေရာ'] },
@@ -628,6 +639,13 @@ export class TelegramCarActionsService {
     for (const rawLine of normalized.split(/\r?\n/)) {
       const line = rawLine.trim();
       if (!line) continue;
+      // "ပြန်မယ်" / "back" — the rider at an offsite destination wants the return
+      // trip NOW: fill Destination = Head Office + smart pickup, one bare word
+      if (TelegramCarActionsService.RETURN_INTENTS.has(line.toLowerCase().replace(/[\s!。，,\.]/g, ''))) {
+        await this.prefillReturnTrip(entry.draft, chatId);
+        await this.sendRawCard(chatId, this.renderCarCard(chatId));
+        return;
+      }
       const sep = line.indexOf(':');
       if (sep < 0) {
         // bare answer (no colon) — plain typing just works:
@@ -753,6 +771,49 @@ export class TelegramCarActionsService {
       }
     }
     return undefined;
+  }
+
+  /** "Heading back to Head Office": one tap on the card (or a bare "ပြန်မယ်")
+   *  fills Destination = Head Office and prefills Pickup from where the user's
+   *  last/current trip actually went (elsewhere → that place; unknown → blank).
+   *  Used by wfa:carback and the bare-intent reading in handleCarText. */
+  private async prefillReturnTrip(draft: Record<string, string | number | undefined>, chatId: string): Promise<void> {
+    draft.destination = 'Head Office';
+    delete draft.pickup; // stale value from a previous draft must not survive
+    delete draft.notes;
+    let lastDest: string | null = null;
+    try {
+      const user = await this.boundUser(chatId);
+      if (user) {
+        const mine = await this.prisma.requestDocument.findFirst({
+          where: { requesterId: user.id, docType: 'CAR_REQUEST', status: { in: ['APPROVED', 'IN_PROGRESS', 'COMPLETED'] as never } },
+          orderBy: { createdAt: 'desc' },
+          select: { carRequest: { select: { destination: true } } },
+        });
+        lastDest = mine?.carRequest?.destination ?? null;
+      }
+    } catch {
+      /* best-effort — the request must never fail because of the prefill */
+    }
+    if (lastDest && lastDest.trim() && lastDest.trim().toLowerCase() !== 'head office') {
+      draft.pickup = lastDest.trim();
+      draft.notes = `Return trip — pickup from ${lastDest.trim()}`;
+    } else {
+      draft.notes = 'Return trip to Head Office';
+    }
+  }
+
+  /** [↩️ ရုံးချုပ်ပြန်] on the card — instant return-trip draft. */
+  private async actCarBack(chatId: string, callbackId: string): Promise<void> {
+    const entry = this.pendingCarRequests.get(chatId);
+    if (!entry) {
+      await this.telegram.answer(callbackId, 'Expired — send /car again');
+      return;
+    }
+    entry.at = Date.now();
+    await this.prefillReturnTrip(entry.draft, chatId);
+    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — အချိန် ရွေးပါ');
+    await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
   /** Slot chosen via the card's inline buttons. */
@@ -917,7 +978,7 @@ export class TelegramCarActionsService {
       '────────────────',
       ...(showExtra ? optional : ['➕ ကားအမျိုးအစား / တက်မည့်နေရာ / ရည်ရွယ်ချက် / မှတ်ချက် ထပ်ဖြည့်ချင်ရင် — အောက်က [➕ ထပ်ဖြည့်မယ်] နှိပ်ပါ']),
       '────────────────',
-      'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day"',
+      'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day" · "ပြန်မယ်" (ရုံးချုပ်ပြန်)',
       '<i>အမြန်စတင် — /car မန္တလေး</i>',
     ];
     return lines.join('\n');
@@ -938,6 +999,8 @@ export class TelegramCarActionsService {
         b('🌅 မနက်ဖြန် 09:00', 'wfa:carquick:tomorrow|09:00'),
         b('🌆 မနက်ဖြန် 13:00', 'wfa:carquick:tomorrow|13:00'),
       ],
+      // heading back to Head Office — instant return-trip draft (pickup prefilled from the last trip)
+      [b('↩️ ရုံးချုပ်ပြန်', 'wfa:carback')],
       [
         b(slot === 'FULL_DAY' ? '☀️ Full day ✓' : '☀️ Full day', 'wfa:carslot:FULL_DAY'),
         b(slot === 'HALF_DAY_AM' ? '🌅 Half AM ✓' : '🌅 Half AM', 'wfa:carslot:HALF_DAY_AM'),
