@@ -620,6 +620,54 @@ async function myTripsTests() {
   }
 }
 
+// 23. APPROVAL CARD — admin sees everything needed to decide without opening AMS
+async function approvalCardTests() {
+  console.log('\n— 23. approval card contents —');
+  // requester's card data + shifted window (the admin-adjust flow)
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: 'CAR-202609-0010',
+    title: 'Car to Head Office',
+    description: 'Return trip — pickup from Chan Yin Factory',
+    requester: { fullName: 'Salai Thant Zaw Win' },
+    requesterId: 'u1',
+    status: 'PENDING_APPROVAL',
+    carRequest: {
+      destination: 'Head Office',
+      startDate: new Date('2026-09-29T08:00:00Z'), // 14:30 Yangon
+      endDate: new Date('2026-09-29T10:00:00Z'), // 16:30 Yangon
+      pickupLocation: 'Chan Yin Factory',
+      passengers: 3,
+    },
+  });
+  permissions.usersWithPermissions = async () => ['u2'];
+  prisma.user.findMany = async () => [{ telegramChatId: 'admin-chat' }];
+  apiLog.length = 0;
+  await svc.offerApprovalButtons('req-appr');
+  const card = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
+  check(card.includes('CAR-202609-0010'), 'approval card carries the doc number');
+  check(card.includes('Salai Thant Zaw Win'), 'approval card names the requester');
+  check(card.includes('14:30') && card.includes('16:30'), 'approval card shows the CURRENT (possibly shifted) window');
+  check(card.includes('Chan Yin Factory'), 'approval card shows the pickup point');
+  check(card.includes('👥 3'), 'approval card shows the passenger count');
+  check(card.includes('Return trip — pickup from Chan Yin Factory'), 'approval card shows the purpose/notes line');
+  // restore
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+    status: 'PENDING_APPROVAL',
+    requesterId: 'u1',
+  });
+  permissions.usersWithPermissions = async () => ['u2'];
+  prisma.user.findMany = async () => [];
+
+  console.log(`\n${checks} checks, ${failures.length} failed`);
+  if (failures.length > 0) {
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exitCode = 1;
+  }
+}
+
 // 22. "3:30 PM / 3" — one-line time/pax shorthand (the express return flow)
 async function shorthandTests() {
   console.log('\n— 22. time/pax shorthand —');
@@ -754,6 +802,7 @@ main()
   .then(() => returnTripTests())
   .then(() => myTripsTests())
   .then(() => shorthandTests())
+  .then(() => approvalCardTests())
   .catch((e) => {
     console.error('HARNESS ERROR:', e);
     process.exit(1);

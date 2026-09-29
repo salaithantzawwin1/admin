@@ -258,7 +258,7 @@ export class TelegramCarActionsService {
         where: { id: requestId },
         include: {
           requester: { select: { fullName: true } },
-          carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true } },
+          carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true, passengers: true } },
         },
       });
       if (!request || request.status !== 'PENDING_APPROVAL' || !request.carRequest) return; // car flow only
@@ -270,8 +270,9 @@ export class TelegramCarActionsService {
       });
       const cr = request.carRequest;
       const when = `\n📅 ${new Date(cr.startDate).toLocaleString('en-GB')} → ${new Date(cr.endDate).toLocaleString('en-GB')}`;
-      const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}`;
-      const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}`;
+      const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}${cr.passengers ? ` · 👥 ${cr.passengers}` : ''}`;
+      const why = request.description ? `\n📝 ${escapeHtml(request.description)}` : '';
+      const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}${why}`;
       for (const a of approvers) {
         if (!a.telegramChatId) continue;
         await this.telegram.sendRaw(a.telegramChatId, text, {
@@ -413,12 +414,23 @@ export class TelegramCarActionsService {
     this.pendingRejects.delete(chatId); // approving supersedes any armed reject conversation in this chat
     try {
       await this.workflow.approve(requestId, 'Approved via Telegram', actor as never);
+      // Paint the APPROVED card with the FRESH window read back from the DB —
+      // Administration may have shifted the time after this card was rendered
+      // (the flow: requester proposes 14:30, admin adjusts, THEN approves); the
+      // stamp must show what was actually approved, not the card's stale times.
+      const fresh = await this.prisma.requestDocument.findUnique({
+        where: { id: requestId },
+        select: { carRequest: { select: { startDate: true, endDate: true } } },
+      });
+      const finalWhen = fresh?.carRequest
+        ? `\n📅 ${new Date(fresh.carRequest.startDate).toLocaleString('en-GB')} → ${new Date(fresh.carRequest.endDate).toLocaleString('en-GB')}`
+        : '';
       // Staged buttons (requested UX): approve FIRST, then assign — the persistent
       // [🚗 Assign Car] button also recovers a lost/scrolled-away picker message.
       await this.telegram.editCallbackMessage(
         chatId,
         callbackId,
-        `✅ Approved — ${escapeHtml(request.docNumber)} · ${stamp} · by ${escapeHtml(actor.username)}`,
+        `✅ Approved — ${escapeHtml(request.docNumber)} · ${stamp} · by ${escapeHtml(actor.username)}${finalWhen}`,
         {
           inline_keyboard: [
             [{ text: '🚗 Assign Car', callback_data: `wfa:av:${this.newToken({ requestId })}` }],
