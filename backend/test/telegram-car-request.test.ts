@@ -705,6 +705,30 @@ async function shorthandTests() {
   const yangon1700 = Date.UTC(yangonDay.getUTCFullYear(), yangonDay.getUTCMonth(), yangonDay.getUTCDate(), 17, 0) - 6.5 * 3600 * 1000;
   check(new Date(startIsoLate!).getTime() > yangon1700, '18:30 start is after 17:00 (rule triggers)');
 
+  // 22g. RETURN MINI-CARD — the compact layout for the ရုံးချုပ်ပြန် flow
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-mini-1');
+  apiLog.length = 0;
+  await svc.handleCarText('  ', CHAT); // whitespace-only → card re-render only
+  const mini = lastText();
+  check(mini.includes('ရုံးချုပ် ပြန်တောင်းခံမှု'), 'mini-card title marks the return flow');
+  check(mini.includes('ကားလာခေါ်မယ့်အချိန်'), 'mini-card shows the fetch time row');
+  check(mini.includes('ကားလာခေါ်ရမဲ့နေရာ'), 'mini-card shows the fetch place row');
+  check(!mini.includes('ကားအမျိုးအစား') && !mini.includes('ရည်ရွယ်ချက်'), 'mini-card hides vehicle-type/purpose rows');
+  check(!mini.includes('အချိန်အပိုင်းအခြား'), 'mini-card has no slot row (ETA line covers it)');
+  check(mini.split('ETA').length === 2, 'ETA appears exactly once (no duplicate)');
+  check(!mini.includes('Full day'), 'mini-card never lists slot buttons text');
+
+  // normal (non-return) card keeps the full layout
+  await svc.handleCarText('/cancel', CHAT);
+  await svc.handleCarCommand('/car', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarText('  ', CHAT);
+  const full = lastText();
+  check(full.includes('ကားတောင်းခံမှု — New car request'), 'normal card keeps the full title');
+  check(full.includes('အချိန်အပိုင်းအခြား'), 'normal card keeps the slot row');
+  await svc.handleCarText('/cancel', CHAT);
+
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
     for (const f of failures) console.error(`  ✗ ${f}`);

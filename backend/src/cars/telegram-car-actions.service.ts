@@ -1141,6 +1141,10 @@ export class TelegramCarActionsService {
   private renderCarCard(chatId: string): string {
     const entry = this.pendingCarRequests.get(chatId);
     const draft = (entry?.draft ?? {}) as Record<string, string | number | undefined>;
+    // Return trips get a COMPACT mini-card — a rider heading back only answers
+    // time / pax / place; vehicle-type, purpose and slot rows are noise for them
+    // (and the ETA duplicated the Custom-slot row). Normal /car keeps the full card.
+    if (draft.returnTrip === 1) return this.renderReturnCard(draft);
     const sval = (k: string): string => (typeof draft[k] === 'string' ? (draft[k] as string) : '');
     const ok = (label: string, value: string | number | undefined) =>
       value != null && value !== '' ? `✅ ${label}: ${escapeHtml(String(value))}` : `➖ ${label}: —`;
@@ -1189,11 +1193,44 @@ export class TelegramCarActionsService {
     return lines.join('\n');
   }
 
+  /** The compact return-trip card: exactly what a rider must answer — nothing else.
+   *  Three rows (time, place, pax) + one ETA line + one hint. */
+  private renderReturnCard(draft: Record<string, string | number | undefined>): string {
+    const startRaw = typeof draft.start === 'string' ? draft.start : '';
+    const startOk = startRaw ? TelegramCarActionsService.parseCarDateStatic(startRaw) != null : false;
+    const lines = [
+      '🚗 <b>ရုံးချုပ် ပြန်တောင်းခံမှု</b> — Return to Head Office',
+      '────────────────',
+      draft.start
+        ? (startOk ? `✅ ကားလာခေါ်မယ့်အချိန်: ${escapeHtml(startRaw)} (ဒီနေ့)` : '❌ ကားလာခေါ်မယ့်အချိန်: (မမှန်ပါ)')
+        : '1️⃣ ကားလာခေါ်မယ့်အချိန် — အောက်က ခလုတ်နှိပ် / ရေးပါ',
+      draft.pickup ? `✅ ကားလာခေါ်ရမဲ့နေရာ: ${escapeHtml(String(draft.pickup))}` : '2️⃣ ကားလာခေါ်ရမဲ့နေရာ — ရေးပါ (ဥပမာ Fortune Office)',
+      `✅ လိုက်ပါသူ: ${draft.passengers ?? 1}`,
+    ];
+    const endRaw = typeof draft.end === 'string' ? draft.end : '';
+    if (endRaw && TelegramCarActionsService.parseCarDateStatic(endRaw)) {
+      lines.push(`• ကား ပြန်ရနိုင်မည့်အချိန် (ETA): ${escapeHtml(endRaw)}`);
+    }
+    lines.push('────────────────', 'ရေးရန် — <b>"4:00 PM / 2 / Fortune Office"</b> (အချိန် / လိုက်ပါသူ / နေရာ)');
+    return lines.join('\n');
+  }
+
   /** Keyboard for the live card — quick Start times, slot shortcuts,
    *  [➕ ထပ်ဖြည့်မယ်] toggle and Submit/Cancel. */
   private carKeyboard(draft: Record<string, unknown>): { inline_keyboard: { text: string; callback_data: string }[][] } {
     const slot = draft.slot;
     const b = (text: string, data: string) => ({ text, callback_data: data });
+    // return mode: times + submit/cancel only — slot buttons and the extra-fields
+    // toggle are noise when the ETA already covers the End
+    if (draft.returnTrip === 1) {
+      return {
+        inline_keyboard: [
+          [b('⚡ အခု', 'wfa:carquick:now'), b('🕘 ယနေ့ 09:00', 'wfa:carquick:today|09:00'), b('🕐 ယနေ့ 13:00', 'wfa:carquick:today|13:00')],
+          [b('🌅 မနက်ဖြန် 09:00', 'wfa:carquick:tomorrow|09:00'), b('🌆 မနက်ဖြန် 13:00', 'wfa:carquick:tomorrow|13:00')],
+          [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
+        ],
+      };
+    }
     const rows: { text: string; callback_data: string }[][] = [
       // one-tap office hours for Start — the trip that is "today 9" covers most requests;
       // ⚡ အခု covers "heading back/out right now" (no day thinking needed)
