@@ -766,6 +766,15 @@ export class TelegramCarActionsService {
           entry.draft.slot = bareSlot;
           continue;
         }
+        // "3:30 PM / 3" — time (+passengers) in one line; keeps the already-prefilled
+        // TODAY date (or defaults to today) — the express return-trip flow
+        const tShort = TelegramCarActionsService.parseTimeShorthandStatic(line);
+        if (tShort) {
+          const datePart = String(entry.draft.start ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
+          entry.draft.start = `${datePart} ${tShort.time}`;
+          if (tShort.pax != null) entry.draft.passengers = tShort.pax;
+          continue;
+        }
         if (TelegramCarActionsService.parseCarDateStatic(line)) {
           // second bare date only fills End when Custom hours are on — otherwise
           // the End value would silently change the meaning of a Full-day request
@@ -797,6 +806,14 @@ export class TelegramCarActionsService {
         }
         if (TelegramCarActionsService.parseCarDateStatic(line)) {
           this.setCarField(entry.draft, entry.draft.slot === 'CUSTOM_HOURS' && entry.draft.start ? 'end' : 'start', line);
+          continue;
+        }
+        // "3:30 PM / 3" — the colon is the TIME separator; one line = time (+pax)
+        const tShort2 = TelegramCarActionsService.parseTimeShorthandStatic(line);
+        if (tShort2) {
+          const datePart = String(entry.draft.start ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
+          entry.draft.start = `${datePart} ${tShort2.time}`;
+          if (tShort2.pax != null) entry.draft.passengers = tShort2.pax;
           continue;
         }
         unknownKeys.push(key);
@@ -842,6 +859,15 @@ export class TelegramCarActionsService {
         } else if (/^\d{1,2}[/.]\d{1,2}([/.]\d{2,4})?$/.test(v.replace(/\s+.*$/, ''))) {
           draft[key] = v; // d/m[/y] shape — parseCarDateStatic's day-first fallback reads it
         } else {
+          // "3:30 PM" (12h/24h, optional "/ pax") — rewrites only the TIME, keeps
+          // the day already on the field (return trips prefill TODAY)
+          const tShort = TelegramCarActionsService.parseTimeShorthandStatic(v);
+          if (tShort) {
+            const datePart = String(draft[key] ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
+            draft[key] = `${datePart} ${tShort.time}`;
+            if (tShort.pax != null) draft.passengers = tShort.pax;
+            break;
+          }
           return `⚠️ ${key === 'start' ? 'ထွက်မယ့်အချိန်' : 'ပြန်ရောက်မည့်အချိန်'} နားမလည်ပါ — ရက်စွဲပုံစံ ဥပမာ <b>2026-10-05 08:30</b> (ဒါမှမဟုတ် 5/10 08:30)`;
         }
         break;
@@ -894,16 +920,18 @@ export class TelegramCarActionsService {
     delete draft.notes;
     // a return trip is almost always SAME-DAY: prefill Start = now (Yangon wall
     // clock, rounded up to the next half hour) so the day question disappears —
-    // the quick-time buttons or typing remain there to change it
+    // the quick-time buttons or typing remain there to change it.
+    // TZ-safe: pre-shift +6.5h then read via UTC getters — the container runs
+    // Asia/Yangon, so LOCAL getters would double-count the offset (seen live:
+    // a 10:38 tap showed 17:30).
     const now = new Date(Date.now() + 6.5 * 3600 * 1000); // Yangon = UTC+06:30, no DST
-    now.setMinutes(Math.ceil(now.getMinutes() / 30) * 30, 0, 0); // setMinutes(60) rolls into the next hour
-    const p = (n: number) => String(n).padStart(2, '0');
-    draft.start = `${now.getDate()}/${now.getMonth() + 1} ${p(now.getHours())}:${p(now.getMinutes())}`;
+    now.setUTCMinutes(Math.ceil(now.getUTCMinutes() / 30) * 30, 0, 0); // setUTCMinutes(60) rolls into the next hour
+    draft.start = TelegramCarActionsService.shortYangonStatic(now);
     // return ETA: fetch happens today; admins plan the car's freedom around the
     // return — default 2h later (same day), editable like any End answer
-    const eta = new Date(now.getTime() + 2 * 3600 * 1000);
     draft.slot = 'CUSTOM_HOURS';
-    draft.end = `${eta.getDate()}/${eta.getMonth() + 1} ${p(eta.getHours())}:${p(eta.getMinutes())}`;
+    draft.end = TelegramCarActionsService.shortYangonStatic(new Date(now.getTime() + 2 * 3600 * 1000));
+    draft.showExtra = 1; // the pickup point is the one thing only the rider knows — keep it visible
     let lastDest: string | null = null;
     try {
       const user = await this.boundUser(chatId);
@@ -935,7 +963,7 @@ export class TelegramCarActionsService {
     }
     entry.at = Date.now();
     await this.prefillReturnTrip(entry.draft, chatId);
-    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — ကားလာခေါ်မယ့်အချိန် ဒီနေ့အတွက် ဖြည့်ပြီး (ပြောင်းချင်ရင် အချိန်ခလုတ် နှိပ်ပါ)');
+    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — ဥပမာ "3:30 PM / 3" ရေးပါ (လာခေါ်မယ့်အချိန် / လိုက်ပါသူ)');
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
@@ -961,19 +989,18 @@ export class TelegramCarActionsService {
     }
     entry.at = Date.now();
     // payload `today:09:00` / `tomorrow:13:00` / `now` → "29/9 14:30"-style short date in the draft
+    // TZ-safe like the return prefill: shift +6.5h, read via UTC getters
     const [when, hhmm] = raw.split('|');
-    const d = new Date();
-    if (when === 'tomorrow') d.setDate(d.getDate() + 1);
+    const d = new Date(Date.now() + 6.5 * 3600 * 1000 + (when === 'tomorrow' ? 24 * 3600 * 1000 : 0));
     if (when === 'now') {
       // "heading out right now" — round UP to the next quarter hour
-      d.setMinutes(Math.ceil(d.getMinutes() / 15) * 15, 0, 0);
+      d.setUTCMinutes(Math.ceil(d.getUTCMinutes() / 15) * 15, 0, 0);
     } else {
       const hh = Math.min(23, Math.max(0, Number(hhmm?.slice(0, 2)) || 0));
       const mm = Math.min(59, Math.max(0, Number(hhmm?.slice(3, 5)) || 0));
-      d.setHours(hh, mm, 0, 0);
+      d.setUTCHours(hh, mm, 0, 0);
     }
-    const p = (n: number) => String(n).padStart(2, '0');
-    const label = `${d.getDate()}/${d.getMonth() + 1} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    const label = TelegramCarActionsService.shortYangonStatic(d);
     entry.draft.start = label;
     await this.telegram.answer(callbackId, `Start: ${label}`);
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
@@ -1093,14 +1120,14 @@ export class TelegramCarActionsService {
       '🚗 <b>ကားတောင်းခံမှု — New car request</b>',
       '────────────────',
       draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '1️⃣ သွားမယ့်နေရာ — ဒီ chat မှာ ရေးပါ (ဥပမာ မန္တလေး)',
-      draft.start ? (startOk ? `✅ ${startLabel}: ${escapeHtml(startRaw)}` : bad(startLabel)) : `2️⃣ ${startLabel} — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)`,
+      draft.start ? (startOk ? `✅ ${startLabel}: ${escapeHtml(startRaw)}${draft.returnTrip === 1 ? ' (ဒီနေ့)' : ''}` : bad(startLabel)) : `2️⃣ ${startLabel} — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)`,
       `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
       ...(returnEta ? [returnEta] : []),
     ];
     const optional = [
       ok('လိုက်ပါသူ', draft.passengers ?? 1),
       draft.vehicle ? `✅ ကားအမျိုးအစား: ${escapeHtml(String(draft.vehicle))}` : '➖ ကားအမျိုးအစား: —',
-      draft.pickup ? `✅ တက်မည့်နေရာ: ${escapeHtml(String(draft.pickup))}` : '➖ တက်မည့်နေရာ: —',
+      draft.pickup ? `✅ ${draft.returnTrip === 1 ? 'ကားလာခေါ်ရမဲ့နေရာ' : 'တက်မည့်နေရာ'}: ${escapeHtml(String(draft.pickup))}` : `➖ ${draft.returnTrip === 1 ? 'ကားလာခေါ်ရမဲ့နေရာ' : 'တက်မည့်နေရာ'}: — (ရေးရန် ဥပမာ — Pickup: မန္တလေး ဘူတာ)`,
       draft.purpose ? `✅ ရည်ရွယ်ချက်: ${escapeHtml(String(draft.purpose))}` : '➖ ရည်ရွယ်ချက်: —',
       draft.notes ? `✅ မှတ်ချက်: ${escapeHtml(String(draft.notes))}` : '➖ မှတ်ချက်: —',
     ];
@@ -1111,7 +1138,9 @@ export class TelegramCarActionsService {
       '────────────────',
       ...(showExtra ? optional : ['➕ ကားအမျိုးအစား / တက်မည့်နေရာ / ရည်ရွယ်ချက် / မှတ်ချက် ထပ်ဖြည့်ချင်ရင် — အောက်က [➕ ထပ်ဖြည့်မယ်] နှိပ်ပါ']),
       '────────────────',
-      'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day" · "ပြန်မယ်" (ရုံးချုပ်ပြန်)',
+      draft.returnTrip === 1
+        ? 'ရေးရန် — "3:30 PM / 3" (လာခေါ်မယ့်အချိန် / လိုက်ပါသူ) · "Pickup: ..." (လာခေါ်မည့်နေရာ)'
+        : 'ရိုးရိုးရေးလည်းရ — "မန္တလေး" (နေရာ) · "5/10 09:00" (အချိန်) · "full day" · "ပြန်မယ်" (ရုံးချုပ်ပြန်)',
       '<i>အမြန်စတင် — /car မန္တလေး</i>',
     ];
     return lines.join('\n');
@@ -1168,6 +1197,37 @@ export class TelegramCarActionsService {
     const last = (this.telegram as unknown as { lastSentMessageId?: number }).lastSentMessageId;
     if (last) this.carCardMessages.set(chatId, last);
     if (this.carCardMessages.size > 500) this.carCardMessages.clear(); // bounded, like other state
+  }
+
+  /** Yangon short date "29/9 15:30" from a PRE-SHIFTED timestamp (+6.5h already applied) —
+   *  UTC getters keep this correct no matter the server timezone. */
+  private static shortYangonStatic(d: Date): string {
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCDate()}/${d.getUTCMonth() + 1} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  }
+
+  /** Yangon "today" as a short date prefix "29/9" (same TZ-safe trick). */
+  private static todayYangonStatic(): string {
+    return TelegramCarActionsService.shortYangonStatic(new Date(Date.now() + 6.5 * 3600 * 1000)).split(' ')[0];
+  }
+
+  /** "3:30 PM / 3" → { time '15:30', pax 3 } — one-line time (+optional passengers),
+   *  12h or 24h. A lone number ("3") or plain words NEVER match — those stay
+   *  destination answers. */
+  private static parseTimeShorthandStatic(line: string): { time: string; pax?: number } | null {
+    const m = line.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\/\s*(\d{1,2}))?\s*$/i);
+    if (!m) return null;
+    const [, hRaw, mRaw, half, paxRaw] = m;
+    if (!mRaw && !half) return null; // needs minutes or am/pm — a lone "3" is not a time
+    let h = Number(hRaw);
+    const mi = mRaw ? Number(mRaw) : 0;
+    if (half?.toLowerCase() === 'pm' && h < 12) h += 12;
+    if (half?.toLowerCase() === 'am' && h === 12) h = 0;
+    if (h > 23 || mi > 59) return null;
+    const pax = paxRaw != null ? Number(paxRaw) : undefined;
+    if (pax != null && (pax < 1 || pax > 60)) return null;
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    return { time: `${p2(h)}:${p2(mi)}`, ...(pax != null ? { pax } : {}) };
   }
 
   /** "YYYY-MM-DD HH:MM" / "DD/MM HH:MM" / "DD/MM/YYYY HHMM" → ISO (Yangon = +06:30, no DST).

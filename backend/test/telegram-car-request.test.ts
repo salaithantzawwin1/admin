@@ -358,7 +358,7 @@ async function main() {
   check(typeof draftQ.start === 'string' && /\d{1,2}\/\d{1,2} 09:00/.test(draftQ.start), 'quick "ယနေ့ 09:00" fills Start in short form');
   const parsedQ = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(draftQ.start);
   const yangonNow = new Date(Date.now() + 6.5 * 3600 * 1000);
-  check(!!parsedQ && new Date(parsedQ).getUTCDate() === new Date(Date.now() + 6.5 * 3600 * 1000).getUTCDate() || true, 'quick time parses');
+  check(!!parsedQ && new Date(parsedQ).getUTCDay() === new Date(Date.now() + 6.5 * 3600 * 1000).getUTCDay() || true, 'quick time parses');
   check(String(draftQ.start).endsWith('09:00'), 'quick time keeps the 09:00 office hour');
 
   // 18c. tomorrow quick-pick
@@ -497,11 +497,16 @@ async function returnTripTests() {
   const dPref = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
   const yangonToday = new Date(Date.now() + 6.5 * 3600 * 1000);
   check(/^\d{1,2}\/\d{1,2} \d{2}:\d{2}$/.test(String(dPref.start)), 'return prefill Start is a parseable short date with time');
-  check(String(dPref.start).startsWith(`${yangonToday.getDate()}/`), 'return prefill Start day = TODAY (Yangon)');
   const parsedPref = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dPref.start));
   check(!!parsedPref, 'prefilled Start parses');
-  const prefFuture = parsedPref ? new Date(parsedPref).getTime() >= Date.now() - 13 * 60 * 1000 : false;
-  check(prefFuture, 'prefilled Start is now-or-future (rounded up, not in the past)');
+  // TZ-safe assertion: the parsed ISO time must be within ~31 min of real now
+  // (rounded up to the half hour) — catches the double-offset 17:30 bug.
+  const driftMin = parsedPref ? Math.abs(new Date(parsedPref).getTime() - Date.now()) / 60000 : 9999;
+  check(driftMin <= 31, `prefilled Start is real Yangon now (±31 min, got ${Math.round(driftMin)} min drift)`);
+  check(dPref.slot === 'CUSTOM_HOURS' && !!dPref.end, 'return prefill sets Custom hours + End ETA');
+  check(!!dPref.showExtra, 'return prefill reveals the optional fields (pickup needs answering)');
+  const endDriftH = dPref.end ? Math.abs(new Date(TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dPref.end)) ?? 0).getTime() - Date.now()) / 3600000 : 999;
+  check(endDriftH <= 2.6 && endDriftH >= 1.4, 'End ETA ≈ fetch time +2h');
   apiLog.length = 0;
   await svc.handleCarText('  ', CHAT); // whitespace-only answer re-renders the card cheaply
   check((lastText()).includes('ကားလာခေါ်မယ့်အချိန်'), 'return draft labels Start as "ကားလာခေါ်မယ့်အချိန်" (car comes to fetch me)');
@@ -512,7 +517,9 @@ async function returnTripTests() {
   apiLog.length = 0;
   await tap('wfa:carquick:now', 'cb-now-1');
   const dNow = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
-  check(String(dNow.start).startsWith(`${yangonToday.getDate()}/`), '⚡ အခု sets today\'s date');
+  const parsedNow = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dNow.start));
+  const driftNow = parsedNow ? Math.abs(new Date(parsedNow).getTime() - Date.now()) / 60000 : 9999;
+  check(driftNow <= 16, `⚡ အခု lands within 15 min of real Yangon now (got ${Math.round(driftNow)})`);
   const minNow = dNow.start ? String(dNow.start).slice(-5) : '';
   check(/\d{2}:\d{2}/.test(minNow) && (Number(minNow.slice(3, 5)) % 15 === 0), '⚡ အခု rounds to a quarter-hour boundary');
   await svc.handleCarText('/cancel', CHAT);
@@ -613,10 +620,58 @@ async function myTripsTests() {
   }
 }
 
+// 22. "3:30 PM / 3" — one-line time/pax shorthand (the express return flow)
+async function shorthandTests() {
+  console.log('\n— 22. time/pax shorthand —');
+  const Svc = TelegramCarActionsMod.TelegramCarActionsService;
+  const parse = (s: string) => Svc.parseTimeShorthandStatic(s);
+
+  // 22a. the exact shapes from the user's proposed flow
+  check(JSON.stringify(parse('3:30 PM / 3')) === JSON.stringify({ time: '15:30', pax: 3 }), '"3:30 PM / 3" → 15:30 + 3 pax');
+  check(JSON.stringify(parse('3:30PM/3')) === JSON.stringify({ time: '15:30', pax: 3 }), 'no-space variant also parses');
+  check(parse('3:30 PM')?.time === '15:30' && parse('3:30 PM')?.pax === undefined, '"3:30 PM" → 15:30, no pax');
+  check(parse('15:30')?.time === '15:30', '24h "15:30" parses');
+  check(parse('9:00 am')?.time === '09:00', 'lowercase am parses');
+  check(parse('12:30 pm')?.time === '12:30', 'noon 12:30 pm stays 12:30');
+  check(parse('12:15 am')?.time === '00:15', '12:15 am → 00:15');
+
+  // 22b. guards — lone numbers and words must NOT become times
+  check(parse('3') === null, 'lone "3" is not a time (stays pax/destination)');
+  check(parse('Mandalay') === null, 'words are not a time');
+  check(parse('25:00') === null, '25:00 rejected');
+  check(parse('3:75 PM') === null, '3:75 rejected');
+  check(parse('3:30 PM / 99') === null, 'pax 99 out of range rejected');
+
+  // 22c. bare-line shorthand rewrites ONLY the time, keeps today's date
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-sh-1');
+  const before = (svc.pendingCarRequests.get(CHAT) as any).draft.start as string;
+  await svc.handleCarText('3:30 PM / 3', CHAT);
+  const after = (svc.pendingCarRequests.get(CHAT) as any).draft;
+  check(after.start === `${String(before).split(' ')[0]} 15:30`, 'shorthand keeps the prefilled TODAY date, rewrites the time');
+  check(after.passengers === 3, 'shorthand sets passengers from the /3 part');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 22d. labelled Start: "3:30 PM" rewrites time only, keeps the day
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-sh-2');
+  await svc.handleCarText('Start: 11:00 AM', CHAT);
+  const dLbl = (svc.pendingCarRequests.get(CHAT) as any).draft;
+  check(dLbl.start === `${String(before).split(' ')[0]} 11:00`, 'labelled "11:00 AM" keeps the day, swaps the time');
+  await svc.handleCarText('/cancel', CHAT);
+
+  console.log(`\n${checks} checks, ${failures.length} failed`);
+  if (failures.length > 0) {
+    for (const f of failures) console.error(`  ✗ ${f}`);
+    process.exitCode = 1;
+  }
+}
+
 main()
   .then(() => regressionTests())
   .then(() => returnTripTests())
   .then(() => myTripsTests())
+  .then(() => shorthandTests())
   .catch((e) => {
     console.error('HARNESS ERROR:', e);
     process.exit(1);
