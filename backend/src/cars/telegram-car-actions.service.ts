@@ -772,6 +772,7 @@ export class TelegramCarActionsService {
         if (tShort) {
           const datePart = String(entry.draft.start ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
           entry.draft.start = `${datePart} ${tShort.time}`;
+          TelegramCarActionsService.ensureEndAfterStart(entry.draft);
           if (tShort.pax != null) entry.draft.passengers = tShort.pax;
           if (tShort.pickup) this.applyReturnPickup(entry.draft, tShort.pickup);
           continue;
@@ -821,6 +822,7 @@ export class TelegramCarActionsService {
         if (tShort2) {
           const datePart = String(entry.draft.start ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
           entry.draft.start = `${datePart} ${tShort2.time}`;
+          TelegramCarActionsService.ensureEndAfterStart(entry.draft);
           if (tShort2.pax != null) entry.draft.passengers = tShort2.pax;
           if (tShort2.pickup) this.applyReturnPickup(entry.draft, tShort2.pickup);
           continue;
@@ -874,6 +876,7 @@ export class TelegramCarActionsService {
           if (tShort) {
             const datePart = String(draft[key] ?? '').split(' ')[0] || TelegramCarActionsService.todayYangonStatic();
             draft[key] = `${datePart} ${tShort.time}`;
+            TelegramCarActionsService.ensureEndAfterStart(draft);
             if (tShort.pax != null) draft.passengers = tShort.pax;
             if (tShort.pickup) this.applyReturnPickup(draft as Record<string, unknown>, tShort.pickup);
             break;
@@ -940,7 +943,7 @@ export class TelegramCarActionsService {
     // return ETA: fetch happens today; admins plan the car's freedom around the
     // return — default 2h later (same day), editable like any End answer
     draft.slot = 'CUSTOM_HOURS';
-    draft.end = TelegramCarActionsService.shortYangonStatic(new Date(now.getTime() + 2 * 3600 * 1000));
+    draft.end = TelegramCarActionsService.shortYangonStatic(new Date(now.getTime() + 2 * 3600 * 1000)); // now is already pre-shifted
     draft.showExtra = 1; // the pickup point is the one thing only the rider knows — keep it visible
     let lastDest: string | null = null;
     try {
@@ -961,6 +964,22 @@ export class TelegramCarActionsService {
       draft.notes = `Return trip — pickup from ${lastDest.trim()}`;
     } else {
       draft.notes = 'Return trip to Head Office';
+    }
+  }
+
+  /** Keep End (ETA) ahead of Start. Any Start rewrite (shorthand, quick-time,
+   *  typed date) can leave the prefilled ETA in the past — e.g. fetch moved from
+   *  11:30 to 15:30 while ETA stayed 13:30 → "endDate must be after startDate"
+   *  on submit. A violated ETA silently moves to Start +2h. */
+  private static ensureEndAfterStart(draft: Record<string, unknown>): void {
+    if (draft.slot !== 'CUSTOM_HOURS') return;
+    const startIso = TelegramCarActionsService.parseCarDateStatic(String(draft.start ?? ''));
+    if (!startIso) return;
+    const endIso = draft.end != null ? TelegramCarActionsService.parseCarDateStatic(String(draft.end)) : null;
+    if (endIso && new Date(endIso).getTime() <= new Date(startIso).getTime()) {
+      // Start+2h as a Yangon wall-clock string (shortYangonStatic expects a
+      // PRE-SHIFTED timestamp, so pre-shift here too)
+      draft.end = TelegramCarActionsService.shortYangonStatic(new Date(new Date(startIso).getTime() + 2 * 3600 * 1000 + 6.5 * 3600 * 1000));
     }
   }
 
@@ -1018,6 +1037,7 @@ export class TelegramCarActionsService {
     }
     const label = TelegramCarActionsService.shortYangonStatic(d);
     entry.draft.start = label;
+    TelegramCarActionsService.ensureEndAfterStart(entry.draft);
     await this.telegram.answer(callbackId, `Start: ${label}`);
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
@@ -1049,6 +1069,13 @@ export class TelegramCarActionsService {
       const endRaw = str('end');
       endIso = endRaw ? TelegramCarActionsService.parseCarDateStatic(endRaw) : null;
       if (!endIso) problems.push('❌ ပြန်ရောက်မည့်အချိန် (End) — Custom slot အတွက် လိုအပ်ပါသည်');
+    } else if (startIso) {
+      // same-day 17:00 default (createCarRequest's rule) — but a late-evening
+      // start (e.g. 17:30) would make 17:00 the PAST and reject the request;
+      // never submit an End before Start: fall back to Start + 2h
+      const yangonDay = new Date(new Date(startIso).getTime() + 6.5 * 3600 * 1000);
+      const yangon1700 = Date.UTC(yangonDay.getUTCFullYear(), yangonDay.getUTCMonth(), yangonDay.getUTCDate(), 17, 0) - 6.5 * 3600 * 1000;
+      endIso = new Date(Math.max(yangon1700, new Date(startIso).getTime() + 2 * 3600 * 1000)).toISOString();
     }
     if (problems.length > 0) {
       await this.telegram.answer(callbackId, 'ဖြည့်စွက်ရန် လိုအပ်သေးသည်');

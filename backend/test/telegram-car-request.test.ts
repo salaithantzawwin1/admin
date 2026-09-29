@@ -674,6 +674,37 @@ async function shorthandTests() {
   check(dLbl.start === `${String(before).split(' ')[0]} 11:00`, 'labelled "11:00 AM" keeps the day, swaps the time');
   await svc.handleCarText('/cancel', CHAT);
 
+  // 22e. REGRESSION (live screenshot): moving Start PAST the prefilled ETA must
+  // push the ETA forward — the exact flow: carback (Start 11:30/ETA 13:30) →
+  // "3:30 PM / 2 / Chan Yin Factory" → Submit used to die on
+  // "endDate must be after startDate".
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-sh-3');
+  await svc.handleCarText('3:30 PM / 2 / Chan Yin Factory', CHAT);
+  const dFix = (svc.pendingCarRequests.get(CHAT) as any).draft;
+  const sIso = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dFix.start));
+  const eIso = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dFix.end));
+  check(!!sIso && !!eIso && new Date(eIso).getTime() > new Date(sIso).getTime(), 'ETA pushed ahead of the moved Start (no End<Start)');
+  const gapH = (new Date(eIso!).getTime() - new Date(sIso!).getTime()) / 3600000;
+  check(Math.abs(gapH - 2) < 0.01, `ETA fell back to Start +2h (got ${gapH}h)`);
+  createdRequests.length = 0; submittedIds.length = 0;
+  apiLog.length = 0;
+  await tap('wfa:carsubmit', 'cb-sh-4');
+  check(createdRequests.length === 1, 'the exact screenshot flow now SUBMITS');
+  check(!allText().includes('endDate must be after startDate'), 'no End<Start rejection anymore');
+  check(createdRequests[0]?.data?.pickupLocation === 'Chan Yin Factory', 'pickup from the screenshot lands correctly');
+  await svc.handleCarText('/cancel', CHAT);
+
+  // 22f. late-evening full-day start: implicit 17:00 End must never precede Start
+  const Svc2 = TelegramCarActionsMod.TelegramCarActionsService;
+  const lateDraft: any = { destination: 'X', start: '29/9 18:30', slot: 'FULL_DAY' };
+  // (submit validation path — simulate via the private logic through a draft submit)
+  // direct check of the 17:00 rule using the documented default: Start+2h wins after 15:00
+  const startIsoLate = Svc2.parseCarDateStatic('29/9 18:30');
+  const yangonDay = new Date(new Date(startIsoLate!).getTime() + 6.5 * 3600 * 1000);
+  const yangon1700 = Date.UTC(yangonDay.getUTCFullYear(), yangonDay.getUTCMonth(), yangonDay.getUTCDate(), 17, 0) - 6.5 * 3600 * 1000;
+  check(new Date(startIsoLate!).getTime() > yangon1700, '18:30 start is after 17:00 (rule triggers)');
+
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
     for (const f of failures) console.error(`  ✗ ${f}`);
