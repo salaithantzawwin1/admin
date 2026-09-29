@@ -25,6 +25,34 @@ const ALL_ROLES = [
   'FINANCE', 'MANAGEMENT', 'MAINTENANCE_COORDINATOR', 'EMPLOYEE',
 ];
 
+/** Friendly badge labels — raw codes (DEPARTMENT_HEAD) read like error dumps in a table. */
+const ROLE_LABELS: Record<string, string> = {
+  SYSTEM_ADMIN: 'System Admin',
+  ADMINISTRATION: 'Administration',
+  DEPARTMENT_HEAD: 'Dept Head',
+  PURCHASING: 'Purchasing',
+  FINANCE: 'Finance',
+  MANAGEMENT: 'Management',
+  MAINTENANCE_COORDINATOR: 'Maintenance',
+  EMPLOYEE: 'Employee',
+};
+const roleLabel = (r: string) => ROLE_LABELS[r] ?? r;
+
+/** Stable badge order (power first, Employee last) so every row reads the same way.
+ *  The API returns roles in unpredictable insertion order — EMPLOYEE occasionally
+ *  landed before DEPARTMENT_HEAD on one row but not the next. */
+const ROLE_ORDER = ['SYSTEM_ADMIN', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'FINANCE', 'PURCHASING', 'MAINTENANCE_COORDINATOR', 'EMPLOYEE'];
+const sortedRoles = (roles: string[]) =>
+  [...roles].sort((a, b) => (ROLE_ORDER.indexOf(a) + 1 || 99) - (ROLE_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
+
+/** One hue per meaning: yellow = superuser, blue = admin office, green = leadership,
+ *  gray = regular roles. (red stays reserved for Disable/Delete/status badges.) */
+const ROLE_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
+  SYSTEM_ADMIN: 'yellow',
+  ADMINISTRATION: 'blue',
+  DEPARTMENT_HEAD: 'green',
+};
+
 export default function Users() {
   const me = getUser();
   const [rows, setRows] = useState<UserRow[]>([]);
@@ -185,7 +213,7 @@ export default function Users() {
                         })
                       }
                     >
-                      {r}
+                      {roleLabel(r)}
                     </button>
                   );
                 })}
@@ -214,8 +242,8 @@ export default function Users() {
             <td className="px-4 py-3">{u.fullName}</td>
             <td className="px-4 py-3">
               <div className="flex flex-wrap gap-1">
-                {u.roles.map((r) => (
-                  <Badge key={r} color="blue">{r}</Badge>
+                {sortedRoles(u.roles).map((r) => (
+                  <Badge key={r} color={ROLE_COLORS[r] ?? 'gray'} title={r}>{roleLabel(r)}</Badge>
                 ))}
               </div>
             </td>
@@ -301,9 +329,9 @@ export default function Users() {
               <label className="block text-xs text-gray-500 mb-1">Roles</label>
               <div className="flex flex-wrap gap-2">
                 {ALL_ROLES.map((r) => (
-                  <label key={r} className="inline-flex items-center gap-1.5 text-xs border rounded-full px-3 py-1.5 cursor-pointer">
+                  <label key={r} className="inline-flex items-center gap-1.5 text-xs border rounded-full px-3 py-1.5 cursor-pointer" title={r}>
                     <input type="checkbox" checked={editRoles.includes(r)} onChange={() => roleToggled(r)} />
-                    {r}
+                    {roleLabel(r)}
                   </label>
                 ))}
               </div>
