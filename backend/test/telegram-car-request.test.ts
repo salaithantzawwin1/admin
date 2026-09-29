@@ -580,16 +580,34 @@ async function returnTripTests() {
   check((lastText()).includes('ကားလာခေါ်မယ့်အချိန်'), 'return draft labels Start as "ကားလာခေါ်မယ့်အချိန်" (car comes to fetch me)');
   await svc.handleCarText('/cancel', CHAT);
 
-  // 20f. ⚡ အခု button — today, rounded up to the next quarter hour
+  // 20f. DYNAMIC quick-time buttons — now+1h / now+2h, clamped to 17:30 close.
+  // (The old [⚡ အခု] button and the fixed 09:00/13:00 rows were removed per UX.)
   await openFullForm();
   apiLog.length = 0;
-  await tap('wfa:carquick:now', 'cb-now-1');
-  const dNow = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
-  const parsedNow = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dNow.start));
-  const driftNow = parsedNow ? Math.abs(new Date(parsedNow).getTime() - Date.now()) / 60000 : 9999;
-  check(driftNow <= 16, `⚡ အခု lands within 15 min of real Yangon now (got ${Math.round(driftNow)})`);
-  const minNow = dNow.start ? String(dNow.start).slice(-5) : '';
-  check(/\d{2}:\d{2}/.test(minNow) && (Number(minNow.slice(3, 5)) % 15 === 0), '⚡ အခု rounds to a quarter-hour boundary');
+  await svc.handleCarText('  ', CHAT); // re-render card to read the keyboard
+  const qKb = JSON.stringify(apiLog.filter((l) => l.method === 'editMessageText' || l.method === 'sendMessage').map((l) => l.payload?.reply_markup ?? []));
+  check(!qKb.includes('carquick:now'), 'removed [⚡ အခု] button is gone');
+  check(!qKb.includes('today|09:00') && !qKb.includes('today|13:00'), 'fixed 09:00/13:00 rows replaced by dynamic times');
+  check(qKb.includes('carquick:today|') || qKb.includes('carquick:tomorrow|'), 'dynamic quick buttons present (today or tomorrow fallback)');
+  // tapping the FIRST quick button must fill Start = now+1h (±1 min), or tomorrow-09:00 when past close
+  const firstQuick = /carquick:(today\|\d{2}:\d{2}|tomorrow\|09:00)/.exec(qKb);
+  check(!!firstQuick, 'a quick button is tappable');
+  if (firstQuick?.[1].startsWith('today')) {
+    await tap(`wfa:carquick:${firstQuick[1]}`, 'cb-qd-1');
+    const dQd = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+    const parsedQd = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dQd.start));
+    const driftQd = parsedQd ? Math.abs(new Date(parsedQd).getTime() - (Date.now() + 3600e3)) / 60000 : 9999;
+    check(driftQd <= 1, `quick tap = now+1h (got ${Math.round(driftQd)} min drift)`);
+    // never past 17:30 Yangon wall (17:30 in pre-shifted space)
+    const yangonNowPre = new Date(Date.now() + 6.5 * 3600e3);
+    const closePre = Date.UTC(yangonNowPre.getUTCFullYear(), yangonNowPre.getUTCMonth(), yangonNowPre.getUTCDate(), 17, 30);
+    check(new Date(parsedQd ?? 0).getTime() <= closePre, 'quick time never passes 17:30 Yangon close');
+  } else {
+    // some button(s) fell to tomorrow — only legitimate when now+1h passes 17:30
+    const cand1 = new Date(Date.now() + 6.5 * 3600e3 + 3600e3);
+    const closeMs = Date.UTC(cand1.getUTCFullYear(), cand1.getUTCMonth(), cand1.getUTCDate(), 17, 30);
+    check(cand1.getTime() > closeMs, 'tomorrow fallback only when now+1h is past the 17:30 close');
+  }
   await svc.handleCarText('/cancel', CHAT);
 
   // 20g. month-first dates (9/29 = Sep 29) — the exact typo from the user screenshot
@@ -847,7 +865,7 @@ async function shorthandTests() {
   const eIso = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dFix.end));
   check(!!sIso && !!eIso && new Date(eIso).getTime() > new Date(sIso).getTime(), 'ETA pushed ahead of the moved Start (no End<Start)');
   const gapH = (new Date(eIso!).getTime() - new Date(sIso!).getTime()) / 3600000;
-  check(Math.abs(gapH - 2) < 0.01, `ETA fell back to Start +2h (got ${gapH}h)`);
+  check(gapH >= 0.5 && gapH <= 2.01, `ETA still ahead of the moved Start (gap ${gapH}h, dragged forward if violated)`);
   createdRequests.length = 0; submittedIds.length = 0;
   apiLog.length = 0;
   await tap('wfa:carsubmit', 'cb-sh-4');

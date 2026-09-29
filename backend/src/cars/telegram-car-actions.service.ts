@@ -1215,18 +1215,13 @@ export class TelegramCarActionsService {
       return;
     }
     entry.at = Date.now();
-    // payload `today:09:00` / `tomorrow:13:00` / `now` → "29/9 14:30"-style short date in the draft
+    // payload `today:15:00` / `tomorrow:09:00` → "29/9 15:00"-style short date in the draft
     // TZ-safe like the return prefill: shift +6.5h, read via UTC getters
     const [when, hhmm] = raw.split('|');
     const d = new Date(Date.now() + 6.5 * 3600 * 1000 + (when === 'tomorrow' ? 24 * 3600 * 1000 : 0));
-    if (when === 'now') {
-      // "heading out right now" — round UP to the next quarter hour
-      d.setUTCMinutes(Math.ceil(d.getUTCMinutes() / 15) * 15, 0, 0);
-    } else {
-      const hh = Math.min(23, Math.max(0, Number(hhmm?.slice(0, 2)) || 0));
-      const mm = Math.min(59, Math.max(0, Number(hhmm?.slice(3, 5)) || 0));
-      d.setUTCHours(hh, mm, 0, 0);
-    }
+    const hh = Math.min(23, Math.max(0, Number(hhmm?.slice(0, 2)) || 0));
+    const mm = Math.min(59, Math.max(0, Number(hhmm?.slice(3, 5)) || 0));
+    d.setUTCHours(hh, mm, 0, 0);
     const label = TelegramCarActionsService.shortYangonStatic(d);
     entry.draft.start = label;
     TelegramCarActionsService.ensureEndAfterStart(entry.draft);
@@ -1420,11 +1415,48 @@ export class TelegramCarActionsService {
     return lines.join('\n');
   }
 
+  /** Dynamic quick-time row — Current Yangon time +1h and +2h (user-requested:
+   *  at 2:00 PM the buttons read ယနေ့ 3:00 PM / ယနေ့ 4:00 PM), NEVER past the
+   *  17:30 office close — a candidate past close falls to မနက်ဖြန် 09:00.
+   *  Replaces the old fixed 09:00/13:00 rows and the removed [⚡ အခု]. */
+  private static quickTimeButtonsStatic(nowMs: number): { text: string; data: string }[] {
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const out: { text: string; data: string }[] = [];
+    const seen = new Set<string>();
+    for (const addH of [1, 2]) {
+      // pre-shifted space: UTC getters READ Yangon wall time, so 17:30 wall =
+      // Date.UTC(y,m,d,17,30) — no extra offset on either side
+      const cand = new Date(nowMs + 6.5 * 3600 * 1000 + addH * 3600 * 1000);
+      const closeMs = Date.UTC(cand.getUTCFullYear(), cand.getUTCMonth(), cand.getUTCDate(), 17, 30);
+      let d: Date; let data: string; let dayLabel: string;
+      if (cand.getTime() > closeMs) {
+        // past office close → the next working start
+        d = new Date(nowMs + 6.5 * 3600 * 1000 + 24 * 3600 * 1000);
+        d.setUTCHours(9, 0, 0, 0);
+        data = 'tomorrow|09:00';
+        dayLabel = 'မနက်ဖြန်';
+      } else {
+        d = cand;
+        data = `today|${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+        dayLabel = 'ယနေ့';
+      }
+      if (seen.has(data)) continue;
+      seen.add(data);
+      const h24 = d.getUTCHours();
+      const ampm = h24 >= 12 ? 'PM' : 'AM';
+      const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+      out.push({ text: `${dayLabel} ${h12}:${p2(d.getUTCMinutes())} ${ampm}`, data });
+    }
+    return out;
+  }
+
   /** Keyboard for the live card — quick Start times, slot shortcuts,
    *  [➕ ထပ်ဖြည့်မယ်] toggle and Submit/Cancel. */
   private carKeyboard(draft: Record<string, unknown>): { inline_keyboard: { text: string; callback_data: string }[][] } {
     const slot = draft.slot;
     const b = (text: string, data: string) => ({ text, callback_data: data });
+    // dynamic quick times: now+1h / now+2h, clamped to the 17:30 office close
+    const quick = TelegramCarActionsService.quickTimeButtonsStatic(Date.now()).map((q) => b(q.text, `wfa:carquick:${q.data}`));
     // chooser stage: the two flows + cancel — nothing else on screen
     if (draft.choose === 1) {
       return {
@@ -1440,25 +1472,15 @@ export class TelegramCarActionsService {
     if (draft.returnTrip === 1) {
       return {
         inline_keyboard: [
-          [b('⚡ အခု', 'wfa:carquick:now'), b('🕘 ယနေ့ 09:00', 'wfa:carquick:today|09:00'), b('🕐 ယနေ့ 13:00', 'wfa:carquick:today|13:00')],
-          [b('🌅 မနက်ဖြန် 09:00', 'wfa:carquick:tomorrow|09:00'), b('🌆 မနက်ဖြန် 13:00', 'wfa:carquick:tomorrow|13:00')],
+          quick,
           [b('🆕 အသစ်တောင်းခံမယ်', 'wfa:carnew')],
           [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
         ],
       };
     }
     const rows: { text: string; callback_data: string }[][] = [
-      // one-tap office hours for Start — the trip that is "today 9" covers most requests;
-      // ⚡ အခု covers "heading back/out right now" (no day thinking needed)
-      [
-        b('⚡ အခု', 'wfa:carquick:now'),
-        b('🕘 ယနေ့ 09:00', 'wfa:carquick:today|09:00'),
-        b('🕐 ယနေ့ 13:00', 'wfa:carquick:today|13:00'),
-      ],
-      [
-        b('🌅 မနက်ဖြန် 09:00', 'wfa:carquick:tomorrow|09:00'),
-        b('🌆 မနက်ဖြန် 13:00', 'wfa:carquick:tomorrow|13:00'),
-      ],
+      // dynamic quick Start times (now+1h / now+2h, never past 17:30)
+      quick,
       // heading back to Head Office — instant return-trip draft (pickup prefilled from the last trip)
       [b('↩️ ရုံးချုပ်ပြန်', 'wfa:carback')],
       [
