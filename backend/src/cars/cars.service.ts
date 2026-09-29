@@ -806,7 +806,7 @@ export class CarsService {
     return { success: true };
   }
 
-  async adminShiftTime(requestId: string, data: { startDate: string; endDate: string; comment?: string }, actor: Actor) {
+  async adminShiftTime(requestId: string, data: { startDate: string; endDate?: string; comment?: string }, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: { carRequest: true },
@@ -829,7 +829,14 @@ export class CarsService {
     }
 
     const start = new Date(data.startDate);
-    const end = new Date(data.endDate);
+    // End OPTIONAL for admin shifts — when omitted, the ORIGINAL duration rides
+    // along (move the fetch to 3:00 PM on a 4:33→5:00 request → 3:00→3:27).
+    // This is the common case: Administration adjusts WHEN the car comes, not
+    // how long the rider needs it.
+    const originalDurationMin = request.carRequest
+      ? (new Date(request.carRequest.endDate).getTime() - new Date(request.carRequest.startDate).getTime()) / 60000
+      : 0;
+    const end = data.endDate ? new Date(data.endDate) : new Date(start.getTime() + originalDurationMin * 60000);
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
       throw new BadRequestException('Invalid time window');
     }

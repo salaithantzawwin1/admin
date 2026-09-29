@@ -220,11 +220,11 @@ export function CarPanel({
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Administration — plan change</div>
           <div className="flex flex-wrap gap-2 items-center">
-            <Input type="datetime-local" className="!w-56" value={shiftForm.startDate} onChange={(e) => setShiftForm({ ...shiftForm, startDate: e.target.value })} />
-            <Input type="datetime-local" className="!w-56" value={shiftForm.endDate} onChange={(e) => setShiftForm({ ...shiftForm, endDate: e.target.value })} />
+            <Input type="datetime-local" className="!w-56" value={shiftForm.startDate} onChange={(e) => setShiftForm({ ...shiftForm, startDate: e.target.value })} placeholder="New start" />
+            <Input type="datetime-local" className="!w-56" value={shiftForm.endDate} onChange={(e) => setShiftForm({ ...shiftForm, endDate: e.target.value })} placeholder="End (optional — keeps duration)" title="Leave empty to keep the trip duration — only the start moves" />
             <Button
               variant="ghost"
-              disabled={!shiftForm.startDate || !shiftForm.endDate}
+              disabled={!shiftForm.startDate}
               onClick={() => setConfirmShift(true)}
             >
               Shift time
@@ -275,14 +275,24 @@ export function CarPanel({
         <ConfirmDialog
           title="Shift time?"
           description={
-            <>Move this car request to <b>{new Date(shiftForm.startDate).toLocaleString()}</b> → <b>{new Date(shiftForm.endDate).toLocaleString()}</b>. Vehicle availability is checked; the requester will be notified.</>
+            <>
+              Move this car request to <b>{new Date(shiftForm.startDate).toLocaleString()}</b>
+              {shiftForm.endDate
+                ? <> → <b>{new Date(shiftForm.endDate).toLocaleString()}</b></>
+                : <> (end keeps the original trip duration)</>}. Vehicle availability is checked; the requester will be notified.
+            </>
           }
           confirmLabel="Shift time"
           withNote
           onConfirm={async (note) => {
             const ok = await act(() => api(`/cars/requests/${requestId}/admin-shift`, {
               method: 'PATCH',
-              body: { startDate: new Date(shiftForm.startDate).toISOString(), endDate: new Date(shiftForm.endDate).toISOString(), comment: note || undefined },
+              body: {
+                startDate: new Date(shiftForm.startDate).toISOString(),
+                // End optional — empty means "keep the original duration" (server-side)
+                ...(shiftForm.endDate ? { endDate: new Date(shiftForm.endDate).toISOString() } : {}),
+                comment: note || undefined,
+              },
             }));
             if (ok) setConfirmShift(false);
           }}

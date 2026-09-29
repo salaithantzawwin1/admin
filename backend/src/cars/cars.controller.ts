@@ -171,7 +171,7 @@ export class CarsController {
   /** Administration: shift the time window of an APPROVED/PENDING car request. */
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Patch('requests/:requestId/admin-shift')
-  adminShift(@Req() req, @Param('requestId') requestId: string, @Body() body: { startDate: string; endDate: string; comment?: string }) {
+  adminShift(@Req() req, @Param('requestId') requestId: string, @Body() body: { startDate: string; endDate?: string; comment?: string }) {
     return this.cars.adminShiftTime(requestId, body, this.actor(req));
   }
 
