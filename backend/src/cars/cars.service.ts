@@ -453,13 +453,29 @@ export class CarsService {
       userId: request.requesterId,
       type: 'CAR_ASSIGNED',
       title: `Vehicle assigned to ${request.docNumber}`,
-      body: `${vehicle.vehicleNo} (${vehicle.brandModel}) has been assigned for your trip.`,
+      // shared-trip riders are told up front: one car, other riders, same window
+      body: `${vehicle.vehicleNo} (${vehicle.brandModel}) has been assigned for your trip.${share ? ' Note: this is a SHARED trip — you ride the same car as another request in this window.' : ''}`,
       link: `/requests/${requestId}`, requestId,
     });
 
     // Telegram route message to the driver (silent no-op when token unset/disabled;
-    // fire-and-forget so a slow/unreachable Telegram never delays the assignment)
+    // fire-and-forget so a slow/unreachable Telegram never delays the assignment).
+    // For a shared trip, ALSO repaint the peer assignment's card — its driver card
+    // was rendered before this request joined the group and must show the new
+    // 🧑‍🤝‍🧑 Shared trip section (and the peer requester's panel refetches via SSE).
     this.telegram.sendAssignment(assignment.id).catch(() => undefined);
+    if (share && assignment && (assignment as { sharedTripId?: string | null }).sharedTripId) {
+      const group = (assignment as { sharedTripId?: string | null }).sharedTripId!;
+      const peer = await this.prisma.carRequest.findFirst({
+        where: { sharedTripId: group, requestId: { not: requestId }, vehicleId: data.vehicleId },
+        select: { requestId: true },
+      });
+      if (peer) {
+        await this.prisma.carAssignment.findUnique({ where: { requestId: peer.requestId }, select: { id: true } })
+          .then((pa) => (pa ? this.telegram.sendAssignment(pa.id) : undefined))
+          .catch(() => undefined);
+      }
+    }
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
