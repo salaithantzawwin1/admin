@@ -348,6 +348,10 @@ export class TelegramCarActionsService {
       await this.actCarBack(chatId, callbackId);
       return true;
     }
+    if (action === 'carnew') {
+      await this.actCarNew(chatId, callbackId);
+      return true;
+    }
     if (action === 'tripcancel') {
       await this.actTripCancel(arg1 ?? '', chatId, callbackId);
       return true;
@@ -989,6 +993,19 @@ export class TelegramCarActionsService {
     if (draft.returnTrip === 1) draft.notes = `Return trip — pickup from ${String(draft.pickup)}`;
   }
 
+  /** [🆕 အသစ်တောင်းခံမယ်] on the return mini-card — back to the FULL /car form
+   *  (fresh draft, exactly like re-typing /car) without re-typing it. The tracked
+   *  card is edited in place, so the chat never grows a second bubble. */
+  private async actCarNew(chatId: string, callbackId: string): Promise<void> {
+    const entry = this.pendingCarRequests.get(chatId);
+    if (!entry) {
+      await this.telegram.answer(callbackId, 'Expired — send /car again');
+      return;
+    }
+    await this.telegram.answer(callbackId, 'ပုံမှန် ကားတောင်းခံမှု ဖောင် ပြန်ဖွင့်လိုက်ပါပြီ');
+    await this.handleCarCommand('/car', chatId);
+  }
+
   /** [↩️ ရုံးချုပ်ပြန်] on the card — instant return-trip draft. */
   private async actCarBack(chatId: string, callbackId: string): Promise<void> {
     const entry = this.pendingCarRequests.get(chatId);
@@ -1227,6 +1244,7 @@ export class TelegramCarActionsService {
         inline_keyboard: [
           [b('⚡ အခု', 'wfa:carquick:now'), b('🕘 ယနေ့ 09:00', 'wfa:carquick:today|09:00'), b('🕐 ယနေ့ 13:00', 'wfa:carquick:today|13:00')],
           [b('🌅 မနက်ဖြန် 09:00', 'wfa:carquick:tomorrow|09:00'), b('🌆 မနက်ဖြန် 13:00', 'wfa:carquick:tomorrow|13:00')],
+          [b('🆕 အသစ်တောင်းခံမယ်', 'wfa:carnew')],
           [b('✅ Submit', 'wfa:carsubmit'), b('❌ Cancel', 'wfa:carcancel')],
         ],
       };

@@ -729,6 +729,19 @@ async function shorthandTests() {
   check(full.includes('အချိန်အပိုင်းအခြား'), 'normal card keeps the slot row');
   await svc.handleCarText('/cancel', CHAT);
 
+  // 22h. [🆕 အသစ်တောင်းခံမယ်] — mini-card → full form, no /car re-typing
+  await svc.handleCarCommand('/car', CHAT);
+  await tap('wfa:carback', 'cb-new-1');
+  apiLog.length = 0;
+  await tap('wfa:carnew', 'cb-new-2');
+  const dNew = (svc.pendingCarRequests.get(CHAT) as any)?.draft ?? {};
+  check(dNew.returnTrip == null && !dNew.destination && !dNew.start, 'carnew resets to a fresh draft (return flag gone)');
+  const miniKb = JSON.stringify(apiLog.filter((l) => l.method === 'editMessageText' || l.method === 'sendMessage').map((l) => l.payload?.reply_markup ?? []));
+  check(!miniKb.includes('wfa:carnew'), 'full form keyboard has no carnew button');
+  check(miniKb.includes('wfa:carextra'), 'full form keyboard restores the extra-fields toggle');
+  check(!sent('မသိပါသော အကွက်များ').length, 'carnew sends no unknown-field error');
+  await svc.handleCarText('/cancel', CHAT);
+
   console.log(`\n${checks} checks, ${failures.length} failed`);
   if (failures.length > 0) {
     for (const f of failures) console.error(`  ✗ ${f}`);
