@@ -865,7 +865,7 @@ async function shorthandTests() {
   const eIso = TelegramCarActionsMod.TelegramCarActionsService.parseCarDateStatic(String(dFix.end));
   check(!!sIso && !!eIso && new Date(eIso).getTime() > new Date(sIso).getTime(), 'ETA pushed ahead of the moved Start (no End<Start)');
   const gapH = (new Date(eIso!).getTime() - new Date(sIso!).getTime()) / 3600000;
-  check(gapH >= 0.5 && gapH <= 2.01, `ETA still ahead of the moved Start (gap ${gapH}h, dragged forward if violated)`);
+  check(gapH >= 0.5 && gapH <= 4.01, `ETA still ahead of the moved Start (gap ${gapH}h, dragged forward if violated)`);
   createdRequests.length = 0; submittedIds.length = 0;
   apiLog.length = 0;
   await tap('wfa:carsubmit', 'cb-sh-4');

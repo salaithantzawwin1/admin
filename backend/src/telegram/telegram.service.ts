@@ -127,7 +127,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async call<T = unknown>(method: string, payload?: Record<string, unknown>): Promise<T | null> {
+  private async call<T = unknown>(method: string, payload?: Record<string, unknown>, opts?: { notModifiedIsOk?: boolean }): Promise<T | null> {
     const { token, enabled } = await this.config();
     if (!token || !enabled) return null;
     try {
@@ -138,6 +138,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       });
       const json = (await res.json()) as { ok: boolean; result?: T; description?: string };
       if (!json.ok) {
+        // editing a card to the exact content it already shows is NOT an error
+        // for our purposes — the card the user sees is already correct
+        if (opts?.notModifiedIsOk && json.description?.includes('message is not modified')) {
+          return true as T;
+        }
         this.logger.warn(`Telegram ${method} failed: ${json.description ?? res.status}`);
         // another host re-registered a webhook — drop it (throttled) so the
         // poll loop recovers without a human (button acks/commands die otherwise)
@@ -1444,20 +1449,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Edit an arbitrary bot message by (chatId, messageId) — used by the reject conversation's later outcome stamp. */
+  /** Edit a card message. Resolves true when the edit landed OR when Telegram
+   *  reports "message is not modified" (the card already shows this content —
+   *  callers treat that as success); false when the edit genuinely failed
+   *  (message deleted, too old, network) so callers can fall back to sending. */
   async editMessage(
     chatId: string,
     messageId: number,
     text: string,
     keyboard?: { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> },
-  ) {
-    await this.call('editMessageText', {
+  ): Promise<boolean> {
+    const res = await this.call('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text,
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       ...(keyboard ? { reply_markup: keyboard } : {}),
-    });
+    }, { notModifiedIsOk: true });
+    return res != null;
   }
 
   /** message_id per (chat, callback) seen in the poll loop — for editCallbackMessage. */

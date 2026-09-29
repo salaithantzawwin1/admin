@@ -1502,12 +1502,15 @@ export class TelegramCarActionsService {
     const keyboard = this.carKeyboard(this.pendingCarRequests.get(chatId)?.draft ?? {});
     const tracked = this.carCardMessages.get(chatId);
     if (tracked) {
-      try {
-        await this.telegram.editMessage(chatId, tracked, text, keyboard);
-        return; // edited in place — no new bubble
-      } catch {
-        this.carCardMessages.delete(chatId); // message gone (deleted/cleared) — fall back below
-      }
+      // editMessage resolves true when the edit landed OR the card already shows
+      // this exact content ("message is not modified" — the user is looking at
+      // the right card). Either way there is nothing more to send. Only a real
+      // failure (message deleted / too old) falls back to a fresh message —
+      // this was the silent /car death: errors resolved instead of throwing,
+      // so the old code returned without ever sending anything.
+      const landed = await this.telegram.editMessage(chatId, tracked, text, keyboard).catch(() => false);
+      if (landed) return;
+      this.carCardMessages.delete(chatId);
     }
     await this.telegram.sendRaw(chatId, text, { reply_markup: keyboard });
     // sendRaw hides the sendMessage result — capture the message id via the bot API
