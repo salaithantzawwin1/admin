@@ -779,6 +779,7 @@ export class TelegramCarActionsService {
    *  Used by wfa:carback and the bare-intent reading in handleCarText. */
   private async prefillReturnTrip(draft: Record<string, string | number | undefined>, chatId: string): Promise<void> {
     draft.destination = 'Head Office';
+    draft.returnTrip = 1; // the rider is AT the pickup point — Start means "car comes to fetch me"
     delete draft.pickup; // stale value from a previous draft must not survive
     delete draft.notes;
     // a return trip is almost always SAME-DAY: prefill Start = now (Yangon wall
@@ -819,7 +820,7 @@ export class TelegramCarActionsService {
     }
     entry.at = Date.now();
     await this.prefillReturnTrip(entry.draft, chatId);
-    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — အချိန် ရွေးပါ');
+    await this.telegram.answer(callbackId, 'ပြန်တောင်းခံမှု အသင့် — ကားလာခေါ်မယ့်အချိန် ဒီနေ့အတွက် ဖြည့်ပြီး (ပြောင်းချင်ရင် အချိန်ခလုတ် နှိပ်ပါ)');
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
@@ -969,11 +970,12 @@ export class TelegramCarActionsService {
       HALF_DAY_PM: 'Half PM',
       CUSTOM_HOURS: 'Custom',
     };
+    const startLabel = draft.returnTrip === 1 ? 'ကားလာခေါ်မယ့်အချိန်' : 'ထွက်မယ့်အချိန်';
     const required = [
       '🚗 <b>ကားတောင်းခံမှု — New car request</b>',
       '────────────────',
       draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '1️⃣ သွားမယ့်နေရာ — ဒီ chat မှာ ရေးပါ (ဥပမာ မန္တလေး)',
-      draft.start ? (startOk ? `✅ ထွက်မယ့်အချိန်: ${escapeHtml(startRaw)}` : bad('ထွက်မယ့်အချိန်')) : '2️⃣ ထွက်မယ့်အချိန် — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)',
+      draft.start ? (startOk ? `✅ ${startLabel}: ${escapeHtml(startRaw)}` : bad(startLabel)) : `2️⃣ ${startLabel} — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)`,
       `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
     ];
     const optional = [

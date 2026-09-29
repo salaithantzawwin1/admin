@@ -482,6 +482,9 @@ async function returnTripTests() {
   check(!!parsedPref, 'prefilled Start parses');
   const prefFuture = parsedPref ? new Date(parsedPref).getTime() >= Date.now() - 13 * 60 * 1000 : false;
   check(prefFuture, 'prefilled Start is now-or-future (rounded up, not in the past)');
+  apiLog.length = 0;
+  await svc.handleCarText('  ', CHAT); // whitespace-only answer re-renders the card cheaply
+  check((lastText()).includes('ကားလာခေါ်မယ့်အချိန်'), 'return draft labels Start as "ကားလာခေါ်မယ့်အချိန်" (car comes to fetch me)');
   await svc.handleCarText('/cancel', CHAT);
 
   // 20f. ⚡ အခု button — today, rounded up to the next quarter hour
