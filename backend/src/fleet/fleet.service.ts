@@ -151,7 +151,7 @@ export class FleetService {
   }
 
   async updateVehicle(id: string, data: {
-    brandModel?: string; capacity?: number; driverId?: string | null; status?: string;
+    brandModel?: string; vehicleType?: string; capacity?: number; driverId?: string | null; status?: string;
     registrationExpiry?: string; insuranceExpiry?: string; notes?: string; currentMileage?: number;
     vin?: string | null; fuelType?: string | null; engineNo?: string | null; chassisNo?: string | null;
     make?: string | null; model?: string | null; year?: number | null;
@@ -171,6 +171,9 @@ export class FleetService {
       include: { driver: { select: { name: true } } },
       data: {
         brandModel: data.brandModel,
+        // type is editable per-vehicle — the vehicle-type DELETE guard still
+        // protects the master list, so in-use types cannot be orphaned
+        ...(data.vehicleType ? { vehicleType: data.vehicleType as never } : {}),
         capacity: data.capacity,
         driverId,
         status: data.status as VehicleStatus | undefined,

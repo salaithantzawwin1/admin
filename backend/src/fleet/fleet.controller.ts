@@ -40,6 +40,7 @@ class VehicleDto {
 
 class VehicleUpdateDto {
   @IsOptional() @IsString() @MinLength(2) @MaxLength(64) brandModel?: string;
+  @IsOptional() @IsIn(Object.values(VehicleType)) vehicleType?: VehicleType;
   @IsOptional() @IsInt() @Min(1) @Max(60) capacity?: number;
   /** null clears the default driver ("blank"); undefined leaves it unchanged. */
   @IsOptional() @IsString() driverId?: string | null;

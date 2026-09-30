@@ -232,6 +232,7 @@ export default function Fleet() {
         method: 'PATCH',
         body: {
           brandModel: vForm.brandModel,
+          vehicleType: vForm.vehicleType,
           capacity: Number(vForm.capacity),
           // null clears the default driver ("blank") — undefined would leave it unchanged
           driverId: vForm.driverId || null,
@@ -744,9 +745,9 @@ export default function Fleet() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Type</label>
-                    <Select value={vForm.vehicleType} disabled>
+                    <Select value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
                       <option value="">— Type —</option>
-                      {types.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                      {types.filter((t) => t.active || t.name === vForm.vehicleType).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                     </Select>
                   </div>
                   <div>
