@@ -892,6 +892,14 @@ model Vehicle {
   registrationExpiry DateTime?
   insuranceExpiry  DateTime?
   notes            String?
+  // ---- Tier 1 identification & specification data (optional — legacy rows may stay blank)
+  vin              String?       @unique // 17-char manufacturer serial
+  fuelType         String?       // PETROL | DIESEL | HYBRID | EV
+  engineNo         String?       // stamped engine serial
+  chassisNo        String?       // stamped chassis serial (may equal VIN on modern cars)
+  make             String?       // e.g. Toyota
+  model            String?       // e.g. Probox
+  year             Int?          // manufacture year
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 

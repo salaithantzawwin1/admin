@@ -17,6 +17,8 @@ class VehicleTypeUpdateDto {
   @IsOptional() @IsBoolean() active?: boolean;
 }
 
+const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'] as const;
+
 class VehicleDto {
   @IsString() @MinLength(2) @MaxLength(32) vehicleNo!: string;
   @IsIn(Object.values(VehicleType)) vehicleType!: VehicleType;
@@ -26,6 +28,14 @@ class VehicleDto {
   @IsOptional() @IsDateString() registrationExpiry?: string;
   @IsOptional() @IsDateString() insuranceExpiry?: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  // ---- Tier 1 identification & specification (all optional)
+  @IsOptional() @IsString() @Matches(/^[A-HJ-NPR-Z0-9]{17}$/i, { message: 'VIN must be 17 characters (no I, O, Q)' }) vin?: string;
+  @IsOptional() @IsIn(FUEL_TYPES) fuelType?: string;
+  @IsOptional() @IsString() @MaxLength(64) engineNo?: string;
+  @IsOptional() @IsString() @MaxLength(64) chassisNo?: string;
+  @IsOptional() @IsString() @MaxLength(64) make?: string;
+  @IsOptional() @IsString() @MaxLength(64) model?: string;
+  @IsOptional() @IsInt() @Min(1950) @Max(2100) year?: number;
 }
 
 class VehicleUpdateDto {
@@ -38,6 +48,14 @@ class VehicleUpdateDto {
   @IsOptional() @IsDateString() insuranceExpiry?: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
   @IsOptional() @IsInt() @Min(0) currentMileage?: number;
+  // ---- Tier 1 identification & specification (null clears, string sets)
+  @IsOptional() @IsString() @Matches(/^[A-HJ-NPR-Z0-9]{17}$/i, { message: 'VIN must be 17 characters (no I, O, Q)' }) vin?: string | null;
+  @IsOptional() @IsIn([...FUEL_TYPES, null]) fuelType?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) engineNo?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) chassisNo?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) make?: string | null;
+  @IsOptional() @IsString() @MaxLength(64) model?: string | null;
+  @IsOptional() @IsInt() @Min(1950) @Max(2100) year?: number | null;
 }
 
 class DriverDto {

@@ -114,9 +114,14 @@ export class FleetService {
   async createVehicle(data: {
     vehicleNo: string; vehicleType: string; brandModel: string; capacity?: number;
     driverId?: string; registrationExpiry?: string; insuranceExpiry?: string; notes?: string;
+    vin?: string; fuelType?: string; engineNo?: string; chassisNo?: string; make?: string; model?: string; year?: number;
   }, actor: Actor) {
     const exists = await this.prisma.vehicle.findUnique({ where: { vehicleNo: data.vehicleNo } });
     if (exists) throw new BadRequestException('Vehicle number already exists');
+    if (data.vin) {
+      const vinTaken = await this.prisma.vehicle.findUnique({ where: { vin: data.vin } });
+      if (vinTaken) throw new BadRequestException(`VIN already registered to ${vinTaken.vehicleNo}`);
+    }
 
     const vehicle = await this.prisma.vehicle.create({
       data: {
@@ -128,6 +133,13 @@ export class FleetService {
         registrationExpiry: data.registrationExpiry ? new Date(data.registrationExpiry) : undefined,
         insuranceExpiry: data.insuranceExpiry ? new Date(data.insuranceExpiry) : undefined,
         notes: data.notes,
+        vin: data.vin || null,
+        fuelType: data.fuelType || null,
+        engineNo: data.engineNo || null,
+        chassisNo: data.chassisNo || null,
+        make: data.make || null,
+        model: data.model || null,
+        year: data.year ?? null,
       },
     });
     await this.audit.log({
@@ -141,6 +153,8 @@ export class FleetService {
   async updateVehicle(id: string, data: {
     brandModel?: string; capacity?: number; driverId?: string | null; status?: string;
     registrationExpiry?: string; insuranceExpiry?: string; notes?: string; currentMileage?: number;
+    vin?: string | null; fuelType?: string | null; engineNo?: string | null; chassisNo?: string | null;
+    make?: string | null; model?: string | null; year?: number | null;
   }, actor: Actor) {
     const old = await this.prisma.vehicle.findUnique({ where: { id }, include: { driver: { select: { name: true } } } });
     if (!old) throw new NotFoundException('Vehicle not found');
@@ -164,6 +178,14 @@ export class FleetService {
         insuranceExpiry: data.insuranceExpiry ? new Date(data.insuranceExpiry) : undefined,
         notes: data.notes,
         currentMileage: data.currentMileage,
+        // Tier 1: null clears the field, undefined leaves it unchanged ("" treated as clear)
+        ...(data.vin === undefined ? {} : { vin: data.vin || null }),
+        ...(data.fuelType === undefined ? {} : { fuelType: data.fuelType || null }),
+        ...(data.engineNo === undefined ? {} : { engineNo: data.engineNo || null }),
+        ...(data.chassisNo === undefined ? {} : { chassisNo: data.chassisNo || null }),
+        ...(data.make === undefined ? {} : { make: data.make || null }),
+        ...(data.model === undefined ? {} : { model: data.model || null }),
+        ...(data.year === undefined ? {} : { year: data.year }),
       },
     });
     await this.audit.log({
