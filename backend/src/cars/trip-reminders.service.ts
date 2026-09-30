@@ -284,6 +284,64 @@ export class TripRemindersService {
   }
 
   /**
+   * Expire forgotten requests: a car request whose window ended MORE than 24h
+   * ago and that never got a vehicle (or never got approved) can no longer
+   * happen — the rider forgot to cancel. Close it CANCELLED with an audit
+   * trail and tell the requester, so Administration's waiting lists only ever
+   * contain trips that can still be served. Assigned/STARTED rides are never
+   * touched (those close via Back-at-Office / the trip form).
+   */
+  @Cron('0 0 7 * * *') // daily 07:00 — clear yesterday's leftovers before the day starts
+  async expireStaleRequests() {
+    try {
+      const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
+      const stale = await this.prisma.requestDocument.findMany({
+        where: {
+          docType: 'CAR_REQUEST',
+          status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED'] as never },
+          carRequest: { endDate: { lt: cutoff } },
+        },
+        select: { id: true, docNumber: true, status: true, requesterId: true },
+        take: 100,
+        orderBy: { updatedAt: 'asc' },
+      });
+      let expired = 0;
+      for (const r of stale) {
+        // an APPROVED request with a LIVE assignment belongs to the Back-at-Office
+        // flow, not this one — skip it (defensive re-check inside the loop)
+        if (r.status === 'APPROVED') {
+          const live = await this.prisma.carAssignment.findFirst({ where: { requestId: r.id, releasedAt: null }, select: { id: true } });
+          if (live) continue;
+        }
+        await this.prisma.$transaction([
+          this.prisma.requestDocument.update({ where: { id: r.id }, data: { status: 'CANCELLED' } }),
+          this.prisma.carRequest.update({ where: { requestId: r.id }, data: { status: 'CANCELLED' } }),
+        ]);
+        await this.prisma.auditLog.create({
+          data: { action: 'REQUEST_AUTO_EXPIRED', module: 'CARS', recordId: r.id, newValue: { reason: 'Window ended >24h ago without approval/assignment — auto-expired', wasStatus: r.status } },
+        }).catch(() => undefined);
+        await this.prisma.notification.create({
+          data: {
+            userId: r.requesterId,
+            type: 'CANCELLED' as never,
+            title: `⌛ Request expired — ${r.docNumber}`,
+            body: 'The trip window passed without the request being used, so it was closed automatically. Submit a new request if you still need the car.',
+            link: `/requests/${r.id}`,
+            requestId: r.id,
+          },
+        }).catch(() => undefined);
+        await this.telegram
+          .mirrorToUser(r.requesterId, `⌛ Request expired — ${r.docNumber}`, 'The trip window passed without the request being used, so it was closed automatically. /car နဲ့ အသစ်ပြန်တောင်းနိုင်ပါတယ်။', `/requests/${r.id}`)
+          .catch(() => undefined);
+        expired++;
+      }
+      if (expired > 0) this.logger.log(`auto-expired ${expired} stale car request(s) (window ended >24h ago)`);
+    } catch (e) {
+      this.logger.warn(`expireStaleRequests failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
    * 17:30 Yangon day-end digest for Administration: every car assignment that
    * ended its window today without a "🏁 Back at Office" tap, split into
    * auto-closed (janitor completed them) vs mileage-open (trip STARTED —

@@ -897,13 +897,16 @@ export class CarsService {
    * Administration queue: car requests that are APPROVED but still have no vehicle
    * assigned (carRequest.vehicleId is cleared on release too, so re-released
    * requests reappear here automatically).
+   * Requests whose window ended >24h ago are HIDDEN — the 07:00 cron expires
+   * them shortly after; serving them would book a car for a ride that cannot
+   * happen (the rider forgot to cancel).
    */
   async listApprovedUnassigned() {
     return this.prisma.requestDocument.findMany({
       where: {
         docType: 'CAR_REQUEST',
         status: 'APPROVED',
-        carRequest: { vehicleId: null },
+        carRequest: { vehicleId: null, endDate: { gt: new Date(Date.now() - 24 * 3600 * 1000) } },
       },
       orderBy: { updatedAt: 'desc' },
       include: {

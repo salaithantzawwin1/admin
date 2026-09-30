@@ -109,6 +109,13 @@ export class TelegramCarActionsService {
         await this.telegram.sendRaw(chatId, `⚠️ ${escapeHtml(docNumber)} is ${request.status} — only APPROVED requests can be assigned.`);
         return true;
       }
+      // window already long gone → the trip can no longer happen; the 07:00 cron
+      // will expire it — refuse instead of booking a car for a forgotten request
+      const crWin = await this.prisma.carRequest.findUnique({ where: { requestId: request.id }, select: { endDate: true } });
+      if (crWin?.endDate && new Date(crWin.endDate).getTime() < Date.now() - 24 * 3600 * 1000) {
+        await this.telegram.sendRaw(chatId, `⌛ ${escapeHtml(docNumber)} — the trip window ended more than 24h ago. It will be auto-expired; ask the requester to submit a new /car request if still needed.`);
+        return true;
+      }
       await this.offerAssignVehicle(request.id, chatId);
     } catch (e) {
       this.logger.warn(`/assign failed: ${(e as Error).message}`);
@@ -243,7 +250,8 @@ export class TelegramCarActionsService {
   /** List approved-unassigned car requests with ready-to-tap /assign commands. */
   private async sendAssignQueue(chatId: string) {
     const rows = await this.prisma.requestDocument.findMany({
-      where: { docType: 'CAR_REQUEST', status: 'APPROVED', carRequest: { vehicleId: null } },
+      // expired windows (>24h past) are hidden — the 07:00 cron expires them; serving a forgotten request would book a dead trip
+      where: { docType: 'CAR_REQUEST', status: 'APPROVED', carRequest: { vehicleId: null, endDate: { gt: new Date(Date.now() - 24 * 3600 * 1000) } } },
       orderBy: { updatedAt: 'desc' },
       take: 10,
       select: {

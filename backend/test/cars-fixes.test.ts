@@ -424,6 +424,47 @@ async function main() {
     assert.ok(w.request.carRequest.endDate.lt instanceof Date, 'only windows already ended are targeted');
   });
 
+  // ------------------------------------------------- 8) expireStaleRequests + picker guards
+  await test('expireStaleRequests: unassigned APPROVED/PENDING past window → CANCELLED + audit + notice; live assignment skipped', async () => {
+    const rows = [
+      { id: 'r-old-unassigned', docNumber: 'CAR-202609-0100', status: 'APPROVED', requesterId: 'u1' },
+      { id: 'r-old-pending', docNumber: 'CAR-202609-0101', status: 'PENDING_APPROVAL', requesterId: 'u2' },
+      { id: 'r-live', docNumber: 'CAR-202609-0102', status: 'APPROVED', requesterId: 'u3' }, // has a live assignment → skipped
+    ];
+    const ops: Array<[string, any]> = [];
+    const prismaExp: any = {
+      requestDocument: {
+        findMany: async () => rows,
+        update: async (p: any) => { ops.push(['requestDocument.update', p]); return {}; },
+      },
+      carRequest: { update: async (p: any) => { ops.push(['carRequest.update', p]); return {}; } },
+      carAssignment: { findFirst: async ({ where }: any) => (where.requestId === 'r-live' ? { id: 'a-live' } : null) },
+      auditLog: { create: async (p: any) => { ops.push(['auditLog.create', p.data]); return {}; } },
+      notification: { create: async (p: any) => { ops.push(['notification.create', p.data]); return {}; } },
+      $transaction: async (list: any[]) => { for (const op of list) await op; },
+    };
+    const svcExp: any = new TripRemindersService(
+      prismaExp,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+    await svcExp.expireStaleRequests();
+    const cancelledDocs = ops.filter((o) => o[0] === 'requestDocument.update' && o[1].data.status === 'CANCELLED').map((o) => o[1].where.id);
+    assert.deepStrictEqual(cancelledDocs.sort(), ['r-old-pending', 'r-old-unassigned'], 'unassigned past-window docs must be CANCELLED; the live-assigned one must NOT');
+    assert.ok(ops.some((o) => o[0] === 'auditLog.create' && o[1].action === 'REQUEST_AUTO_EXPIRED'), 'REQUEST_AUTO_EXPIRED audit must be written');
+    assert.strictEqual(ops.filter((o) => o[0] === 'notification.create').length, 2, 'each expired requester gets a bell notice');
+  });
+
+  await test('listApprovedUnassigned: hides requests whose window ended >24h ago', async () => {
+    const captured: any[] = [];
+    const prismaQ: any = { requestDocument: { findMany: async (args: any) => { captured.push(args); return []; } } };
+    const svcQ: any = new CarsService(prismaQ, {} as any, {} as any, {} as any, {} as any, {} as any);
+    await svcQ.listApprovedUnassigned();
+    const gt = captured[0].where.carRequest.endDate.gt as Date;
+    assert.ok(gt instanceof Date && Math.abs(Date.now() - gt.getTime() - 24 * 3600 * 1000) < 60_000, 'queue filter must exclude windows ended >24h ago');
+  });
+
   // ------------------------------------------------------------------ summary
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

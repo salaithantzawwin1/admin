@@ -68,7 +68,7 @@ const prisma: any = {
       docs.filter((d) => d.docType === 'CAR_REQUEST' && d.status === 'APPROVED' && d.carRequest?.vehicleId === null),
   },
   driverAbsence: { findMany: async () => [] }, // no planned absences in the base fixture
-  carRequest: { findMany: async () => [] }, // no busy vehicles in-window
+  carRequest: { findMany: async () => [], findUnique: async () => null }, // no busy vehicles in-window; null endDate → expired-window pre-check skips
   vehicle: {
     findMany: async ({ where, take }: any) => {
       const notIn: string[] = where?.id?.notIn ?? [];
