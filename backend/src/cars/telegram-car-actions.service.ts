@@ -847,8 +847,14 @@ export class TelegramCarActionsService {
     const draft: Record<string, string | number | undefined> = {};
     if (rest) draft.destination = rest;
     else draft.choose = 1; // chooser stage — see renderChooserCard/carKeyboard
+    const hadConversation = this.pendingCarRequests.has(chatId);
     this.pendingCarRequests.set(chatId, { draft, at: Date.now() });
     this.sweepCarDrafts();
+    // a brand-new /car (no conversation open) must post FRESH at the bottom —
+    // editing the tracked card of an earlier finished/abandoned conversation
+    // would repaint a message far up the chat (often "message is not modified",
+    // i.e. NO visible change anywhere) and look like the bot ignoring the request
+    if (!hadConversation) this.carCardMessages.delete(chatId);
     await this.sendRawCard(chatId, this.renderCarCard(chatId));
   }
 
@@ -862,11 +868,13 @@ export class TelegramCarActionsService {
     if (!entry) return;
     if (Date.now() - entry.at > TelegramCarActionsService.CAR_TTL_MS) {
       this.pendingCarRequests.delete(chatId);
+      this.carCardMessages.delete(chatId); // conversation over — next /car posts a FRESH card
       await this.sendRawCard(chatId, '⌛ ကားတောင်းခံမှု form က အချိန်ကုန်သွားပါပြီ — /car ကို ပြန်ရိုက်ပါ။ (The form expired — send /car again.)');
       return;
     }
     if (text === '/cancel') {
       this.pendingCarRequests.delete(chatId);
+      this.carCardMessages.delete(chatId); // conversation over — next /car posts a FRESH card
       await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
       return;
     }
@@ -1304,6 +1312,10 @@ export class TelegramCarActionsService {
       );
       await this.workflow.submit(created.id, actor as never);
       this.pendingCarRequests.delete(chatId);
+      // the conversation is OVER — forget the card id too, or the NEXT /car
+      // would silently EDIT this scroll-away message instead of posting a fresh
+      // card at the bottom (looked like the bot ignoring the second request)
+      this.carCardMessages.delete(chatId);
       await this.telegram.answer(callbackId, 'တောင်းခံလိုက်ပါပြီ');
       await this.telegram.sendRaw(
         chatId,
@@ -1319,6 +1331,7 @@ export class TelegramCarActionsService {
 
   private async actCarCancel(chatId: string, callbackId: string): Promise<void> {
     this.pendingCarRequests.delete(chatId);
+    this.carCardMessages.delete(chatId); // conversation over — next /car posts a FRESH card
     await this.telegram.answer(callbackId, 'ပယ်ဖျက်လိုက်ပါသည်');
     await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
   }

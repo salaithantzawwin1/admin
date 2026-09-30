@@ -452,6 +452,24 @@ async function regressionTests() {
   check(!(d19a.destination === '/car'), 'command text never lands as the destination');
   await svc.handleCarText('/cancel', CHAT);
 
+  // 19a-2. SECOND /car AFTER a conversation ENDED posts a FRESH card at the
+  // bottom — editing the ended conversation's tracked message would repaint a
+  // card far up the chat (or hit "message is not modified" = no visible change),
+  // which looked like the bot ignoring the second request (CAR-202609-0015 case).
+  // Production routes bare '/car' through handleCarCommand — drive it the same way.
+  await openFullForm();
+  const trackedAfterOpen = (svc as any).carCardMessages.get(CHAT);
+  check(!!trackedAfterOpen, 'form card message is tracked while the conversation is open');
+  await svc.handleCarText('/cancel', CHAT);
+  apiLog.length = 0;
+  await svc.handleCarCommand('/car', CHAT);
+  const secondRound = apiLog.filter((l) => l.method === 'editMessageText');
+  const freshRound = apiLog.filter((l) => l.method === 'sendMessage');
+  check(secondRound.length === 0, 'second-round /car does NOT edit any old message');
+  check(freshRound.length > 0, 'second-round /car SENDS a fresh card at the bottom');
+  check(freshRound.some((l) => String(l.payload?.text ?? '').includes('ဘယ်ဟာ လိုချင်လဲ')), 'fresh card is the chooser (new conversation)');
+  await svc.handleCarText('/cancel', CHAT);
+
   // 19b. submit pre-flight: no active CAR_REQUEST workflow → friendly error,
   // NO document created, conversation stays open for a retry.
   const realWf = prisma.approvalWorkflow.findFirst;
