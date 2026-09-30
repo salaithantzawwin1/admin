@@ -1189,8 +1189,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `${lines.join('\n')}\n🗺 <a href="${mapsUrl}">Open in Maps</a>`;
   }
 
-  /** Push the assignment message (all three stage buttons) to the driver's chat. */
-  async sendAssignment(assignmentId: string) {
+  /** Push the assignment message (all three stage buttons) to the driver's chat.
+   *  editInPlace=true repaints the already-tracked card instead of posting a duplicate. */
+  async sendAssignment(assignmentId: string, editInPlace = false) {
     const a = await this.prisma.carAssignment.findUnique({
       where: { id: assignmentId },
       include: {
@@ -1213,12 +1214,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const { token, enabled } = await this.config();
     if (!token || !enabled) return;
 
+    const keyboard = this.assignmentKeyboard(a, a.id, { sharedTripId: cr.sharedTripId ?? null });
+    if (editInPlace && a.telegramMessageId) {
+      const edited = await this.editMessage(a.driver.telegramChatId, Number(a.telegramMessageId), this.assignmentBody(a, { noted: a.driverNotedAt, arrived: a.driverArrivedAt, back: a.driverBackAtOfficeAt }, sharedRiders), keyboard).catch(() => false);
+      if (edited) return; // card repainted in place — no duplicate posted
+    }
     const message = await this.call<{ message_id: number }>('sendMessage', {
       chat_id: a.driver.telegramChatId,
       text: this.assignmentBody(a, undefined, sharedRiders),
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      reply_markup: this.assignmentKeyboard(a, a.id, { sharedTripId: cr.sharedTripId ?? null }),
+      reply_markup: keyboard,
     });
     if (message?.message_id) {
       await this.prisma.carAssignment.update({
@@ -1308,7 +1314,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         orderBy: { docNumber: 'asc' },
       });
       for (const m of members) {
-        if (m.carAssignment?.id) await this.sendAssignment(m.carAssignment.id).catch(() => undefined);
+        const id = m.carAssignment?.id;
+        if (!id) continue;
+        // prefer an IN-PLACE edit of the card the driver already has — sendAssignment
+        // would post a DUPLICATE card every time the group changes (two joins = three
+        // identical cards in the driver's chat)
+        const a = await this.prisma.carAssignment.findUnique({ where: { id }, select: { telegramMessageId: true } }).catch(() => null);
+        if (a?.telegramMessageId) {
+          await this.sendAssignment(id, true).catch(() => undefined);
+        } else {
+          await this.sendAssignment(id).catch(() => undefined);
+        }
       }
     } catch {
       /* repaint is a nicety — must never break assign/ack flows */
@@ -1339,7 +1355,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const ids = [...new Set(members.map((m) => m.carAssignment?.id).filter((v): v is string => !!v))];
     if (!ids.includes(assignmentId)) ids.push(assignmentId);
 
-    await this.freeVehicle(assignmentId); // one car, one driver — freeing once is enough
+    // mileage safety: if ANY member's trip was STARTED (odometer open), keep the
+    // car+driver reserved — Administration must close the mileage via the trip
+    // form first (same guard as the single Back-at-Office auto-complete)
+    let anyStarted = false;
+    for (const id of ids) {
+      const t = await this.prisma.carAssignment.findUnique({ where: { id }, select: { trip: { select: { status: true } } } }).catch(() => null);
+      if ((t as { trip?: { status?: string } } | null)?.trip?.status === 'STARTED') anyStarted = true;
+    }
+    if (!anyStarted) {
+      await this.freeVehicle(assignmentId); // one car, one driver — freeing once is enough
+    }
     const now = new Date();
     const results: Array<{ requestId: string; done: boolean }> = [];
     for (const id of ids) {

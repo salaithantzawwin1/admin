@@ -362,12 +362,12 @@ export class TripRemindersService {
           driver: { select: { name: true } },
           vehicle: { select: { vehicleNo: true } },
           trip: { select: { status: true } },
-          request: { select: { docNumber: true, carRequest: { select: { endDate: true } } } },
+          request: { select: { docNumber: true, status: true, carRequest: { select: { endDate: true } } } },
         },
       });
       const noBack = assignments.filter(
         (a) => !a.driverBackAtOfficeAt && a.request.carRequest && new Date(a.request.carRequest.endDate) <= now &&
-          (!a.trip || a.trip.status === 'NOT_STARTED') && ['APPROVED', 'COMPLETED'].includes((a.request as { status?: string }).status ?? ''),
+          (!a.trip || a.trip.status === 'NOT_STARTED') && ['APPROVED', 'COMPLETED'].includes(a.request.status),
       );
       const mileageOpen = assignments.filter((a) => a.trip?.status === 'STARTED');
       if (noBack.length === 0 && mileageOpen.length === 0) return;
