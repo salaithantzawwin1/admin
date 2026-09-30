@@ -4,7 +4,7 @@ import { api } from '../api';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
-import { Badge, Button, Empty, Input, PageHeader } from '../components/ui';
+import { Badge, Button, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 
 interface AdConfig {
   url: string;
@@ -417,13 +417,12 @@ export default function Settings() {
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">Default role for new AD users</label>
-            <select
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+            <Select
               value={cfg.defaultRole}
               onChange={(e) => setCfg({ ...cfg, defaultRole: e.target.value })}
             >
               {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
+            </Select>
           </div>
         </div>
 
@@ -609,8 +608,8 @@ export default function Settings() {
                     Paste one holiday per line — <code className="bg-gray-100 rounded px-1">YYYY-MM-DD Name</code>
                     {' '}(comma, semicolon or tab also work). Lines that are not in {holYear} or duplicate existing dates are skipped.
                   </p>
-                  <textarea
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+                  <Textarea
+                    className="font-mono"
                     rows={8}
                     placeholder={`2026-10-25 Thadingyut holiday\n2026-10-26 Thadingyut holiday\n2026-11-11 Full Moon Day of Tazaungmone`}
                     value={bulkHol}
