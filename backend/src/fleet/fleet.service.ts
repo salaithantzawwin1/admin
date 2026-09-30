@@ -176,31 +176,47 @@ export class FleetService {
   }
 
   /**
-   * Delete a vehicle. Blocked when assignment/expense/request history
-   * exists (FK RESTRICT) — suggest OUT_OF_SERVICE instead so history
-   * keeps its vehicle reference.
+   * Delete a vehicle.
+   * Real usage (trip history, expenses, live assignments) still BLOCKS deletion
+   * — suggest OUT_OF_SERVICE so history keeps its vehicle reference.
+   * Leftovers from terminal workflows are cleaned up in the same transaction:
+   * assignments whose request ended CANCELLED/REJECTED never became a ride
+   * (e.g. CAR-202609-0007 on YGN-5678 — assigned then cancelled 19 min later),
+   * so they are audit-log noise, not history worth keeping.
    */
   async deleteVehicle(id: string, actor: Actor) {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
-      include: { _count: { select: { assignments: true, expenses: true, carRequests: true } } },
+      include: {
+        _count: { select: { assignments: true, expenses: true, carRequests: true } },
+        assignments: { select: { id: true, requestId: true, request: { select: { status: true } } } },
+      },
     });
     if (!vehicle) throw new NotFoundException('Vehicle not found');
 
-    const used = vehicle._count.assignments + vehicle._count.expenses + vehicle._count.carRequests;
-    if (used > 0) {
+    const expenses = vehicle._count.expenses;
+    const live = vehicle.assignments.filter((a) => !['CANCELLED', 'REJECTED'].includes(a.request.status));
+    const deadAssignmentIds = vehicle.assignments.filter((a) => ['CANCELLED', 'REJECTED'].includes(a.request.status)).map((a) => a.id);
+    if (expenses > 0 || live.length > 0 || vehicle._count.carRequests > 0) {
+      const used = expenses + live.length + vehicle._count.carRequests;
       throw new BadRequestException(
         `Cannot delete ${vehicle.vehicleNo}: it has ${used} related record(s) (assignments/expenses/requests). Set it to OUT_OF_SERVICE instead to keep history intact.`,
       );
     }
 
-    await this.prisma.vehicle.delete({ where: { id } });
+    await this.prisma.$transaction([
+      // drop only the CANCELLED/REJECTED-only leftovers, then the vehicle itself
+      ...(deadAssignmentIds.length
+        ? [this.prisma.carAssignment.deleteMany({ where: { id: { in: deadAssignmentIds } } })]
+        : []),
+      this.prisma.vehicle.delete({ where: { id } }),
+    ]);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'VEHICLE_DELETED', module: 'FLEET', recordId: id,
-      oldValue: { vehicleNo: vehicle.vehicleNo },
+      oldValue: { vehicleNo: vehicle.vehicleNo, droppedCancelledAssignments: deadAssignmentIds.length },
     });
-    return { ok: true };
+    return { ok: true, droppedCancelledAssignments: deadAssignmentIds.length };
   }
 
   // ---------- drivers ----------
@@ -400,31 +416,43 @@ export class FleetService {
   }
 
   /**
-   * Delete a driver. Blocked when trip/assignment history exists —
-   * suggest INACTIVE instead. Vehicle links (vehicles.driverId) are
-   * cleared automatically by ON DELETE SET NULL.
+   * Delete a driver.
+   * Real trip history still BLOCKS deletion — suggest INACTIVE instead.
+   * Vehicle links (vehicles.driverId) are cleared automatically by ON DELETE
+   * SET NULL. Assignments whose request ended CANCELLED/REJECTED never became
+   * a ride and are cleaned up in the same transaction (same rule as vehicles).
    */
   async deleteDriver(id: string, actor: Actor) {
     const driver = await this.prisma.driver.findUnique({
       where: { id },
-      include: { _count: { select: { carRequests: true, carAssignments: true } } },
+      include: {
+        _count: { select: { carRequests: true, carAssignments: true, absences: true } },
+        carAssignments: { select: { id: true, request: { select: { status: true } } } },
+      },
     });
     if (!driver) throw new NotFoundException('Driver not found');
 
-    const used = driver._count.carRequests + driver._count.carAssignments;
-    if (used > 0) {
+    const live = driver.carAssignments.filter((a) => !['CANCELLED', 'REJECTED'].includes(a.request.status));
+    const deadAssignmentIds = driver.carAssignments.filter((a) => ['CANCELLED', 'REJECTED'].includes(a.request.status)).map((a) => a.id);
+    if (live.length > 0 || driver._count.carRequests > 0 || driver._count.absences > 0) {
+      const used = live.length + driver._count.carRequests + driver._count.absences;
       throw new BadRequestException(
         `Cannot delete ${driver.name}: ${used} related trip record(s) exist. Set status to INACTIVE instead to keep history intact.`,
       );
     }
 
-    await this.prisma.driver.delete({ where: { id } });
+    await this.prisma.$transaction([
+      ...(deadAssignmentIds.length
+        ? [this.prisma.carAssignment.deleteMany({ where: { id: { in: deadAssignmentIds } } })]
+        : []),
+      this.prisma.driver.delete({ where: { id } }),
+    ]);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'DRIVER_DELETED', module: 'FLEET', recordId: id,
-      oldValue: { name: driver.name },
+      oldValue: { name: driver.name, droppedCancelledAssignments: deadAssignmentIds.length },
     });
-    return { ok: true };
+    return { ok: true, droppedCancelledAssignments: deadAssignmentIds.length };
   }
 
   /** Vehicle 360: assignments + trips + expenses + upcoming bookings. */
