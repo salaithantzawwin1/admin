@@ -53,7 +53,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       {...props}
-      className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
+      className={`w-full h-10 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
     />
   );
 }
@@ -71,7 +71,7 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
       {...props}
-      className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
+      className={`w-full h-10 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
     />
   );
 }
