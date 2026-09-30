@@ -174,10 +174,16 @@ export class TripRemindersService {
   }
 
   /**
-   * Auto-release: assignments whose request window ended with no recorded
-   * trip activity keep the vehicle IN_USE forever. Mark those done so the
-   * fleet availability view stays truthful. Vehicles that are genuinely on
-   * the road past the window (trip STARTED) are left alone.
+   * Auto-close: assignments whose request window ended with no recorded trip
+   * activity keep the vehicle IN_USE forever. Two outcomes, chosen by whether
+   * the driver ever acknowledged the ride:
+   *  • Noted/Ready tapped → the trip HAPPENED — close it COMPLETED (the old
+   *    code flipped these back to APPROVED, so finished rides reappeared in
+   *    the "waiting for vehicle" list a day later and stayed there).
+   *  • never acknowledged → the ride plausibly never happened — release the
+   *    vehicle back to the pool and re-await assignment (APPROVED).
+   * Both paths free the DRIVER too (the old path left them ON_TRIP forever).
+   * Trips genuinely on the road past the window (trip STARTED) are left alone.
    */
   @Cron('0 */30 * * * *')
   async releaseExpired() {
@@ -192,19 +198,56 @@ export class TripRemindersService {
       },
       include: {
         vehicle: { select: { vehicleNo: true } },
-        request: { select: { docNumber: true, carRequest: { select: { endDate: true } } } },
+        request: { select: { docNumber: true, requesterId: true, carRequest: { select: { endDate: true } } } },
       },
     });
 
     for (const a of stuck) {
-      await this.prisma.$transaction([
-        this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now } }),
-        this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+      const freedDriver = a.driverId
+        ? [this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } })]
+        : [];
+      if (a.driverNotedAt || a.driverArrivedAt) {
+        // driver confirmed the ride → complete it, do NOT re-await a car
+        await this.prisma.$transaction([
+          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now } }),
+          this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+          ...freedDriver,
+          this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
+          this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
+        ]);
+        // same audit + requester notice the Back-at-Office path writes
+        await this.prisma.auditLog.create({
+          data: {
+            action: 'REQUEST_AUTO_COMPLETED', module: 'CARS', recordId: a.requestId,
+            newValue: { reason: 'Window ended without "Back at Office" — auto-closed', auto: true },
+          },
+        }).catch(() => undefined);
+        await this.prisma.notification.create({
+          data: {
+            userId: a.request.requesterId,
+            type: 'TRIP_COMPLETED' as never,
+            title: `✅ Trip completed — ${a.request.docNumber}`,
+            body: 'The trip window ended, so the request was closed automatically.',
+            link: `/requests/${a.requestId}`,
+            requestId: a.requestId,
+          },
+        }).catch(() => undefined);
+        // same Telegram mirror the Back-at-Office completion sends (best-effort)
+        await this.telegram
+          .mirrorToUser(a.request.requesterId, `✅ Trip completed — ${a.request.docNumber}`, 'The trip window ended, so the request was closed automatically.', `/requests/${a.requestId}`)
+          .catch(() => undefined);
+        console.log(`[cars] auto-COMPLETED ${a.request.docNumber} (driver acknowledged, window over)`);
+      } else {
         // mirror the release on the car row and the base document (back to APPROVED,
         // awaiting a new assignment)
-        this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } }),
-        this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'APPROVED' } }),
-      ]);
+        await this.prisma.$transaction([
+          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now } }),
+          this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+          ...freedDriver,
+          this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } }),
+          this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'APPROVED' } }),
+        ]);
+      }
     }
     if (stuck.length > 0) {
       console.log(`[cars] auto-released ${stuck.length} expired assignment(s): ${stuck.map((a) => a.request.docNumber).join(', ')}`);
