@@ -1356,7 +1356,7 @@ export class TelegramCarActionsService {
       '────────────────',
       draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '1️⃣ သွားမယ့်နေရာ — ဒီ chat မှာ ရေးပါ (ဥပမာ မန္တလေး)',
       draft.start ? (startOk ? `✅ ${startLabel}: ${escapeHtml(startRaw)}${draft.returnTrip === 1 ? ' (ဒီနေ့)' : ''}` : bad(startLabel)) : `2️⃣ ${startLabel} — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)`,
-      `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက် 17:00 အလိုအလျောက်)'}`,
+      `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက်ချိန် မထည့်ရင် 17:00 — ခန့်မှန်းသာ၊ ကားသည် Back at Office နှိပ်တာနဲ့ အမှန်ဖြစ်မည်)'}`,
       ...(returnEta ? [returnEta] : []),
     ];
     const optional = [

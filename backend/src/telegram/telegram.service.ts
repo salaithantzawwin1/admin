@@ -1174,14 +1174,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? [``, `<b>🧑‍🤝‍🧑 Shared trip</b>`, ...riders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
         : []),
     ].filter((l) => l !== undefined);
+    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${pickup} to ${cr.destination}`)}`;
+    // Burmese guidance — the #1 operational failure is a driver who never taps
+    // "🏁 Back at Office" (the car then blocks until the auto-close cron fires)
+    const guide = '<i>📌 Trip ပြီးရင် ရုံးပြန်ရောက်ချိန်မှာ "🏁 Back at Office" နှိပ်ပါ — ကား ချက်ချင်း လွတ်ပြီး trip ပိတ်မည်။ မနှိပ်ဘဲထားခဲ့ရင် window ကုန်ပြီး မကြာမီ အလိုအလျောက် ပိတ်သွားမည်။</i>';
     if (stages) {
       if (stages.noted) lines.push(`✓ Noted · ${fmtTime(stages.noted)}`);
       if (stages.arrived) lines.push(`🚦 Car ready · ${fmtTime(stages.arrived)}`);
       if (stages.back) lines.push(`🏁 Back at office · ${fmtTime(stages.back)}`);
+      lines.push('', guide);
     } else {
-      lines.push(`Tap "✓ Noted" to acknowledge the route.`);
+      lines.push(`Tap "✓ Noted" to acknowledge the route.`, '', guide);
     }
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${pickup} to ${cr.destination}`)}`;
     return `${lines.join('\n')}\n🗺 <a href="${mapsUrl}">Open in Maps</a>`;
   }
 

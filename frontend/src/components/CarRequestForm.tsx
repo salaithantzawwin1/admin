@@ -115,13 +115,14 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">
-            End {needsEnd ? '* (date prefilled — pick the hour)' : '(optional — defaults to 5:00 PM)'}
+            End {needsEnd ? '* (date prefilled — pick the hour)' : '(optional estimate — defaults to 5:00 PM; Back at Office overrides)'}
           </label>
           <Input
             type="datetime-local"
             value={form.endDate}
             onChange={(e) => setForm({ ...form, endDate: e.target.value })}
             min={form.startDate || undefined}
+            title="Estimate only — if the trip finishes early, the driver's Back at Office frees the car immediately; if you omit this, 5:00 PM is assumed"
           />
         </div>
         <Select value={form.timeSlot} onChange={(e) => setForm({ ...form, timeSlot: e.target.value })}>
