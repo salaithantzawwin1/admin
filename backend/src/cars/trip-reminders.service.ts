@@ -252,6 +252,90 @@ export class TripRemindersService {
     if (stuck.length > 0) {
       console.log(`[cars] auto-released ${stuck.length} expired assignment(s): ${stuck.map((a) => a.request.docNumber).join(', ')}`);
     }
+    await this.freeOrphanedDrivers();
+  }
+
+  /**
+   * Self-heal: drivers stuck ON_TRIP with no live IN_PROGRESS ride (leftovers
+   * from the pre-fix cancel/auto-release paths, or manual edits). Available
+   * again — a driver marked busy with nothing to drive is invisible to the
+   * assign pickers. Runs at the tail of releaseExpired, never throws.
+   */
+  private async freeOrphanedDrivers() {
+    try {
+      const now = new Date();
+      const stuckDrivers = await this.prisma.driver.findMany({
+        where: {
+          status: 'ON_TRIP',
+          NOT: { carAssignments: { some: { releasedAt: null, request: { status: 'IN_PROGRESS' } } } },
+        },
+        select: { id: true, name: true },
+      });
+      for (const d of stuckDrivers) {
+        await this.prisma.driver.update({ where: { id: d.id }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        await this.prisma.auditLog.create({
+          data: { action: 'DRIVER_AUTO_FREED', module: 'CARS', recordId: d.id, newValue: { reason: 'No active assignment — auto-freed by janitor cron' } },
+        }).catch(() => undefined);
+        this.logger.log(`freed orphaned ON_TRIP driver ${d.name}`);
+      }
+    } catch (e) {
+      this.logger.warn(`freeOrphanedDrivers failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * 17:30 Yangon day-end digest for Administration: every car assignment that
+   * ended its window today without a "🏁 Back at Office" tap, split into
+   * auto-closed (janitor completed them) vs mileage-open (trip STARTED —
+   * awaiting Administration's mileage close-out). One message per cars.assign
+   * holder with a Telegram chat; silent when there is nothing to report.
+   */
+  @Cron('0 30 17 * * *')
+  async dayEndDigest() {
+    try {
+      const now = new Date();
+      const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 17, 30)); // yesterday 17:30 UTC ≈ today 00:00 Yangon
+      const assignments = await this.prisma.carAssignment.findMany({
+        where: {
+          request: { carRequest: { endDate: { gte: dayStart, lte: now } } },
+          OR: [{ driverBackAtOfficeAt: null }, { driverBackAtOfficeAt: { gte: dayStart } }],
+        },
+        include: {
+          driver: { select: { name: true } },
+          vehicle: { select: { vehicleNo: true } },
+          trip: { select: { status: true } },
+          request: { select: { docNumber: true, carRequest: { select: { endDate: true } } } },
+        },
+      });
+      const noBack = assignments.filter(
+        (a) => !a.driverBackAtOfficeAt && a.request.carRequest && new Date(a.request.carRequest.endDate) <= now &&
+          (!a.trip || a.trip.status === 'NOT_STARTED') && ['APPROVED', 'COMPLETED'].includes((a.request as { status?: string }).status ?? ''),
+      );
+      const mileageOpen = assignments.filter((a) => a.trip?.status === 'STARTED');
+      if (noBack.length === 0 && mileageOpen.length === 0) return;
+      const lines: string[] = ['📋 <b>Day-end — trips without "Back at Office"</b>'];
+      if (noBack.length > 0) {
+        lines.push('', '<b>🤖 Auto-closed (window ended, driver never tapped):</b>');
+        for (const a of noBack) lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.driver?.name ?? 'no driver')} · ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} · ended ${fmtYgn(a.request.carRequest!.endDate)}`);
+      }
+      if (mileageOpen.length > 0) {
+        lines.push('', '<b>🧮 Mileage open (trip STARTED — complete the trip form):</b>');
+        for (const a of mileageOpen) lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.driver?.name ?? '—')} · ${escapeHtml(a.vehicle?.vehicleNo ?? '—')}`);
+      }
+      lines.push('', '<i>Ask drivers to tap 🏁 Back at Office right when they return — the car frees instantly.</i>');
+      const text = lines.join('\n');
+      const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+      const admins = await this.prisma.user.findMany({
+        where: { id: { in: adminIds }, telegramChatId: { not: null } },
+        select: { telegramChatId: true },
+      });
+      for (const a of admins) {
+        if (a.telegramChatId) await this.telegram.sendRaw(a.telegramChatId, text).catch(() => undefined);
+      }
+      this.logger.log(`day-end digest sent to ${admins.length} admin(s): ${noBack.length} auto-closed, ${mileageOpen.length} mileage-open`);
+    } catch (e) {
+      this.logger.warn(`dayEndDigest failed: ${(e as Error).message}`);
+    }
   }
 
   /**
@@ -323,4 +407,9 @@ export class TripRemindersService {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** HH:MM in Yangon time for the digest lines. */
+function fmtYgn(d: Date): string {
+  return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Yangon' });
 }

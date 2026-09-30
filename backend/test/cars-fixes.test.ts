@@ -362,6 +362,68 @@ async function main() {
     assert.strictEqual(vehicleBusy.where.request.status, 'IN_PROGRESS');
   });
 
+  // ------------------------------------------------- 7) releaseExpired auto-close rules (729dc02)
+  const mkReleasePrisma = (rows: any[]) => {
+    const ops: Array<[string, any]> = [];
+    let capturedWhere: any = null;
+    const prisma: any = {
+      carAssignment: {
+        findMany: async ({ where }: any) => { capturedWhere = where; return rows; },
+        update: async (p: any) => { ops.push(['carAssignment.update', p.data]); return {}; },
+      },
+      vehicle: { update: async (p: any) => { ops.push(['vehicle.update', p.data]); return {}; } },
+      driver: { update: async (p: any) => { ops.push(['driver.update', p.data]); return {}; }, findMany: async () => [] },
+      carRequest: { update: async (p: any) => { ops.push(['carRequest.update', p.data]); return {}; } },
+      requestDocument: { update: async (p: any) => { ops.push(['requestDocument.update', p.data]); return {}; } },
+      auditLog: { create: async (p: any) => { ops.push(['auditLog.create', p.data]); return {}; } },
+      notification: { create: async (p: any) => { ops.push(['notification.create', p.data]); return {}; } },
+      $transaction: async (list: any[]) => { for (const op of list) await op; },
+    };
+    return { prisma, ops, where: () => capturedWhere };
+  };
+  const mkRow = (over: Record<string, unknown> = {}) => ({
+    id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1', releasedAt: null,
+    driverNotedAt: new Date(), driverArrivedAt: null, driverBackAtOfficeAt: null,
+    vehicle: { vehicleNo: 'V-1' },
+    request: { docNumber: 'CAR-202609-0999', requesterId: 'u1', carRequest: { endDate: new Date(Date.now() - 3600 * 1000) } },
+    ...over,
+  });
+  const mkRelSvc = (prisma: any) =>
+    new TripRemindersService(
+      prisma,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+
+  await test('releaseExpired: acknowledged expired trip → COMPLETED + audit + requester notice + driver freed', async () => {
+    const t = mkReleasePrisma([mkRow()]);
+    await mkRelSvc(t.prisma).releaseExpired();
+    assert.ok(t.ops.some((o) => o[0] === 'requestDocument.update' && o[1].status === 'COMPLETED'), 'base document must be COMPLETED');
+    assert.ok(t.ops.some((o) => o[0] === 'carRequest.update' && o[1].status === 'COMPLETED'), 'CarRequest mirror must be COMPLETED');
+    assert.ok(!t.ops.some((o) => o[0] === 'carRequest.update' && o[1].vehicleId === null), 'must NOT clear the vehicle link (the ride happened)');
+    assert.ok(t.ops.some((o) => o[0] === 'driver.update' && o[1].status === 'AVAILABLE'), 'driver must be freed');
+    assert.ok(t.ops.some((o) => o[0] === 'auditLog.create' && o[1].action === 'REQUEST_AUTO_COMPLETED'), 'REQUEST_AUTO_COMPLETED audit must be written');
+    assert.ok(t.ops.some((o) => o[0] === 'notification.create' && o[1].type === 'TRIP_COMPLETED'), 'requester must receive the completion notice');
+  });
+
+  await test('releaseExpired: unacknowledged expired trip → back to APPROVED, vehicle link cleared, driver freed', async () => {
+    const t = mkReleasePrisma([mkRow({ driverNotedAt: null })]);
+    await mkRelSvc(t.prisma).releaseExpired();
+    assert.ok(t.ops.some((o) => o[0] === 'requestDocument.update' && o[1].status === 'APPROVED'), 'base document must return to APPROVED');
+    assert.ok(t.ops.some((o) => o[0] === 'carRequest.update' && o[1].vehicleId === null && o[1].driverId === null && o[1].status === 'APPROVED'), 'vehicle/driver links must be cleared on the CarRequest row');
+    assert.ok(t.ops.some((o) => o[0] === 'driver.update' && o[1].status === 'AVAILABLE'), 'driver must be freed');
+    assert.ok(!t.ops.some((o) => o[0] === 'auditLog.create' && o[1].action === 'REQUEST_AUTO_COMPLETED'), 'no completion audit for a ride that never happened');
+  });
+
+  await test('releaseExpired: query only targets trips never started (STARTED untouched)', async () => {
+    const t = mkReleasePrisma([]);
+    await mkRelSvc(t.prisma).releaseExpired();
+    const w = t.where();
+    assert.deepStrictEqual(w.OR, [{ trip: null }, { trip: { status: 'NOT_STARTED' } }], 'STARTED trips must be excluded from the auto-close query');
+    assert.ok(w.request.carRequest.endDate.lt instanceof Date, 'only windows already ended are targeted');
+  });
+
   // ------------------------------------------------------------------ summary
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

@@ -784,14 +784,17 @@ export class CarsService {
         });
         if (others === 0) {
           await tx.vehicle.update({ where: { id: request.carRequest.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
-          if (request.carRequest.driverId) {
-            const otherTrips = await tx.carRequest.count({
-              where: { driverId: request.carRequest.driverId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
-            });
-            if (otherTrips === 0) {
-              await tx.driver.update({ where: { id: request.carRequest.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
-            }
-          }
+        }
+      }
+      // the driver is freed by DRIVER demand, not vehicle demand — nesting this
+      // inside the vehicle branch left drivers ON_TRIP forever when the vehicle
+      // still had other bookings (Lay Win / Naing Naing Tun stuck since 25/28 Sep)
+      if (request.carRequest?.driverId) {
+        const otherTrips = await tx.carRequest.count({
+          where: { driverId: request.carRequest.driverId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
+        });
+        if (otherTrips === 0) {
+          await tx.driver.update({ where: { id: request.carRequest.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
         }
       }
       // release the assignment row (if any) so its booking window no longer blocks others
