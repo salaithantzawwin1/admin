@@ -646,43 +646,6 @@ export default function Fleet() {
               <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
               <Input placeholder="Toyota Corolla" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Make</label>
-                <Input placeholder="Toyota" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Model</label>
-                <Input placeholder="Corolla" value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Year</label>
-                <Input type="number" min={1950} max={2100} placeholder="2020" value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                <Input placeholder="JTDKB20U577012345" maxLength={17} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Fuel</label>
-                <Select value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
-                  <option value="">— Fuel —</option>
-                  {FUEL_TYPES.map((f) => <option key={f} value={f}>{f}</option>)}
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Engine no.</label>
-                <Input value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Chassis no.</label>
-                <Input value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
-              </div>
-            </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Default driver</label>
@@ -692,6 +655,49 @@ export default function Fleet() {
                 </Select>
               </div>
             </div>
+            {/* Optional paperwork/spec data — collapsed so the quick add stays quick */}
+            <details className="rounded-lg border border-gray-200 px-3 py-2">
+              <summary className="cursor-pointer select-none text-sm text-gray-600 font-medium">Identification &amp; specs (optional)</summary>
+              <div className="space-y-3 pt-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Make</label>
+                    <Input placeholder="Toyota" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Model</label>
+                    <Input placeholder="Corolla" value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Year</label>
+                    <Input type="number" min={1950} max={2100} placeholder="2020" value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
+                    <Input placeholder="JTDKB20U577012345" maxLength={17} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Fuel</label>
+                    <Select value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
+                      <option value="">— Fuel —</option>
+                      {FUEL_TYPES.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Engine no.</label>
+                    <Input value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Chassis no.</label>
+                    <Input value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
+                  </div>
+                </div>
+              </div>
+            </details>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setShowV(false)}>Cancel</Button>
               <Button onClick={createVehicle} disabled={!vForm.vehicleNo || !vForm.brandModel || !vForm.vehicleType}>Add Vehicle</Button>
@@ -709,10 +715,9 @@ export default function Fleet() {
                 <Input value={vForm.vehicleNo} disabled title="Vehicle number cannot be changed" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Type</label>
-                <Select value={vForm.vehicleType} disabled>
-                  <option value="">— Type —</option>
-                  {types.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                <label className="block text-xs text-gray-500 mb-1">Status</label>
+                <Select value={vForm.status} onChange={(e) => setVForm({ ...vForm, status: e.target.value })}>
+                  {VEHICLE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </Select>
               </div>
             </div>
@@ -722,62 +727,72 @@ export default function Fleet() {
                 <Input value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Capacity</label>
-                <Input type="number" min={1} max={60} value={vForm.capacity} onChange={(e) => setVForm({ ...vForm, capacity: Number(e.target.value) })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Make</label>
-                <Input value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Model</label>
-                <Input value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Year</label>
-                <Input type="number" min={1950} max={2100} value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                <Input maxLength={17} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Fuel</label>
-                <Select value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
-                  <option value="">— Fuel —</option>
-                  {FUEL_TYPES.map((f) => <option key={f} value={f}>{f}</option>)}
-                </Select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Engine no.</label>
-                <Input value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Chassis no.</label>
-                <Input value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
                 <label className="block text-xs text-gray-500 mb-1">Default driver</label>
                 <Select value={vForm.driverId} onChange={(e) => setVForm({ ...vForm, driverId: e.target.value })}>
                   <option value="">— Driver —</option>
                   {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Status</label>
-                <Select value={vForm.status} onChange={(e) => setVForm({ ...vForm, status: e.target.value })}>
-                  {VEHICLE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </Select>
-              </div>
             </div>
+            {/* Identification & specs — rarely edited, collapsed by default to keep
+                the everyday form (driver/status) one screen tall */}
+            <details className="rounded-lg border border-gray-200 px-3 py-2">
+              <summary className="cursor-pointer select-none text-sm text-gray-600 font-medium">
+                Identification &amp; specs {(vForm.vin || vForm.fuelType || vForm.engineNo || vForm.chassisNo || vForm.make || vForm.model || vForm.year) ? '(filled)' : '(empty)'}
+              </summary>
+              <div className="space-y-3 pt-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Type</label>
+                    <Select value={vForm.vehicleType} disabled>
+                      <option value="">— Type —</option>
+                      {types.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Capacity</label>
+                    <Input type="number" min={1} max={60} value={vForm.capacity} onChange={(e) => setVForm({ ...vForm, capacity: Number(e.target.value) })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Make</label>
+                    <Input value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Model</label>
+                    <Input value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Year</label>
+                    <Input type="number" min={1950} max={2100} value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
+                    <Input maxLength={17} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Fuel</label>
+                    <Select value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
+                      <option value="">— Fuel —</option>
+                      {FUEL_TYPES.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Engine no.</label>
+                    <Input value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Chassis no.</label>
+                    <Input value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
+                  </div>
+                </div>
+              </div>
+            </details>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setEditingV(null)}>Cancel</Button>
               <Button onClick={saveVehicle} disabled={!vForm.brandModel}>Save</Button>
@@ -827,7 +842,7 @@ export default function Fleet() {
               <th className="px-4 py-3 font-medium">Vehicle No.</th>
               <th className="px-4 py-3 font-medium">Type</th>
               <th className="px-4 py-3 font-medium">Brand / Model</th>
-              <th className="px-4 py-3 font-medium">Capacity</th>
+              <th className="px-4 py-3 font-medium">Specs</th>
               <th className="px-4 py-3 font-medium">Driver</th>
               <th className="px-4 py-3 font-medium">Status</th>
               {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
@@ -840,7 +855,15 @@ export default function Fleet() {
                 <td className="px-4 py-3 font-medium">{v.vehicleNo}</td>
                 <td className="px-4 py-3">{v.vehicleType}</td>
                 <td className="px-4 py-3">{v.brandModel}</td>
-                <td className="px-4 py-3">{v.capacity}</td>
+                <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
+                  {/* compact spec summary: Make Model · Year · Fuel */}
+                  {[
+                    v.make ? `${v.make}${v.model && v.model !== v.make ? ` ${v.model}` : ''}` : '',
+                    v.year ? String(v.year) : '',
+                    v.fuelType ?? '',
+                  ].filter(Boolean).join(' · ') || '—'}
+                  {v.vin ? <span title={`VIN: ${v.vin}`}> · 🪪</span> : null}
+                </td>
                 <td className="px-4 py-3">{v.driver?.name ?? '—'}</td>
                 <td className="px-4 py-3"><Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge></td>
                 {canManage && (
