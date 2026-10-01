@@ -8,6 +8,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { yangonShort } from '../util/yangon-time';
 import { Actor } from '../org/org.service';
 
 @Injectable()
@@ -702,7 +703,7 @@ export class CarsService {
       body: [
         vehicleChanged ? `Vehicle: ${prevVehicleLabel} → ${vehicle.vehicleNo} (${vehicle.brandModel})` : null,
         driverChanged ? 'Driver has been updated.' : null,
-        `Schedule: ${carReq.startDate.toLocaleString('en-GB')} → ${carReq.endDate.toLocaleString('en-GB')} (unchanged unless you were told otherwise).`,
+        `Schedule: ${yangonShort(carReq.startDate)} → ${yangonShort(carReq.endDate)} (unchanged unless you were told otherwise).`,
       ].filter(Boolean).join(' · '),
       link: `/requests/${requestId}`, requestId,
     });
@@ -715,7 +716,7 @@ export class CarsService {
           userId: newDriverUserId,
           type: 'CAR_ASSIGNED',
           title: `You are the driver for ${request.docNumber}`,
-          body: `${vehicle.vehicleNo} (${vehicle.brandModel}) · ${carReq.startDate.toLocaleString('en-GB')} → ${carReq.endDate.toLocaleString('en-GB')} · pickup ${carReq.pickupLocation ?? '—'} → ${carReq.destination}.`,
+          body: `${vehicle.vehicleNo} (${vehicle.brandModel}) · ${yangonShort(carReq.startDate)} → ${yangonShort(carReq.endDate)} · pickup ${carReq.pickupLocation ?? '—'} → ${carReq.destination}.`,
           link: `/requests/${requestId}`, requestId,
         });
       }
@@ -883,7 +884,7 @@ export class CarsService {
     await this.notifications.notify({
       userId: request.requesterId, type: 'RETURNED' as never,
       title: `Request ${request.docNumber} time changed by Administration`,
-      body: `New schedule: ${start.toLocaleString()} → ${end.toLocaleString()}.${data.comment ? ` Note: ${data.comment}` : ''}`,
+      body: `New schedule: ${yangonShort(start)} → ${yangonShort(end)}.${data.comment ? ` Note: ${data.comment}` : ''}`,
       link: `/requests/${requestId}`, requestId,
     });
     // the assigned driver holds no AMS account — tell them on Telegram directly

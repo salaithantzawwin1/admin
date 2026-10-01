@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../auth/permissions.service';
 import { EventsService } from '../events/events.service';
+import { yangonShort, yangonClock } from '../util/yangon-time';
 
 /**
  * Telegram driver-notification bot (Plan: Car assignment → Noted/Arrived/Back flow).
@@ -1428,7 +1429,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!driver?.telegramChatId) return;
       const lines = [
         `🕒 <b>${escapeHtml(docNumber)} — time changed by Administration</b>`,
-        `New schedule: ${escapeHtml(start.toLocaleString('en-GB'))} → ${escapeHtml(end.toLocaleString('en-GB'))}.`,
+        `New schedule: ${escapeHtml(yangonShort(start))} → ${escapeHtml(yangonShort(end))}.`,
       ];
       if (comment) lines.push(`Note: ${escapeHtml(comment)}`);
       await this.call('sendMessage', { chat_id: driver.telegramChatId, text: lines.join('\n'), parse_mode: 'HTML' });
@@ -1698,9 +1699,11 @@ function escapeMarkdown(s: string) {
 }
 
 function fmtDate(d: Date) {
+  // verbose "29 Sept 2026" for announcement cards — explicit timeZone, TZ-safe
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Yangon' });
 }
 
 function fmtTime(d: Date) {
-  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Yangon' });
+  // consolidated on the shared TZ-safe Yangon formatter (src/util/yangon-time.ts)
+  return yangonClock(d);
 }

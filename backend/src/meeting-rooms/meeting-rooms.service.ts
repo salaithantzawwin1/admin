@@ -8,6 +8,7 @@ import { AuditService } from '../audit/audit.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
 import { Actor } from '../org/org.service';
+import { yangonShort } from '../util/yangon-time';
 
 const ACTIVE: WorkflowStatus[] = ['PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
 
@@ -260,7 +261,7 @@ export class MeetingRoomsService {
     room: { name: string; location: string | null },
   ): string {
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const when = `${mr.startTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })} → ${mr.endTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}`;
+    const when = `${yangonShort(mr.startTime)} → ${yangonShort(mr.endTime)}`;
     const details = `Room ${room.name}${room.location ? ` (${room.location})` : ''} · ${mr.attendees} pax · ${request.docNumber}`;
     const link = this.calendarLink(`${mr.title} — ${room.name}`, details, mr.startTime, mr.endTime);
     return [
@@ -392,7 +393,7 @@ export class MeetingRoomsService {
     await this.notifications.notify({
       userId: request.requesterId, type: 'RETURNED' as never,
       title: `Request ${request.docNumber} time changed by Administration`,
-      body: `New schedule: ${start.toLocaleString()} → ${end.toLocaleString()}.${data.comment ? ` Note: ${data.comment}` : ''}`,
+      body: `New schedule: ${yangonShort(start)} → ${yangonShort(end)}.${data.comment ? ` Note: ${data.comment}` : ''}`,
       link: `/requests/${requestId}`, requestId,
     });
     return { success: true };
@@ -499,7 +500,7 @@ export class MeetingRoomsService {
     const list = rows
       .map((r) => {
         const when = r.meetingRequest?.startTime
-          ? new Date(r.meetingRequest.startTime).toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })
+          ? yangonShort(new Date(r.meetingRequest.startTime))
           : '?';
         return `• ${r.docNumber} — ${r.title} (${when}, ${r.meetingRequest?.attendees ?? 1} pax)`;
       })
@@ -587,7 +588,7 @@ export class MeetingRoomsService {
     });
     const mr = request?.meetingRequest;
     if (!request || !mr) return;
-    const when = `${mr.startTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })} → ${mr.endTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}`;
+    const when = `${yangonShort(mr.startTime)} → ${yangonShort(mr.endTime)}`;
 
     if (mr.itAssist) {
       const itEmployees = await this.prisma.employee.findMany({
@@ -636,7 +637,7 @@ export class MeetingRoomsService {
     driverName: string,
   ): string {
     const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const when = `${mr.startTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })} → ${mr.endTime.toLocaleString('en-GB', { timeZone: 'Asia/Yangon' })}`;
+    const when = `${yangonShort(mr.startTime)} → ${yangonShort(mr.endTime)}`;
     const phone = request.requester.employee?.phone;
     return [
       `<b>🚘 Driver request — ${esc(mr.title)}</b>`,

@@ -5,6 +5,7 @@ import { WorkflowService } from '../workflow/workflow.module';
 import { PermissionsService } from '../auth/permissions.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { CarsService } from './cars.service';
+import { yangonNow, yangonShort, yangonShortPadded, yangonClock } from '../util/yangon-time';
 
 /**
  * Telegram as a full administration surface (no AMS login needed):
@@ -180,7 +181,7 @@ export class TelegramCarActionsService {
       APPROVED: '✅ အတည်ဖြစ် — ကား စောင့်နေ',
       IN_PROGRESS: '🚗 ခရီးဆက်နေ/လာချိန်',
     };
-    const fmt = (d: Date) => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const fmt = (d: Date) => yangonShortPadded(d);
     const lines = trips.map((t) => {
       const cr = t.carRequest;
       const car = cr?.vehicle ? `\n🚙 ${escapeHtml(cr.vehicle.vehicleNo)}${cr.driver ? ` · 👤 ${escapeHtml(cr.driver.name)}` : ''}` : '';
@@ -227,7 +228,7 @@ export class TelegramCarActionsService {
     // confirmed → cancel through the same engine as the web UI
     this.tripCancels.delete(chatId);
     const actor = { userId: user.id, username: user.username } as never;
-    const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const stamp = yangonClock(new Date());
     try {
       if (['DRAFT', 'SUBMITTED', 'PENDING_APPROVAL'].includes(doc.status)) {
         await this.workflow.cancel(requestId, actor);
@@ -266,7 +267,7 @@ export class TelegramCarActionsService {
     }
     const lines = rows.map((r) => {
       const cr = r.carRequest;
-      const when = cr ? `\n📅 ${new Date(cr.startDate).toLocaleString('en-GB')} → ${new Date(cr.endDate).toLocaleString('en-GB')}` : '';
+      const when = cr ? `\n📅 ${yangonShort(new Date(cr.startDate))} → ${yangonShort(new Date(cr.endDate))}` : '';
       const dest = cr?.destination ? `\n🗺 ${escapeHtml(cr.destination)}` : '';
       return `🚗 <b>${escapeHtml(r.docNumber)}</b> — ${escapeHtml(r.title)}\n👤 ${escapeHtml(r.requester.fullName)}${dest}${when}\n➡️ /assign ${r.docNumber}`;
     });
@@ -302,13 +303,10 @@ export class TelegramCarActionsService {
         select: { telegramChatId: true },
       });
       const cr = request.carRequest;
-      // TZ-safe Yangon wall clock: pre-shift +6.5h (UTC+06:30, no DST) then read
-      // via UTC getters — toLocaleString without a timeZone option follows the
-      // server's zone, which broke the card on UTC runners (and prod only worked
-      // because its container happens to run Asia/Yangon).
-      const p2 = (n: number) => String(n).padStart(2, '0');
-      const ygn = (d: Date) => { const s = new Date(d.getTime() + 6.5 * 3600 * 1000); return `${s.getUTCDate()}/${s.getUTCMonth() + 1} ${p2(s.getUTCHours())}:${p2(s.getUTCMinutes())}`; };
-      const when = `\n📅 ${ygn(new Date(cr.startDate))} → ${ygn(new Date(cr.endDate))}`;
+      // TZ-safe Yangon wall clock via the shared util (pre-shift +6.5h then UTC
+      // getters — toLocaleString without a timeZone option follows the server's
+      // zone, which broke this card on UTC runners).
+      const when = `\n📅 ${yangonShort(new Date(cr.startDate))} → ${yangonShort(new Date(cr.endDate))}`;
       const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}${cr.passengers ? ` · 👥 ${cr.passengers}` : ''}`;
       const why = request.description ? `\n📝 ${escapeHtml(request.description)}` : '';
       const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}${why}`;
@@ -511,7 +509,7 @@ export class TelegramCarActionsService {
       });
       if (fresh?.carRequest) {
         const c = fresh.carRequest;
-        const when = `\n📅 ${new Date(c.startDate).toLocaleString('en-GB')} → ${new Date(c.endDate).toLocaleString('en-GB')} (✏️ +${minutes} min)`;
+        const when = `\n📅 ${yangonShort(new Date(c.startDate))} → ${yangonShort(new Date(c.endDate))} (✏️ +${minutes} min)`;
         const dest = `\n🗺 ${escapeHtml(c.destination)}${c.pickupLocation ? ` (Pickup: ${escapeHtml(c.pickupLocation)})` : ''}${c.passengers ? ` · 👥 ${c.passengers}` : ''}`;
         const why = fresh.description ? `\n📝 ${escapeHtml(fresh.description)}` : '';
         await this.telegram.editCallbackMessage(
@@ -544,7 +542,7 @@ export class TelegramCarActionsService {
       await this.telegram.answer(callbackId, 'Request not found');
       return;
     }
-    const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const stamp = yangonClock(new Date());
     this.pendingRejects.delete(chatId); // approving supersedes any armed reject conversation in this chat
     try {
       await this.workflow.approve(requestId, 'Approved via Telegram', actor as never);
@@ -557,7 +555,7 @@ export class TelegramCarActionsService {
         select: { carRequest: { select: { startDate: true, endDate: true } } },
       });
       const finalWhen = fresh?.carRequest
-        ? `\n📅 ${new Date(fresh.carRequest.startDate).toLocaleString('en-GB')} → ${new Date(fresh.carRequest.endDate).toLocaleString('en-GB')}`
+        ? `\n📅 ${yangonShort(new Date(fresh.carRequest.startDate))} → ${yangonShort(new Date(fresh.carRequest.endDate))}`
         : '';
       // Staged buttons (requested UX): approve FIRST, then assign — the persistent
       // [🚗 Assign Car] button also recovers a lost/scrolled-away picker message.
@@ -631,7 +629,7 @@ export class TelegramCarActionsService {
       await this.telegram.sendRaw(chatId, '❌ Your Telegram is not linked to an AMS account.');
       return;
     }
-    const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const stamp = yangonClock(new Date());
     try {
       // same engine as the web UI: role/step checks, comment required, requester notification + audit
       await this.workflow.reject(pending.requestId, text, { userId: user.id, username: user.username } as never);
@@ -677,7 +675,7 @@ export class TelegramCarActionsService {
       take: 8,
       select: { id: true, vehicleNo: true, brandModel: true },
     });
-    const when = `\n📅 ${new Date(cr.startDate).toLocaleString('en-GB')} → ${new Date(cr.endDate).toLocaleString('en-GB')}`;
+    const when = `\n📅 ${yangonShort(new Date(cr.startDate))} → ${yangonShort(new Date(cr.endDate))}`;
     const dest = cr.destination ? `\n🗺 ${escapeHtml(cr.destination)}` : '';
     const who = `\n👤 ${escapeHtml(request.requester.fullName)}`;
     if (vehicles.length === 0) {
@@ -780,7 +778,7 @@ export class TelegramCarActionsService {
     }
     const driverId = payload.driverId ?? '-';
     const driverName = driverId === '-' ? '' : ((await this.prisma.driver.findUnique({ where: { id: driverId }, select: { name: true } }))?.name ?? '');
-    const stamp = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    const stamp = yangonClock(new Date());
     try {
       await this.cars.assign(payload.requestId, { vehicleId: payload.vehicleId, driverId: driverId === '-' ? undefined : driverId }, actor as never);
       this.pickTokens.delete(token); // one-shot — a second tap must not double-assign
@@ -1548,7 +1546,9 @@ export class TelegramCarActionsService {
   }
 
   /** Yangon short date "29/9 15:30" from a PRE-SHIFTED timestamp (+6.5h already applied) —
-   *  UTC getters keep this correct no matter the server timezone. */
+   *  UTC getters keep this correct no matter the server timezone.
+   *  TZ-safe base lives in src/util/yangon-time.ts; shortYangonStatic stays because
+   *  field parsing passes pre-shifted instants around. */
   private static shortYangonStatic(d: Date): string {
     const p = (n: number) => String(n).padStart(2, '0');
     return `${d.getUTCDate()}/${d.getUTCMonth() + 1} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
@@ -1556,7 +1556,7 @@ export class TelegramCarActionsService {
 
   /** Yangon "today" as a short date prefix "29/9" (same TZ-safe trick). */
   private static todayYangonStatic(): string {
-    return TelegramCarActionsService.shortYangonStatic(new Date(Date.now() + 6.5 * 3600 * 1000)).split(' ')[0];
+    return TelegramCarActionsService.shortYangonStatic(yangonNow()).split(' ')[0];
   }
 
   /** "1:30 PM / 3 / Fortune Office" → { time '13:30', pax 3, pickup 'Fortune Office' } —

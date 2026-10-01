@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
+import { yangonShort, yangonClock } from '../util/yangon-time';
 
 const REMINDER_TYPE = 'REMINDER' as never; // existing NotificationType enum value
 
@@ -57,7 +58,7 @@ export class TripRemindersService {
         userId: trip.request.requesterId,
         type: REMINDER_TYPE,
         title: `${isSameDay ? 'Today' : 'Tomorrow'}'s trip — ${trip.request.docNumber}`,
-        body: `Vehicle ${trip.vehicle?.vehicleNo ?? ''} (${trip.vehicle?.brandModel ?? ''})${trip.driver ? ` with driver ${trip.driver.name}` : ''} is arranged for your trip starting ${trip.startDate.toLocaleString()}.`,
+        body: `Vehicle ${trip.vehicle?.vehicleNo ?? ''} (${trip.vehicle?.brandModel ?? ''})${trip.driver ? ` with driver ${trip.driver.name}` : ''} is arranged for your trip starting ${yangonShort(trip.startDate)}.`,
         link: `/requests/${trip.requestId}`,
         requestId: trip.requestId,
       });
@@ -110,7 +111,7 @@ export class TripRemindersService {
         if (!a.driver) continue; // defensive — assignment without a driver should not exist
         if (a.driverNotedAt || a.driverArrivedAt) continue; // acknowledged late/in between runs — skip (defensive second line)
         const cr = a.request.carRequest;
-        const when = cr?.startDate ? new Date(cr.startDate).toLocaleString() : 'the scheduled time';
+        const when = cr?.startDate ? yangonShort(new Date(cr.startDate)) : 'the scheduled time';
         const pickup = cr?.pickupLocation ?? '—';
         const dest = cr?.destination ?? '—';
 
@@ -424,7 +425,7 @@ export class TripRemindersService {
       for (const a of overdue) {
         const ended = a.request.carRequest?.endDate;
         const overMins = ended ? Math.round((now.getTime() - new Date(ended).getTime()) / 60000) : 0;
-        const when = ended ? new Date(ended).toLocaleString() : 'the scheduled end';
+        const when = ended ? yangonShort(new Date(ended)) : 'the scheduled end';
 
         // 1) driver nudge on Telegram
         if (a.driver?.telegramChatId) {
@@ -467,7 +468,8 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** HH:MM in Yangon time for the digest lines. */
+/** HH:MM in Yangon time for the digest lines — consolidated on the shared
+ *  TZ-safe formatter (src/util/yangon-time.ts). */
 function fmtYgn(d: Date): string {
-  return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Yangon' });
+  return yangonClock(d);
 }
