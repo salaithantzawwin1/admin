@@ -49,29 +49,48 @@ export function Button({
   );
 }
 
-export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+// Shared field chrome for Input/Textarea/Select: identical radius, typography
+// and focus treatment everywhere. `invalid` switches border + focus ring to a
+// subtle error-red (forms highlight the field behind a failed submit) and sets
+// aria-invalid for assistive tech.
+function fieldCls(invalid: boolean | undefined, size: string, className?: string) {
+  return [
+    size,
+    'rounded-lg text-sm bg-white text-gray-800 placeholder:text-gray-400 focus:outline-none transition-shadow',
+    invalid
+      ? 'border border-red-300 focus:ring-2 focus:ring-red-300/60 focus:border-red-400'
+      : 'border border-gray-300 focus:ring-2 focus:ring-gold/60 focus:border-gold',
+    className ?? '',
+  ].join(' ');
+}
+
+export function Input({ invalid, className, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
   return (
     <input
       {...props}
-      className={`w-full h-10 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
+      aria-invalid={invalid || undefined}
+      className={fieldCls(invalid, 'w-full h-10 px-3 py-2', className)}
     />
   );
 }
 
-export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function Textarea({ invalid, className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }) {
   return (
     <textarea
       {...props}
-      className={`w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
+      aria-invalid={invalid || undefined}
+      className={fieldCls(invalid, 'w-full px-3 py-2', className)}
     />
   );
 }
 
-export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
+export function Select({ invalid, className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
   return (
     <select
       {...props}
-      className={`w-full h-10 px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white text-gray-800 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold transition-shadow ${props.className ?? ''}`}
+      aria-invalid={invalid || undefined}
+      // multi-select boxes size themselves (caller passes h-28 etc.); single ones stay h-10
+      className={fieldCls(invalid, `w-full ${props.multiple ? '' : 'h-10'} px-3 py-2`, className)}
     />
   );
 }

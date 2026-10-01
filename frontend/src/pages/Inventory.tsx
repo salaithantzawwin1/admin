@@ -995,8 +995,8 @@ export default function Inventory() {
           {mgmtTab === 'items' && (
           <Card className="p-4">
             <div className="flex flex-wrap items-center gap-2 mb-3">
-              <input
-                className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-64 focus:outline-none focus:ring-2 focus:ring-yellow-500/40"
+              <Input
+                className="!w-64"
                 placeholder="🔍 Search code, name, category…"
                 value={itemQuery}
                 onChange={(e) => { setItemQuery(e.target.value); setItemPage(1); }}

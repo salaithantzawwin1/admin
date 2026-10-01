@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
-import { Badge, Button, Empty, Input, PageHeader, Table, statusColor } from '../components/ui';
+import { Badge, Button, Empty, Input, PageHeader, Select, Table, statusColor } from '../components/ui';
 import { hasPermission } from '../api';
 import { Modal } from '../components/Modal';
 import { PasswordStrength } from '../components/PasswordStrength';
@@ -236,25 +236,17 @@ export default function Employees() {
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Department</label>
-                <select
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold w-full"
-                  value={form.departmentId}
-                  onChange={(e) => setForm({ ...form, departmentId: e.target.value })}
-                >
+                <Select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
                   <option value="">— Department —</option>
                   {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Branch</label>
-                <select
-                  className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold w-full"
-                  value={form.branchId}
-                  onChange={(e) => setForm({ ...form, branchId: e.target.value })}
-                >
+                <Select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
                   <option value="">— Branch —</option>
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
+                </Select>
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Phone</label>
@@ -292,13 +284,13 @@ export default function Employees() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Username {form.authSource === 'AD' ? '(same as Windows login)' : '*'}</label>
-                      <Input placeholder="e.g. aung.kyaw" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+                      <Input placeholder="e.g. aung.kyaw" invalid={!!formError} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Password {form.authSource === 'LOCAL' ? '(min 8) *' : ''}</label>
                       {form.authSource === 'LOCAL' ? (
                         <>
-                          <Input type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                          <Input type="password" placeholder="Min 8 characters" invalid={!!formError} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
                           <PasswordStrength value={form.password} />
                         </>
                       ) : (
@@ -443,14 +435,13 @@ export default function Employees() {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Department</label>
-              <select
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <Select
                 value={edit.department?.id ?? ''}
                 onChange={(e) => setEdit({ ...edit, department: depts.find((d) => d.id === e.target.value) ?? null })}
               >
                 <option value="">— None —</option>
                 {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
+              </Select>
             </div>
             {edit.user ? (
               <div className="border border-gray-200 rounded-lg p-3">
@@ -468,14 +459,14 @@ export default function Employees() {
                   </button>
                 </div>
                 <label className="block text-xs text-gray-500 mb-1">Roles (Ctrl+click for multiple)</label>
-                <select
+                <Select
                   multiple
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white h-28 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+                  className="h-28"
                   value={editRoles}
                   onChange={(e) => setEditRoles(Array.from(e.target.selectedOptions).map((o) => o.value))}
                 >
                   {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
+                </Select>
               </div>
             ) : (
               <div className="border border-dashed border-gray-300 rounded-lg p-3">
@@ -499,14 +490,14 @@ export default function Employees() {
                 {linkMode === 'link' && (
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">User account to link</label>
-                    <select
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+                    <Select
                       value={linkUserId}
+                      invalid={!!modalError && linkMode === 'link'}
                       onChange={(e) => setLinkUserId(e.target.value)}
                     >
                       <option value="">— choose an account —</option>
                       {allUsers.map((u) => <option key={u.id} value={u.id}>{u.username} — {u.fullName}</option>)}
-                    </select>
+                    </Select>
                     <div className="text-xs text-gray-400 mt-1">Accounts already linked to another employee are not shown here; linking keeps the account's existing roles.</div>
                   </div>
                 )}
@@ -523,21 +514,21 @@ export default function Employees() {
                       </label>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <Input placeholder="Username (AD: same as Windows)" value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
+                      <Input placeholder="Username (AD: same as Windows)" invalid={!!modalError && linkMode === 'create'} value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
                       {newLogin.authSource === 'LOCAL' ? (
-                        <Input placeholder="Password (min 8)" type="password" value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
+                        <Input placeholder="Password (min 8)" type="password" invalid={!!modalError && linkMode === 'create'} value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
                       ) : (
                         <div className="text-xs text-gray-500 self-center">No password here — AD verifies the Windows password at sign-in.</div>
                       )}
                     </div>
-                    <select
+                    <Select
                       multiple
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white h-24 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+                      className="h-24"
                       value={newLogin.roles}
                       onChange={(e) => setNewLogin({ ...newLogin, roles: Array.from(e.target.selectedOptions).map((o) => o.value) })}
                     >
                       {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                    </select>
+                    </Select>
                   </div>
                 )}
               </div>

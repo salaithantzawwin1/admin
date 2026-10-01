@@ -607,7 +607,7 @@ export default function Fleet() {
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Driver name *</label>
-              <Input placeholder="e.g. U Aung Kyaw" value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
+              <Input placeholder="e.g. U Aung Kyaw" invalid={!!modalError} value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -633,7 +633,7 @@ export default function Fleet() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Vehicle no. *</label>
-                <Input placeholder="YGN-1234" value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
+                <Input placeholder="YGN-1234" invalid={!!modalError} value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Type</label>
@@ -645,7 +645,7 @@ export default function Fleet() {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
-              <Input placeholder="Toyota Corolla" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
+              <Input placeholder="Toyota Corolla" invalid={!!modalError} value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -677,7 +677,7 @@ export default function Fleet() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                    <Input placeholder="JTDKB20U577012345" maxLength={17} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                    <Input placeholder="JTDKB20U577012345" maxLength={17} invalid={!!modalError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Fuel</label>
@@ -725,7 +725,7 @@ export default function Fleet() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
-                <Input value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
+                <Input value={vForm.brandModel} invalid={!!modalError} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Default driver</label>
@@ -772,7 +772,7 @@ export default function Fleet() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                    <Input maxLength={17} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                    <Input maxLength={17} invalid={!!modalError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Fuel</label>
@@ -807,7 +807,7 @@ export default function Fleet() {
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Driver name *</label>
-              <Input value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
+              <Input value={dForm.name} invalid={!!modalError} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

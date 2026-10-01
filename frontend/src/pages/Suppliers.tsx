@@ -299,7 +299,7 @@ export default function Suppliers() {
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Supplier name *</label>
-              <Input placeholder="e.g. Shwe Yangon Trading" value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
+              <Input placeholder="e.g. Shwe Yangon Trading" invalid={!!modalError} value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Phone</label>
