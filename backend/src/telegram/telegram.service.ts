@@ -1146,7 +1146,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     a: {
       request: { docNumber: string; requester: { fullName: string; employee?: { phone: string | null } | null } };
       vehicle?: { brandModel: string; vehicleNo: string } | null;
-      carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; sharedTripId?: string | null; passengers?: number | null } | null;
+      carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; specialRequest?: string | null; sharedTripId?: string | null; passengers?: number | null } | null;
       sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null;
     },
     stages?: { noted?: Date | null; arrived?: Date | null; back?: Date | null } | null,
@@ -1170,6 +1170,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `👥 Passengers: ${cr.passengers ?? 1}`,
       `👤 Requester: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
       cr.purpose ? `📝 ${escapeHtml(cr.purpose)}` : '',
+      // requester's special instruction ("wait and call me", "carrying goods…")
+      // — the driver must see it BEFORE heading out
+      cr.specialRequest ? `⭐ Special: ${escapeHtml(cr.specialRequest)}` : '',
       // shared trip — the driver sees who else is riding the same car
       ...(riders && riders.length > 0
         ? [``, `<b>🧑‍🤝‍🧑 Shared trip</b>`, ...riders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
@@ -1198,7 +1201,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       include: {
         driver: true,
         vehicle: true,
-        carRequest: { select: { destination: true, pickupLocation: true, startDate: true, endDate: true, timeSlot: true, purpose: true, sharedTripId: true, passengers: true } },
+        carRequest: { select: { destination: true, pickupLocation: true, startDate: true, endDate: true, timeSlot: true, purpose: true, specialRequest: true, sharedTripId: true, passengers: true } },
         request: {
           select: {
             docNumber: true,
@@ -1681,7 +1684,7 @@ type PrismaCarAssignment = {
   driverBackAtOfficeAt: Date | null;
   driver: { id: string; name: string; telegramChatId: string | null } | null;
   vehicle?: { id: string; vehicleNo: string; brandModel: string } | null;
-  carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null } | null;
+  carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; specialRequest?: string | null } | null;
   request: {
     id: string;
     docNumber: string;

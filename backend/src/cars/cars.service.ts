@@ -37,6 +37,7 @@ export class CarsService {
     endDate?: string;
     timeSlot?: string;
     pickupLocation?: string;
+    specialRequest?: string;
   }, actor: Actor) {
     const startDate = new Date(data.startDate);
     // End optional: same-day 17:00 default (most requests are single-day trips)
@@ -66,6 +67,7 @@ export class CarsService {
         passengers: data.passengers,
         destination: data.destination,
         purpose: data.purpose,
+        specialRequest: data.specialRequest,
         startDate,
         endDate,
         timeSlot: (data.timeSlot || 'FULL_DAY') as never,
@@ -126,6 +128,7 @@ export class CarsService {
   async updateCarRequest(requestId: string, data: {
     destination?: string; purpose?: string; startDate?: string; endDate?: string;
     passengers?: number; vehicleTypeRequired?: string; timeSlot?: string; pickupLocation?: string;
+    specialRequest?: string;
   }, actor: Actor) {
     const car = await this.prisma.carRequest.findUnique({ where: { requestId }, include: { request: true } });
     if (!car) throw new NotFoundException('Car request not found');
@@ -141,6 +144,7 @@ export class CarsService {
         vehicleTypeRequired: data.vehicleTypeRequired as never,
         timeSlot: data.timeSlot as never,
         pickupLocation: data.pickupLocation,
+        specialRequest: data.specialRequest,
         startDate: data.startDate ? new Date(data.startDate) : undefined,
         endDate: data.endDate ? new Date(data.endDate) : undefined,
       },
@@ -716,7 +720,7 @@ export class CarsService {
           userId: newDriverUserId,
           type: 'CAR_ASSIGNED',
           title: `You are the driver for ${request.docNumber}`,
-          body: `${vehicle.vehicleNo} (${vehicle.brandModel}) · ${yangonShort(carReq.startDate)} → ${yangonShort(carReq.endDate)} · pickup ${carReq.pickupLocation ?? '—'} → ${carReq.destination}.`,
+          body: `${vehicle.vehicleNo} (${vehicle.brandModel}) · ${yangonShort(carReq.startDate)} → ${yangonShort(carReq.endDate)} · pickup ${carReq.pickupLocation ?? '—'} → ${carReq.destination}.${carReq.specialRequest ? ` ⭐ Special: ${carReq.specialRequest}` : ''}`,
           link: `/requests/${requestId}`, requestId,
         });
       }

@@ -969,6 +969,7 @@ model CarRequest {
   endDate     DateTime
   timeSlot    CarRequestTimeSlot @default(FULL_DAY)
   pickupLocation String?
+  specialRequest String? // free-text special instruction (e.g. "wait and call me", "carry goods — plan a load-capable car") shown to Administration and the driver
   status      WorkflowStatus     @default(DRAFT)
   managerAckAt   DateTime? // optional Dept-Head acknowledgement (never blocks)
   managerAckById String?   @db.Uuid

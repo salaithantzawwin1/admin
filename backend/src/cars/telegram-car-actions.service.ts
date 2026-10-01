@@ -292,7 +292,7 @@ export class TelegramCarActionsService {
         where: { id: requestId },
         include: {
           requester: { select: { fullName: true } },
-          carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true, passengers: true } },
+          carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true, passengers: true, specialRequest: true } },
         },
       });
       if (!request || request.status !== 'PENDING_APPROVAL' || !request.carRequest) return; // car flow only
@@ -309,7 +309,8 @@ export class TelegramCarActionsService {
       const when = `\n📅 ${yangonShort(new Date(cr.startDate))} → ${yangonShort(new Date(cr.endDate))}`;
       const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}${cr.passengers ? ` · 👥 ${cr.passengers}` : ''}`;
       const why = request.description ? `\n📝 ${escapeHtml(request.description)}` : '';
-      const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}${why}`;
+      const special = cr.specialRequest ? `\n⭐ Special: ${escapeHtml(cr.specialRequest)}` : '';
+      const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}${special}${why}`;
       for (const a of approvers) {
         if (!a.telegramChatId) continue;
         await this.telegram.sendRaw(a.telegramChatId, text, {
@@ -505,12 +506,13 @@ export class TelegramCarActionsService {
       // repaint the approval card with the NEW window (fresh read)
       const fresh = await this.prisma.requestDocument.findUnique({
         where: { id: requestId },
-        include: { requester: { select: { fullName: true } }, carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true, passengers: true } } },
+        include: { requester: { select: { fullName: true } }, carRequest: { select: { destination: true, startDate: true, endDate: true, pickupLocation: true, passengers: true, specialRequest: true } } },
       });
       if (fresh?.carRequest) {
         const c = fresh.carRequest;
         const when = `\n📅 ${yangonShort(new Date(c.startDate))} → ${yangonShort(new Date(c.endDate))} (✏️ +${minutes} min)`;
         const dest = `\n🗺 ${escapeHtml(c.destination)}${c.pickupLocation ? ` (Pickup: ${escapeHtml(c.pickupLocation)})` : ''}${c.passengers ? ` · 👥 ${c.passengers}` : ''}`;
+        const special = c.specialRequest ? `\n⭐ Special: ${escapeHtml(c.specialRequest)}` : '';
         const why = fresh.description ? `\n📝 ${escapeHtml(fresh.description)}` : '';
         await this.telegram.editCallbackMessage(
           chatId,
@@ -655,7 +657,7 @@ export class TelegramCarActionsService {
       where: { id: requestId },
       include: {
         requester: { select: { fullName: true } },
-        carRequest: { select: { destination: true, startDate: true, endDate: true, assignment: { select: { releasedAt: true } } } },
+        carRequest: { select: { destination: true, startDate: true, endDate: true, specialRequest: true, assignment: { select: { releasedAt: true } } } },
       },
     });
     if (!request?.carRequest) return;
@@ -676,18 +678,19 @@ export class TelegramCarActionsService {
       select: { id: true, vehicleNo: true, brandModel: true },
     });
     const when = `\n📅 ${yangonShort(new Date(cr.startDate))} → ${yangonShort(new Date(cr.endDate))}`;
+    const special = cr.specialRequest ? `\n⭐ Special: ${escapeHtml(cr.specialRequest)}` : '';
     const dest = cr.destination ? `\n🗺 ${escapeHtml(cr.destination)}` : '';
     const who = `\n👤 ${escapeHtml(request.requester.fullName)}`;
     if (vehicles.length === 0) {
       await this.telegram.sendRaw(
         chatId,
-        `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}\n\n⚠️ No AVAILABLE vehicles for this window right now — free one up or retry later with <b>/assign ${escapeHtml(request.docNumber)}</b>`,
+        `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${special}\n\n⚠️ No AVAILABLE vehicles for this window right now — free one up or retry later with <b>/assign ${escapeHtml(request.docNumber)}</b>`,
       );
       return;
     }
     await this.telegram.sendRaw(
       chatId,
-      `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}`,
+      `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${special}`,
       {
         reply_markup: {
           inline_keyboard: vehicles.map((v) => [{ text: `${v.vehicleNo} — ${v.brandModel}`, callback_data: `wfa:pv:${this.newToken({ requestId: request.id, vehicleId: v.id })}` }]),

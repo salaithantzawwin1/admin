@@ -29,6 +29,7 @@ class CreateCarRequestDto {
   @IsOptional() @IsIn(VEHICLE_TYPES) vehicleTypeRequired?: string;
   @IsOptional() @IsIn(['FULL_DAY', 'HALF_DAY_AM', 'HALF_DAY_PM', 'CUSTOM_HOURS']) timeSlot?: string;
   @IsOptional() @IsString() @MaxLength(200) pickupLocation?: string;
+  @IsOptional() @IsString() @MaxLength(500) specialRequest?: string;
 }
 
 class UpdateCarRequestDto {
@@ -40,6 +41,7 @@ class UpdateCarRequestDto {
   @IsOptional() @IsIn(VEHICLE_TYPES) vehicleTypeRequired?: string;
   @IsOptional() @IsIn(['FULL_DAY', 'HALF_DAY_AM', 'HALF_DAY_PM', 'CUSTOM_HOURS']) timeSlot?: string;
   @IsOptional() @IsString() @MaxLength(200) pickupLocation?: string;
+  @IsOptional() @IsString() @MaxLength(500) specialRequest?: string;
 }
 
 class AssignDto {
