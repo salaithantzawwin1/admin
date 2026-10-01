@@ -400,24 +400,24 @@ export default function Settings() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
-            <label className="block text-xs text-gray-500 mb-1">Server URL (ldaps://host:636 recommended)</label>
-            <Input placeholder="ldaps://dc01.company.local:636" value={cfg.url} onChange={(e) => setCfg({ ...cfg, url: e.target.value })} />
+            <label htmlFor="settings-server-url-ldaps-host-636-recomm" className="block text-xs text-gray-500 mb-1">Server URL (ldaps://host:636 recommended)</label>
+            <Input id="settings-server-url-ldaps-host-636-recomm" placeholder="ldaps://dc01.company.local:636" value={cfg.url} onChange={(e) => setCfg({ ...cfg, url: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Base DN</label>
-            <Input placeholder="DC=company,DC=local" value={cfg.baseDn} onChange={(e) => setCfg({ ...cfg, baseDn: e.target.value })} />
+            <label htmlFor="settings-base-dn" className="block text-xs text-gray-500 mb-1">Base DN</label>
+            <Input id="settings-base-dn" placeholder="DC=company,DC=local" value={cfg.baseDn} onChange={(e) => setCfg({ ...cfg, baseDn: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Bind DN (read-only service account)</label>
-            <Input placeholder="CN=ams-reader,CN=Users,DC=company,DC=local" value={cfg.bindDn} onChange={(e) => setCfg({ ...cfg, bindDn: e.target.value })} />
+            <label htmlFor="settings-bind-dn-read-only-service-accoun" className="block text-xs text-gray-500 mb-1">Bind DN (read-only service account)</label>
+            <Input id="settings-bind-dn-read-only-service-accoun" placeholder="CN=ams-reader,CN=Users,DC=company,DC=local" value={cfg.bindDn} onChange={(e) => setCfg({ ...cfg, bindDn: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Bind password</label>
-            <Input type="password" value={cfg.bindPassword} onChange={(e) => setCfg({ ...cfg, bindPassword: e.target.value })} />
+            <label htmlFor="settings-bind-password" className="block text-xs text-gray-500 mb-1">Bind password</label>
+            <Input id="settings-bind-password" type="password" value={cfg.bindPassword} onChange={(e) => setCfg({ ...cfg, bindPassword: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Default role for new AD users</label>
-            <Select
+            <label htmlFor="settings-default-role-for-new-ad-users" className="block text-xs text-gray-500 mb-1">Default role for new AD users</label>
+            <Select id="settings-default-role-for-new-ad-users"
               value={cfg.defaultRole}
               onChange={(e) => setCfg({ ...cfg, defaultRole: e.target.value })}
             >
@@ -481,12 +481,12 @@ export default function Settings() {
             <div key={startKey} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
               <label className="block text-xs text-gray-500 sm:text-sm sm:text-gray-700 font-medium">{label}</label>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Start Time</label>
-                <Input type="time" value={tt[startKey]} onChange={(e) => setTt({ ...tt, [startKey]: e.target.value })} />
+                <label htmlFor="settings-start-time" className="block text-xs text-gray-500 mb-1">Start Time</label>
+                <Input id="settings-start-time" type="time" value={tt[startKey]} onChange={(e) => setTt({ ...tt, [startKey]: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">End Time</label>
-                <Input type="time" value={tt[endKey]} onChange={(e) => setTt({ ...tt, [endKey]: e.target.value })} />
+                <label htmlFor="settings-end-time" className="block text-xs text-gray-500 mb-1">End Time</label>
+                <Input id="settings-end-time" type="time" value={tt[endKey]} onChange={(e) => setTt({ ...tt, [endKey]: e.target.value })} />
               </div>
             </div>
           ))}
@@ -590,12 +590,12 @@ export default function Settings() {
 
             <div className="flex flex-wrap items-end gap-2 mb-4">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Add date</label>
-                <Input type="date" value={newHol.date} onChange={(e) => setNewHol({ ...newHol, date: e.target.value })} />
+                <label htmlFor="settings-add-date" className="block text-xs text-gray-500 mb-1">Add date</label>
+                <Input id="settings-add-date" type="date" value={newHol.date} onChange={(e) => setNewHol({ ...newHol, date: e.target.value })} />
               </div>
               <div className="flex-1 min-w-[200px]">
-                <label className="block text-xs text-gray-500 mb-1">Holiday name</label>
-                <Input placeholder="e.g. Thadingyut holiday" value={newHol.name} onChange={(e) => setNewHol({ ...newHol, name: e.target.value })} />
+                <label htmlFor="settings-holiday-name" className="block text-xs text-gray-500 mb-1">Holiday name</label>
+                <Input id="settings-holiday-name" placeholder="e.g. Thadingyut holiday" value={newHol.name} onChange={(e) => setNewHol({ ...newHol, name: e.target.value })} />
               </div>
               <Button variant="ghost" onClick={addHoliday} disabled={!newHol.date || !newHol.name.trim()}>+ Add</Button>
               <Button variant="ghost" onClick={() => { setShowBulkHol(true); setBulkHol(''); }}>📋 Bulk import</Button>
@@ -953,8 +953,8 @@ export default function Settings() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="sm:col-span-2">
-            <label className="block text-xs text-gray-500 mb-1">Bot token (from @BotFather)</label>
-            <Input
+            <label htmlFor="settings-bot-token-from-botfather" className="block text-xs text-gray-500 mb-1">Bot token (from @BotFather)</label>
+            <Input id="settings-bot-token-from-botfather"
               type="password"
               placeholder="123456789:AAF..."
               value={tgCfg.botToken}
@@ -969,8 +969,8 @@ export default function Settings() {
             )}
           </div>
           <div className="sm:col-span-2">
-            <label className="block text-xs text-gray-500 mb-1">AMS web URL (for "Open in AMS" buttons in notifications — optional)</label>
-            <Input
+            <label htmlFor="settings-ams-web-url-for-open-in-ams-butt" className="block text-xs text-gray-500 mb-1">AMS web URL (for "Open in AMS" buttons in notifications — optional)</label>
+            <Input id="settings-ams-web-url-for-open-in-ams-butt"
               placeholder="http://192.168.100.110"
               value={tgCfg.webUrl}
               onChange={(e) => setTgCfg({ ...tgCfg, webUrl: e.target.value })}

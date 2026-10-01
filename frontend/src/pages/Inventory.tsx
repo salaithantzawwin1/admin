@@ -1280,10 +1280,10 @@ export default function Inventory() {
           onConfirm={async () => { await submitSingle(); }}
         >
           <div className="mt-3">
-            <label className="block text-xs text-gray-500 mb-1">Quantity ({requestFor.unit})</label>
-            <Input type="number" min={1} value={requestQty} onChange={(e) => setRequestQty(Math.max(1, Number(e.target.value)))} />
-            <label className="block text-xs text-gray-500 mb-1 mt-2">Note (optional)</label>
-            <Input value={requestNote} onChange={(e) => setRequestNote(e.target.value)} />
+            <label htmlFor="inventory-quantity-requestfor-unit" className="block text-xs text-gray-500 mb-1">Quantity ({requestFor.unit})</label>
+            <Input id="inventory-quantity-requestfor-unit" type="number" min={1} value={requestQty} onChange={(e) => setRequestQty(Math.max(1, Number(e.target.value)))} />
+            <label htmlFor="inventory-note-optional" className="block text-xs text-gray-500 mb-1 mt-2">Note (optional)</label>
+            <Input id="inventory-note-optional" value={requestNote} onChange={(e) => setRequestNote(e.target.value)} />
           </div>
         </ConfirmDialog>
       )}

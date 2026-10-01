@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getUser } from '../api';
-import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 
 interface Delegation {
   id: string;
@@ -70,18 +70,30 @@ export default function Delegations() {
     return <Badge color={isActive ? 'green' : isFuture ? 'blue' : 'gray'}>{isActive ? 'ACTIVE NOW' : isFuture ? 'SCHEDULED' : d.status}</Badge>;
   };
 
+  // inline field-level errors — server messages attach to the field they name,
+  // the end-before-start case is mirrored client-side for instant feedback
+  const startBeforeEnd = !!(form.startAt && form.endAt && form.startAt >= form.endAt);
+  const userFieldError =
+    (error === 'Cannot delegate to yourself' || error === 'Delegate user not found or inactive') ? error : undefined;
+  const startFieldError = error === 'Invalid dates' ? error : undefined;
+  const endFieldError =
+    (startBeforeEnd && 'End must be after the start') ||
+    (error === 'startAt must be before endAt' && 'End must be after the start') ||
+    (error === 'You already have a delegation covering this period' ? error : undefined) ||
+    undefined;
+
   return (
     <div className="max-w-4xl">
       <PageHeader title="Approval Delegations" subtitle="Delegate your approvals when on leave" />
 
-      {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+      {error && !userFieldError && !startFieldError && !endFieldError && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
       <Card className="p-5 mb-5 space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Delegate to</label>
-            <select
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white"
+            <label htmlFor="delegations-delegate-to" className="block text-xs text-gray-500 mb-1">Delegate to</label>
+            <Select id="delegations-delegate-to"
+              error={userFieldError}
               value={form.toUserId}
               onChange={(e) => setForm({ ...form, toUserId: e.target.value })}
             >
@@ -89,19 +101,19 @@ export default function Delegations() {
               {users.filter((u) => u.username !== me?.username).map((u) => (
                 <option key={u.id} value={u.id}>{u.fullName} ({u.username})</option>
               ))}
-            </select>
+            </Select>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Reason</label>
-            <Input placeholder="e.g. Annual leave" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+            <label htmlFor="delegations-reason" className="block text-xs text-gray-500 mb-1">Reason</label>
+            <Input id="delegations-reason" placeholder="e.g. Annual leave" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">From</label>
-            <Input type="datetime-local" value={form.startAt} onChange={(e) => setForm({ ...form, startAt: e.target.value })} />
+            <label htmlFor="delegations-from" className="block text-xs text-gray-500 mb-1">From</label>
+            <Input id="delegations-from" type="datetime-local" error={startFieldError} value={form.startAt} onChange={(e) => setForm({ ...form, startAt: e.target.value })} />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">To</label>
-            <Input type="datetime-local" value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
+            <label htmlFor="delegations-to" className="block text-xs text-gray-500 mb-1">To</label>
+            <Input id="delegations-to" type="datetime-local" error={endFieldError} value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
           </div>
         </div>
         <Button onClick={create} disabled={!form.toUserId || !form.startAt || !form.endAt}>Create Delegation</Button>

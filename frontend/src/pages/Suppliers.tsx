@@ -301,20 +301,20 @@ export default function Suppliers() {
         <Modal title={form.id ? `Edit supplier — ${form.name}` : 'New supplier'} error={modalError && !nameFieldError ? modalError : null} onClose={() => { setForm(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Supplier name *</label>
-              <Input placeholder="e.g. Shwe Yangon Trading" error={nameFieldError} value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
+              <label htmlFor="suppliers-supplier-name" className="block text-xs text-gray-500 mb-1">Supplier name *</label>
+              <Input id="suppliers-supplier-name" placeholder="e.g. Shwe Yangon Trading" error={nameFieldError} value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Phone</label>
-              <Input placeholder="09-xxx" value={form.phone ?? ''} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              <label htmlFor="suppliers-phone" className="block text-xs text-gray-500 mb-1">Phone</label>
+              <Input id="suppliers-phone" placeholder="09-xxx" value={form.phone ?? ''} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Address</label>
-              <Input placeholder="Address" value={form.address ?? ''} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+              <label htmlFor="suppliers-address" className="block text-xs text-gray-500 mb-1">Address</label>
+              <Input id="suppliers-address" placeholder="Address" value={form.address ?? ''} onChange={(e) => setForm({ ...form, address: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Note</label>
-              <Textarea rows={2} placeholder="Note (optional)" value={form.note ?? ''} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+              <label htmlFor="suppliers-note" className="block text-xs text-gray-500 mb-1">Note</label>
+              <Textarea id="suppliers-note" rows={2} placeholder="Note (optional)" value={form.note ?? ''} onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </div>
             {form.id && (
               <label className="flex items-center gap-2 text-sm text-gray-600">

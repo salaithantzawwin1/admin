@@ -493,8 +493,8 @@ export default function Fleet() {
           <div className="space-y-3">
             <div className="text-xs text-gray-500">The driver is skipped in assign pickers and auto-set to ON_LEAVE during the window — status returns to Available after the End Time.</div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Driver *</label>
-              <Select value={absenceForm.driverId} onChange={(e) => setAbsenceForm({ ...absenceForm, driverId: e.target.value })}>
+              <label htmlFor="fleet-driver" className="block text-xs text-gray-500 mb-1">Driver *</label>
+              <Select id="fleet-driver" value={absenceForm.driverId} onChange={(e) => setAbsenceForm({ ...absenceForm, driverId: e.target.value })}>
                 <option value="">— Driver —</option>
                 {drivers.filter((d) => d.status !== 'INACTIVE').map((d) => (
                   <option key={d.id} value={d.id}>{d.name}</option>
@@ -503,20 +503,20 @@ export default function Fleet() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Date *</label>
-                <Input type="date" value={absenceForm.date} onChange={(e) => setAbsenceForm({ ...absenceForm, date: e.target.value })} />
+                <label htmlFor="fleet-date" className="block text-xs text-gray-500 mb-1">Date *</label>
+                <Input id="fleet-date" type="date" value={absenceForm.date} onChange={(e) => setAbsenceForm({ ...absenceForm, date: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Leave *</label>
-                <Select value={absenceForm.dayType} onChange={(e) => setAbsenceForm({ ...absenceForm, dayType: e.target.value as 'FULL' | 'HALF' })}>
+                <label htmlFor="fleet-leave" className="block text-xs text-gray-500 mb-1">Leave *</label>
+                <Select id="fleet-leave" value={absenceForm.dayType} onChange={(e) => setAbsenceForm({ ...absenceForm, dayType: e.target.value as 'FULL' | 'HALF' })}>
                   <option value="FULL">Full day</option>
                   <option value="HALF">Half day</option>
                 </Select>
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Period (half day)</label>
-              <Select
+              <label htmlFor="fleet-period-half-day" className="block text-xs text-gray-500 mb-1">Period (half day)</label>
+              <Select id="fleet-period-half-day"
                 value={absenceForm.dayType === 'HALF' ? absenceForm.period : 'FULL_DAY'}
                 disabled={absenceForm.dayType === 'FULL'}
                 onChange={(e) => setAbsenceForm({ ...absenceForm, period: e.target.value as 'MORNING' | 'EVENING' })}
@@ -526,8 +526,8 @@ export default function Fleet() {
               </Select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Reason</label>
-              <Input placeholder="Leave, training…" value={absenceForm.reason} onChange={(e) => setAbsenceForm({ ...absenceForm, reason: e.target.value })} />
+              <label htmlFor="fleet-reason" className="block text-xs text-gray-500 mb-1">Reason</label>
+              <Input id="fleet-reason" placeholder="Leave, training…" value={absenceForm.reason} onChange={(e) => setAbsenceForm({ ...absenceForm, reason: e.target.value })} />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setAbsenceModal(false)}>Cancel</Button>
@@ -569,19 +569,19 @@ export default function Fleet() {
             <div className="text-xs text-gray-500">The window is re-derived from the Company Time Table for the picked leave type and date.</div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Date *</label>
-                <Input type="date" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
+                <label htmlFor="fleet-date-2" className="block text-xs text-gray-500 mb-1">Date *</label>
+                <Input id="fleet-date-2" type="date" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Leave *</label>
-                <Select value={editForm.dayType} onChange={(e) => setEditForm({ ...editForm, dayType: e.target.value as 'FULL' | 'HALF' })}>
+                <label htmlFor="fleet-leave-2" className="block text-xs text-gray-500 mb-1">Leave *</label>
+                <Select id="fleet-leave-2" value={editForm.dayType} onChange={(e) => setEditForm({ ...editForm, dayType: e.target.value as 'FULL' | 'HALF' })}>
                   <option value="FULL">Full day</option>
                   <option value="HALF">Half day</option>
                 </Select>
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Period (half day)</label>
+              <label htmlFor="fleet-period-half-day" className="block text-xs text-gray-500 mb-1">Period (half day)</label>
               <Select
                 value={editForm.dayType === 'HALF' ? editForm.period : 'FULL_DAY'}
                 disabled={editForm.dayType === 'FULL'}
@@ -592,8 +592,8 @@ export default function Fleet() {
               </Select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Reason</label>
-              <Input placeholder="Leave, training…" value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} />
+              <label htmlFor="fleet-reason-2" className="block text-xs text-gray-500 mb-1">Reason</label>
+              <Input id="fleet-reason-2" placeholder="Leave, training…" value={editForm.reason} onChange={(e) => setEditForm({ ...editForm, reason: e.target.value })} />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setEditingAbsence(null)}>Cancel</Button>
@@ -630,17 +630,17 @@ export default function Fleet() {
         <Modal title="Add driver" error={modalError} onClose={() => { setShowD(false); setModalError(''); }}>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Driver name *</label>
-              <Input placeholder="e.g. U Aung Kyaw" invalid={!!modalError} value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
+              <label htmlFor="fleet-driver-name" className="block text-xs text-gray-500 mb-1">Driver name *</label>
+              <Input id="fleet-driver-name" placeholder="e.g. U Aung Kyaw" invalid={!!modalError} value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Phone</label>
-                <Input placeholder="09-xxx" value={dForm.phone} onChange={(e) => setDForm({ ...dForm, phone: e.target.value })} />
+                <label htmlFor="fleet-phone" className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input id="fleet-phone" placeholder="09-xxx" value={dForm.phone} onChange={(e) => setDForm({ ...dForm, phone: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">License no.</label>
-                <Input placeholder="DL-xxxx" value={dForm.licenseNo} onChange={(e) => setDForm({ ...dForm, licenseNo: e.target.value })} />
+                <label htmlFor="fleet-license-no" className="block text-xs text-gray-500 mb-1">License no.</label>
+                <Input id="fleet-license-no" placeholder="DL-xxxx" value={dForm.licenseNo} onChange={(e) => setDForm({ ...dForm, licenseNo: e.target.value })} />
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -656,25 +656,25 @@ export default function Fleet() {
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Vehicle no. *</label>
-                <Input placeholder="YGN-1234" error={vehNoError} value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
+                <label htmlFor="fleet-vehicle-no" className="block text-xs text-gray-500 mb-1">Vehicle no. *</label>
+                <Input id="fleet-vehicle-no" placeholder="YGN-1234" error={vehNoError} value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Type</label>
-                <Select value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
+                <label htmlFor="fleet-type" className="block text-xs text-gray-500 mb-1">Type</label>
+                <Select id="fleet-type" value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
                   <option value="">— Type —</option>
                   {types.filter((t) => t.active || t.name === vForm.vehicleType).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                 </Select>
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
-              <Input placeholder="Toyota Corolla" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
+              <label htmlFor="fleet-brand-model" className="block text-xs text-gray-500 mb-1">Brand / model *</label>
+              <Input id="fleet-brand-model" placeholder="Toyota Corolla" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Default driver</label>
-                <Select value={vForm.driverId} onChange={(e) => setVForm({ ...vForm, driverId: e.target.value })}>
+                <label htmlFor="fleet-default-driver" className="block text-xs text-gray-500 mb-1">Default driver</label>
+                <Select id="fleet-default-driver" value={vForm.driverId} onChange={(e) => setVForm({ ...vForm, driverId: e.target.value })}>
                   <option value="">— Driver —</option>
                   {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
@@ -686,26 +686,26 @@ export default function Fleet() {
               <div className="space-y-3 pt-3">
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Make</label>
-                    <Input placeholder="Toyota" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
+                    <label htmlFor="fleet-make" className="block text-xs text-gray-500 mb-1">Make</label>
+                    <Input id="fleet-make" placeholder="Toyota" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Model</label>
-                    <Input placeholder="Corolla" value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
+                    <label htmlFor="fleet-model" className="block text-xs text-gray-500 mb-1">Model</label>
+                    <Input id="fleet-model" placeholder="Corolla" value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Year</label>
-                    <Input type="number" min={1950} max={2100} placeholder="2020" value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
+                    <label htmlFor="fleet-year" className="block text-xs text-gray-500 mb-1">Year</label>
+                    <Input id="fleet-year" type="number" min={1950} max={2100} placeholder="2020" value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                    <Input placeholder="JTDKB20U577012345" maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                    <label htmlFor="fleet-vin-17" className="block text-xs text-gray-500 mb-1">VIN (17)</label>
+                    <Input id="fleet-vin-17" placeholder="JTDKB20U577012345" maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Fuel</label>
-                    <Select value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
+                    <label htmlFor="fleet-fuel" className="block text-xs text-gray-500 mb-1">Fuel</label>
+                    <Select id="fleet-fuel" value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
                       <option value="">— Fuel —</option>
                       {FUEL_TYPES.map((f) => <option key={f} value={f}>{f}</option>)}
                     </Select>
@@ -713,12 +713,12 @@ export default function Fleet() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Engine no.</label>
-                    <Input value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
+                    <label htmlFor="fleet-engine-no" className="block text-xs text-gray-500 mb-1">Engine no.</label>
+                    <Input id="fleet-engine-no" value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Chassis no.</label>
-                    <Input value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
+                    <label htmlFor="fleet-chassis-no" className="block text-xs text-gray-500 mb-1">Chassis no.</label>
+                    <Input id="fleet-chassis-no" value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
                   </div>
                 </div>
               </div>
@@ -736,24 +736,24 @@ export default function Fleet() {
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Vehicle no.</label>
-                <Input value={vForm.vehicleNo} disabled title="Vehicle number cannot be changed" />
+                <label htmlFor="fleet-vehicle-no-2" className="block text-xs text-gray-500 mb-1">Vehicle no.</label>
+                <Input id="fleet-vehicle-no-2" value={vForm.vehicleNo} disabled title="Vehicle number cannot be changed" />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Status</label>
-                <Select value={vForm.status} onChange={(e) => setVForm({ ...vForm, status: e.target.value })}>
+                <label htmlFor="fleet-status" className="block text-xs text-gray-500 mb-1">Status</label>
+                <Select id="fleet-status" value={vForm.status} onChange={(e) => setVForm({ ...vForm, status: e.target.value })}>
                   {VEHICLE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
                 </Select>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
-                <Input value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
+                <label htmlFor="fleet-brand-model-2" className="block text-xs text-gray-500 mb-1">Brand / model *</label>
+                <Input id="fleet-brand-model-2" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Default driver</label>
-                <Select value={vForm.driverId} onChange={(e) => setVForm({ ...vForm, driverId: e.target.value })}>
+                <label htmlFor="fleet-default-driver-2" className="block text-xs text-gray-500 mb-1">Default driver</label>
+                <Select id="fleet-default-driver-2" value={vForm.driverId} onChange={(e) => setVForm({ ...vForm, driverId: e.target.value })}>
                   <option value="">— Driver —</option>
                   {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
@@ -768,39 +768,39 @@ export default function Fleet() {
               <div className="space-y-3 pt-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Type</label>
-                    <Select value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
+                    <label htmlFor="fleet-type-2" className="block text-xs text-gray-500 mb-1">Type</label>
+                    <Select id="fleet-type-2" value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
                       <option value="">— Type —</option>
                       {types.filter((t) => t.active || t.name === vForm.vehicleType).map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                     </Select>
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Capacity</label>
-                    <Input type="number" min={1} max={60} value={vForm.capacity} onChange={(e) => setVForm({ ...vForm, capacity: Number(e.target.value) })} />
+                    <label htmlFor="fleet-capacity" className="block text-xs text-gray-500 mb-1">Capacity</label>
+                    <Input id="fleet-capacity" type="number" min={1} max={60} value={vForm.capacity} onChange={(e) => setVForm({ ...vForm, capacity: Number(e.target.value) })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Make</label>
-                    <Input value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
+                    <label htmlFor="fleet-make-2" className="block text-xs text-gray-500 mb-1">Make</label>
+                    <Input id="fleet-make-2" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Model</label>
-                    <Input value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
+                    <label htmlFor="fleet-model-2" className="block text-xs text-gray-500 mb-1">Model</label>
+                    <Input id="fleet-model-2" value={vForm.model} onChange={(e) => setVForm({ ...vForm, model: e.target.value })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Year</label>
-                    <Input type="number" min={1950} max={2100} value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
+                    <label htmlFor="fleet-year-2" className="block text-xs text-gray-500 mb-1">Year</label>
+                    <Input id="fleet-year-2" type="number" min={1950} max={2100} value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                    <Input maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                    <label htmlFor="fleet-vin-17-2" className="block text-xs text-gray-500 mb-1">VIN (17)</label>
+                    <Input id="fleet-vin-17-2" maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Fuel</label>
-                    <Select value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
+                    <label htmlFor="fleet-fuel-2" className="block text-xs text-gray-500 mb-1">Fuel</label>
+                    <Select id="fleet-fuel-2" value={vForm.fuelType} onChange={(e) => setVForm({ ...vForm, fuelType: e.target.value })}>
                       <option value="">— Fuel —</option>
                       {FUEL_TYPES.map((f) => <option key={f} value={f}>{f}</option>)}
                     </Select>
@@ -808,12 +808,12 @@ export default function Fleet() {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Engine no.</label>
-                    <Input value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
+                    <label htmlFor="fleet-engine-no-2" className="block text-xs text-gray-500 mb-1">Engine no.</label>
+                    <Input id="fleet-engine-no-2" value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Chassis no.</label>
-                    <Input value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
+                    <label htmlFor="fleet-chassis-no-2" className="block text-xs text-gray-500 mb-1">Chassis no.</label>
+                    <Input id="fleet-chassis-no-2" value={vForm.chassisNo} onChange={(e) => setVForm({ ...vForm, chassisNo: e.target.value })} />
                   </div>
                 </div>
               </div>
@@ -830,22 +830,22 @@ export default function Fleet() {
         <Modal title={`Edit driver — ${editingD.name}`} error={modalError} onClose={() => { setEditingD(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Driver name *</label>
-              <Input value={dForm.name} invalid={!!modalError} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
+              <label htmlFor="fleet-driver-name-2" className="block text-xs text-gray-500 mb-1">Driver name *</label>
+              <Input id="fleet-driver-name-2" value={dForm.name} invalid={!!modalError} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Phone</label>
-                <Input placeholder="09-xxx" value={dForm.phone} onChange={(e) => setDForm({ ...dForm, phone: e.target.value })} />
+                <label htmlFor="fleet-phone-2" className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input id="fleet-phone-2" placeholder="09-xxx" value={dForm.phone} onChange={(e) => setDForm({ ...dForm, phone: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">License no.</label>
-                <Input placeholder="DL-xxxx" value={dForm.licenseNo} onChange={(e) => setDForm({ ...dForm, licenseNo: e.target.value })} />
+                <label htmlFor="fleet-license-no-2" className="block text-xs text-gray-500 mb-1">License no.</label>
+                <Input id="fleet-license-no-2" placeholder="DL-xxxx" value={dForm.licenseNo} onChange={(e) => setDForm({ ...dForm, licenseNo: e.target.value })} />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Status</label>
-              <Select value={dForm.status} onChange={(e) => setDForm({ ...dForm, status: e.target.value })}>
+              <label htmlFor="fleet-status-2" className="block text-xs text-gray-500 mb-1">Status</label>
+              <Select id="fleet-status-2" value={dForm.status} onChange={(e) => setDForm({ ...dForm, status: e.target.value })}>
                 {DRIVER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </div>

@@ -476,6 +476,13 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
     loadFiles(a.id);
   };
 
+  // end-before-publish is mirrored client-side so the To field flags instantly;
+  // the same server message is attributed to the field when the API rejects it
+  const endAtFieldError =
+    (form.publishAt && form.endAt && form.endAt <= form.publishAt) || error === 'End date must be after the publish date'
+      ? 'End date must be after the publish date'
+      : undefined;
+
   const submit = async () => {
     setBusy(true); setError('');
     try {
@@ -700,7 +707,7 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
 
       {/* create / edit modal */}
       {formOpen && (
-        <Modal title={editing ? `Edit ${editing.code}` : 'New announcement'} onClose={() => setFormOpen(false)} error={error}>
+        <Modal title={editing ? `Edit ${editing.code}` : 'New announcement'} onClose={() => setFormOpen(false)} error={error && !endAtFieldError ? error : null}>
           <div className="space-y-3">
             <Input placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
             <div>
@@ -756,13 +763,13 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
             <div className="grid grid-cols-2 gap-3">
               {!editing && (
                 <div>
-                  <label className="text-xs text-gray-500">Publish at (empty = draft)</label>
-                  <Input type="datetime-local" value={form.publishAt} onChange={(e) => setForm({ ...form, publishAt: e.target.value })} />
+                  <label htmlFor="announcements-publish-at-empty-draft" className="text-xs text-gray-500">Publish at (empty = draft)</label>
+                  <Input id="announcements-publish-at-empty-draft" type="datetime-local" value={form.publishAt} onChange={(e) => setForm({ ...form, publishAt: e.target.value })} />
                 </div>
               )}
               <div>
-                <label className="text-xs text-gray-500">Expires at</label>
-                <Input type="datetime-local" value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
+                <label htmlFor="announcements-expires-at" className="text-xs text-gray-500">Expires at</label>
+                <Input id="announcements-expires-at" type="datetime-local" error={endAtFieldError} value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
               </div>
             </div>
             {!editing && (

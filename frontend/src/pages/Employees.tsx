@@ -228,38 +228,38 @@ export default function Employees() {
             <div className="text-xs text-gray-500">Employee master data — the department decides where their requests route for approval. A login account is optional and can be added later via Edit.</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Employee No *</label>
-                <Input placeholder="e.g. EMP-001" value={form.employeeNo} onChange={(e) => setForm({ ...form, employeeNo: e.target.value })} />
+                <label htmlFor="employees-employee-no" className="block text-xs text-gray-500 mb-1">Employee No *</label>
+                <Input id="employees-employee-no" placeholder="e.g. EMP-001" value={form.employeeNo} onChange={(e) => setForm({ ...form, employeeNo: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Full name *</label>
-                <Input placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+                <label htmlFor="employees-full-name" className="block text-xs text-gray-500 mb-1">Full name *</label>
+                <Input id="employees-full-name" placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Position</label>
-                <Input placeholder="e.g. Staff Officer" value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
+                <label htmlFor="employees-position" className="block text-xs text-gray-500 mb-1">Position</label>
+                <Input id="employees-position" placeholder="e.g. Staff Officer" value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Department</label>
-                <Select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
+                <label htmlFor="employees-department" className="block text-xs text-gray-500 mb-1">Department</label>
+                <Select id="employees-department" value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
                   <option value="">— Department —</option>
                   {depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Branch</label>
-                <Select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
+                <label htmlFor="employees-branch" className="block text-xs text-gray-500 mb-1">Branch</label>
+                <Select id="employees-branch" value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
                   <option value="">— Branch —</option>
                   {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
                 </Select>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Phone</label>
-                <Input placeholder="09-xxx" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                <label htmlFor="employees-phone" className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input id="employees-phone" placeholder="09-xxx" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
               </div>
               <div className="sm:col-span-2">
-                <label className="block text-xs text-gray-500 mb-1">Email</label>
-                <Input type="email" placeholder="name@company.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+                <label htmlFor="employees-email" className="block text-xs text-gray-500 mb-1">Email</label>
+                <Input id="employees-email" type="email" placeholder="name@company.com" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
               </div>
             </div>
 
@@ -288,8 +288,8 @@ export default function Employees() {
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Username {form.authSource === 'AD' ? '(same as Windows login)' : '*'}</label>
-                      <Input placeholder="e.g. aung.kyaw" invalid={!!formError} error={usernameError} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+                      <label htmlFor="employees-username-form-authsource-ad-same" className="block text-xs text-gray-500 mb-1">Username {form.authSource === 'AD' ? '(same as Windows login)' : '*'}</label>
+                      <Input id="employees-username-form-authsource-ad-same" placeholder="e.g. aung.kyaw" invalid={!!formError} error={usernameError} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Password {form.authSource === 'LOCAL' ? '(min 8) *' : ''}</label>
@@ -418,28 +418,28 @@ export default function Employees() {
           <div className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Employee No (immutable)</label>
-                <Input value={edit.employeeNo} disabled />
+                <label htmlFor="employees-employee-no-immutable" className="block text-xs text-gray-500 mb-1">Employee No (immutable)</label>
+                <Input id="employees-employee-no-immutable" value={edit.employeeNo} disabled />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Full name</label>
-                <Input value={edit.fullName} onChange={(e) => setEdit({ ...edit, fullName: e.target.value })} />
+                <label htmlFor="employees-full-name-2" className="block text-xs text-gray-500 mb-1">Full name</label>
+                <Input id="employees-full-name-2" value={edit.fullName} onChange={(e) => setEdit({ ...edit, fullName: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Position</label>
-                <Input value={edit.position ?? ''} onChange={(e) => setEdit({ ...edit, position: e.target.value })} />
+                <label htmlFor="employees-position-2" className="block text-xs text-gray-500 mb-1">Position</label>
+                <Input id="employees-position-2" value={edit.position ?? ''} onChange={(e) => setEdit({ ...edit, position: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Phone</label>
-                <Input value={edit.phone ?? ''} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} />
+                <label htmlFor="employees-phone-2" className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input id="employees-phone-2" value={edit.phone ?? ''} onChange={(e) => setEdit({ ...edit, phone: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Email</label>
-                <Input type="email" value={edit.email ?? ''} onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
+                <label htmlFor="employees-email-2" className="block text-xs text-gray-500 mb-1">Email</label>
+                <Input id="employees-email-2" type="email" value={edit.email ?? ''} onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
               </div>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Department</label>
+              <label htmlFor="employees-department" className="block text-xs text-gray-500 mb-1">Department</label>
               <Select
                 value={edit.department?.id ?? ''}
                 onChange={(e) => setEdit({ ...edit, department: depts.find((d) => d.id === e.target.value) ?? null })}
@@ -463,8 +463,8 @@ export default function Employees() {
                     Unlink user
                   </button>
                 </div>
-                <label className="block text-xs text-gray-500 mb-1">Roles (Ctrl+click for multiple)</label>
-                <Select
+                <label htmlFor="employees-roles-ctrl-click-for-multiple" className="block text-xs text-gray-500 mb-1">Roles (Ctrl+click for multiple)</label>
+                <Select id="employees-roles-ctrl-click-for-multiple"
                   multiple
                   className="h-28"
                   value={editRoles}
@@ -494,8 +494,8 @@ export default function Employees() {
                 </div>
                 {linkMode === 'link' && (
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">User account to link</label>
-                    <Select
+                    <label htmlFor="employees-user-account-to-link" className="block text-xs text-gray-500 mb-1">User account to link</label>
+                    <Select id="employees-user-account-to-link"
                       value={linkUserId}
                       invalid={!!modalError && linkMode === 'link'}
                       onChange={(e) => setLinkUserId(e.target.value)}

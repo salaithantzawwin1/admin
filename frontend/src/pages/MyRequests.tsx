@@ -111,6 +111,11 @@ export default function MyRequests() {
     }
   };
 
+  // min-length hints from the DTO (title ≥ 3, details ≥ 3) — surface as the
+  // user types; server-side failures keep the dialog banner
+  const titleFieldError = form.title.trim() && form.title.trim().length < 3 ? 'Title must be at least 3 characters' : undefined;
+  const descFieldError = form.description.trim() && form.description.trim().length < 3 ? 'Details must be at least 3 characters' : undefined;
+
   return (
     <div>
       <PageHeader
@@ -127,12 +132,12 @@ export default function MyRequests() {
           <div className="space-y-3">
             <div className="text-xs text-gray-500">Creates a draft — you review and submit it on the next page. Car requests have their own form on the Car Requests page.</div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Request title *</label>
-              <Input placeholder="e.g. Stationery for September" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+              <label htmlFor="my-requests-request-title" className="block text-xs text-gray-500 mb-1">Request title *</label>
+              <Input id="my-requests-request-title" placeholder="e.g. Stationery for September" error={titleFieldError} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Request type *</label>
-              <Select value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
+              <label htmlFor="my-requests-request-type" className="block text-xs text-gray-500 mb-1">Request type *</label>
+              <Select id="my-requests-request-type" value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
                 <option value="GENERIC_REQUEST">General Request</option>
                 <option value="MEETING_ROOM_REQUEST">Meeting Room Request</option>
                 <option value="OFFICE_SUPPLY_REQUEST">Office Supply Request</option>
@@ -141,9 +146,10 @@ export default function MyRequests() {
               </Select>
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Description / details</label>
-              <Textarea
+              <label htmlFor="my-requests-description-details" className="block text-xs text-gray-500 mb-1">Description / details</label>
+              <Textarea id="my-requests-description-details"
                 rows={3}
+                error={descFieldError}
                 placeholder="Details the approver should know"
                 value={form.description}
                 onChange={(e) => setForm({ ...form, description: e.target.value })}

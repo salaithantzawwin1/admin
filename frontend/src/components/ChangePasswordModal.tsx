@@ -57,17 +57,17 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
         ) : (
           <div className="space-y-3">
             <div>
-              <label className="block text-sm text-gray-600 mb-1">Current password</label>
-              <Input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus />
+              <label htmlFor="change-password-modal-current-password" className="block text-sm text-gray-600 mb-1">Current password</label>
+              <Input id="change-password-modal-current-password" type="password" value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus />
             </div>
             <div>
-              <label className="block text-sm text-gray-600 mb-1">New password</label>
-              <Input type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="At least 8 characters" />
+              <label htmlFor="change-password-modal-new-password" className="block text-sm text-gray-600 mb-1">New password</label>
+              <Input id="change-password-modal-new-password" type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="At least 8 characters" />
               <PasswordStrength value={next} />
             </div>
             <div>
-              <label className="block text-sm text-gray-600 mb-1">Confirm new password</label>
-              <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+              <label htmlFor="change-password-modal-confirm-new-password" className="block text-sm text-gray-600 mb-1">Confirm new password</label>
+              <Input id="change-password-modal-confirm-new-password" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
             </div>
             {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
             <div className="flex justify-end gap-2 pt-1">

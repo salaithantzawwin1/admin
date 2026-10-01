@@ -19,7 +19,7 @@ class VehicleTypeUpdateDto {
 
 const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'] as const;
 
-class VehicleDto {
+export class VehicleDto {
   @IsString() @MinLength(2) @MaxLength(32) vehicleNo!: string;
   @IsIn(Object.values(VehicleType)) vehicleType!: VehicleType;
   @IsString() @MinLength(2) @MaxLength(64) brandModel!: string;

@@ -182,16 +182,16 @@ export default function Users() {
           <div className="space-y-3">
             <div className="text-xs text-gray-500">Signs in with username + password. Roles decide what the user sees — changeable later on this page.</div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Username *</label>
-              <Input placeholder="e.g. aung.kyaw" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+              <label htmlFor="users-username" className="block text-xs text-gray-500 mb-1">Username *</label>
+              <Input id="users-username" placeholder="e.g. aung.kyaw" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Full name *</label>
-              <Input placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+              <label htmlFor="users-full-name" className="block text-xs text-gray-500 mb-1">Full name *</label>
+              <Input id="users-full-name" placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Password (min 8) *</label>
-              <Input type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              <label htmlFor="users-password-min-8" className="block text-xs text-gray-500 mb-1">Password (min 8) *</label>
+              <Input id="users-password-min-8" type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
               <PasswordStrength value={form.password} />
             </div>
             <div>
@@ -318,12 +318,12 @@ export default function Users() {
               <Input value={edit.username} disabled title="Username is the login identity (links AD/LDAP, audit trail and sessions) — it cannot be renamed" />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Full name</label>
-              <Input value={edit.fullName} onChange={(e) => setEdit({ ...edit, fullName: e.target.value })} />
+              <label htmlFor="users-full-name-2" className="block text-xs text-gray-500 mb-1">Full name</label>
+              <Input id="users-full-name-2" value={edit.fullName} onChange={(e) => setEdit({ ...edit, fullName: e.target.value })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Email</label>
-              <Input type="email" value={edit.email ?? ''} onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
+              <label htmlFor="users-email" className="block text-xs text-gray-500 mb-1">Email</label>
+              <Input id="users-email" type="email" value={edit.email ?? ''} onChange={(e) => setEdit({ ...edit, email: e.target.value })} />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Roles</label>

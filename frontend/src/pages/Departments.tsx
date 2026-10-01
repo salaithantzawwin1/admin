@@ -155,20 +155,20 @@ export default function Departments() {
             <div className="text-xs text-gray-500">Branches group departments — e.g. head office vs. branches.</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Code *</label>
-                <Input placeholder="e.g. HQ" value={bForm.code} onChange={(e) => setBForm({ ...bForm, code: e.target.value.toUpperCase() })} />
+                <label htmlFor="departments-code" className="block text-xs text-gray-500 mb-1">Code *</label>
+                <Input id="departments-code" placeholder="e.g. HQ" value={bForm.code} onChange={(e) => setBForm({ ...bForm, code: e.target.value.toUpperCase() })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Branch name *</label>
-                <Input placeholder="e.g. Head Office" value={bForm.name} onChange={(e) => setBForm({ ...bForm, name: e.target.value })} />
+                <label htmlFor="departments-branch-name" className="block text-xs text-gray-500 mb-1">Branch name *</label>
+                <Input id="departments-branch-name" placeholder="e.g. Head Office" value={bForm.name} onChange={(e) => setBForm({ ...bForm, name: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Address</label>
-                <Input placeholder="Optional" value={bForm.address} onChange={(e) => setBForm({ ...bForm, address: e.target.value })} />
+                <label htmlFor="departments-address" className="block text-xs text-gray-500 mb-1">Address</label>
+                <Input id="departments-address" placeholder="Optional" value={bForm.address} onChange={(e) => setBForm({ ...bForm, address: e.target.value })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Phone</label>
-                <Input placeholder="Optional" value={bForm.phone} onChange={(e) => setBForm({ ...bForm, phone: e.target.value })} />
+                <label htmlFor="departments-phone" className="block text-xs text-gray-500 mb-1">Phone</label>
+                <Input id="departments-phone" placeholder="Optional" value={bForm.phone} onChange={(e) => setBForm({ ...bForm, phone: e.target.value })} />
               </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
@@ -186,12 +186,12 @@ export default function Departments() {
             <div className="text-xs text-gray-500">Departments group employees and route their requests to the right approvers.</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Code *</label>
-                <Input placeholder="e.g. IT" value={dForm.code} onChange={(e) => setDForm({ ...dForm, code: e.target.value.toUpperCase() })} />
+                <label htmlFor="departments-code-2" className="block text-xs text-gray-500 mb-1">Code *</label>
+                <Input id="departments-code-2" placeholder="e.g. IT" value={dForm.code} onChange={(e) => setDForm({ ...dForm, code: e.target.value.toUpperCase() })} />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Department name *</label>
-                <Input placeholder="e.g. IT Department" value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
+                <label htmlFor="departments-department-name" className="block text-xs text-gray-500 mb-1">Department name *</label>
+                <Input id="departments-department-name" placeholder="e.g. IT Department" value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
               </div>
               <div className="sm:col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Branch</label>
@@ -267,20 +267,20 @@ export default function Departments() {
         <Modal title={`Edit branch — ${mode.row.code}`} error={modalError} onClose={() => { setMode(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Code (immutable)</label>
-              <Input value={mode.row.code} disabled />
+              <label htmlFor="departments-code-immutable" className="block text-xs text-gray-500 mb-1">Code (immutable)</label>
+              <Input id="departments-code-immutable" value={mode.row.code} disabled />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Name</label>
-              <Input value={mode.row.name} onChange={(e) => setMode({ ...mode, row: { ...mode.row, name: e.target.value } })} />
+              <label htmlFor="departments-name" className="block text-xs text-gray-500 mb-1">Name</label>
+              <Input id="departments-name" value={mode.row.name} onChange={(e) => setMode({ ...mode, row: { ...mode.row, name: e.target.value } })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Address</label>
-              <Input value={mode.row.address ?? ''} onChange={(e) => setMode({ ...mode, row: { ...mode.row, address: e.target.value } })} />
+              <label htmlFor="departments-address-2" className="block text-xs text-gray-500 mb-1">Address</label>
+              <Input id="departments-address-2" value={mode.row.address ?? ''} onChange={(e) => setMode({ ...mode, row: { ...mode.row, address: e.target.value } })} />
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Phone</label>
-              <Input value={mode.row.phone ?? ''} onChange={(e) => setMode({ ...mode, row: { ...mode.row, phone: e.target.value } })} />
+              <label htmlFor="departments-phone-2" className="block text-xs text-gray-500 mb-1">Phone</label>
+              <Input id="departments-phone-2" value={mode.row.phone ?? ''} onChange={(e) => setMode({ ...mode, row: { ...mode.row, phone: e.target.value } })} />
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setMode(null)}>Cancel</Button>

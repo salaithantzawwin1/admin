@@ -123,8 +123,8 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
         <Input placeholder="Destination *" error={destError} onBlur={() => touch('destination')} value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
         <Input placeholder="Pickup location (optional)" value={form.pickupLocation} onChange={(e) => setForm({ ...form, pickupLocation: e.target.value })} />
         <div>
-          <label className="block text-xs text-gray-500 mb-1">Start * (defaults to today, pick the time)</label>
-          <Input type="datetime-local" error={startError ?? clashMsg} onBlur={() => touch('startDate')} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
+          <label htmlFor="car-request-form-start-defaults-to-today-pick-the" className="block text-xs text-gray-500 mb-1">Start * (defaults to today, pick the time)</label>
+          <Input id="car-request-form-start-defaults-to-today-pick-the" type="datetime-local" error={startError ?? clashMsg} onBlur={() => touch('startDate')} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">

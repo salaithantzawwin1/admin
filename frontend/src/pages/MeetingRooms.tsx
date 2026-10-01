@@ -435,17 +435,17 @@ export default function MeetingRooms() {
                 </div>
                 {/* (i) Meeting Date + (iii) Start time combined; (iv) End time (estimated) */}
                 <div>
-                  <label className="text-xs text-gray-500 block mb-1">Meeting date & start time *</label>
-                  <Input type="datetime-local" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />
+                  <label htmlFor="meeting-rooms-meeting-date-start-time" className="text-xs text-gray-500 block mb-1">Meeting date & start time *</label>
+                  <Input id="meeting-rooms-meeting-date-start-time" type="datetime-local" value={form.startTime} onChange={(e) => setForm({ ...form, startTime: e.target.value })} />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 block mb-1">End time (estimated) — optional, default +1 hour</label>
-                  <Input type="datetime-local" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
+                  <label htmlFor="meeting-rooms-end-time-estimated-optional-defa" className="text-xs text-gray-500 block mb-1">End time (estimated) — optional, default +1 hour</label>
+                  <Input id="meeting-rooms-end-time-estimated-optional-defa" type="datetime-local" value={form.endTime} onChange={(e) => setForm({ ...form, endTime: e.target.value })} />
                 </div>
                 {/* (vi) Meeting type */}
                 <div>
-                  <label className="text-xs text-gray-500 block mb-1">Meeting type</label>
-                  <Select value={form.meetingType} onChange={(e) => setForm({ ...form, meetingType: e.target.value })}>
+                  <label htmlFor="meeting-rooms-meeting-type" className="text-xs text-gray-500 block mb-1">Meeting type</label>
+                  <Select id="meeting-rooms-meeting-type" value={form.meetingType} onChange={(e) => setForm({ ...form, meetingType: e.target.value })}>
                     <option value="INTERNAL">Internal</option>
                     <option value="EXTERNAL">External</option>
                   </Select>
@@ -749,17 +749,17 @@ export default function MeetingRooms() {
               >
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Room name *</label>
-                    <Input placeholder="Room name *" value={roomForm.name} onChange={(e) => setRoomForm({ ...roomForm, name: e.target.value })} />
+                    <label htmlFor="meeting-rooms-room-name" className="block text-xs text-gray-500 mb-1">Room name *</label>
+                    <Input id="meeting-rooms-room-name" placeholder="Room name *" value={roomForm.name} onChange={(e) => setRoomForm({ ...roomForm, name: e.target.value })} />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Location</label>
-                      <Input placeholder="e.g. 2nd floor" value={roomForm.location} onChange={(e) => setRoomForm({ ...roomForm, location: e.target.value })} />
+                      <label htmlFor="meeting-rooms-location" className="block text-xs text-gray-500 mb-1">Location</label>
+                      <Input id="meeting-rooms-location" placeholder="e.g. 2nd floor" value={roomForm.location} onChange={(e) => setRoomForm({ ...roomForm, location: e.target.value })} />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Capacity</label>
-                      <Input type="number" min={1} placeholder="Capacity" value={roomForm.capacity} onChange={(e) => setRoomForm({ ...roomForm, capacity: Number(e.target.value) })} />
+                      <label htmlFor="meeting-rooms-capacity" className="block text-xs text-gray-500 mb-1">Capacity</label>
+                      <Input id="meeting-rooms-capacity" type="number" min={1} placeholder="Capacity" value={roomForm.capacity} onChange={(e) => setRoomForm({ ...roomForm, capacity: Number(e.target.value) })} />
                     </div>
                   </div>
                   <div>
