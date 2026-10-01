@@ -46,3 +46,19 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: frontend
+
+  # The ONE status check to require in branch protection: it needs both jobs,
+  # so a single red job (or a skipped one) blocks the merge. Requiring the two
+  # jobs individually instead would let a skipped job slip through as "passing".
+  # Setup: docs/CI_BRANCH_PROTECTION.md
+  gate:
+    name: CI gate
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }} # still run (red) when a needed job failed
+    steps:
+      - name: Fail when any required job did not succeed
+        run: |
+          echo "backend:  ${{ needs.backend.result }}"
+          echo "frontend: ${{ needs.frontend.result }}"
+          [ "${{ needs.backend.result }}" = "success" ] && [ "${{ needs.frontend.result }}" = "success" ]
