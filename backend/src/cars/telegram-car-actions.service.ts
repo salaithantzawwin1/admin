@@ -302,7 +302,13 @@ export class TelegramCarActionsService {
         select: { telegramChatId: true },
       });
       const cr = request.carRequest;
-      const when = `\n📅 ${new Date(cr.startDate).toLocaleString('en-GB')} → ${new Date(cr.endDate).toLocaleString('en-GB')}`;
+      // TZ-safe Yangon wall clock: pre-shift +6.5h (UTC+06:30, no DST) then read
+      // via UTC getters — toLocaleString without a timeZone option follows the
+      // server's zone, which broke the card on UTC runners (and prod only worked
+      // because its container happens to run Asia/Yangon).
+      const p2 = (n: number) => String(n).padStart(2, '0');
+      const ygn = (d: Date) => { const s = new Date(d.getTime() + 6.5 * 3600 * 1000); return `${s.getUTCDate()}/${s.getUTCMonth() + 1} ${p2(s.getUTCHours())}:${p2(s.getUTCMinutes())}`; };
+      const when = `\n📅 ${ygn(new Date(cr.startDate))} → ${ygn(new Date(cr.endDate))}`;
       const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}${cr.passengers ? ` · 👥 ${cr.passengers}` : ''}`;
       const why = request.description ? `\n📝 ${escapeHtml(request.description)}` : '';
       const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}${why}`;

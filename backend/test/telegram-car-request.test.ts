@@ -751,7 +751,7 @@ async function approvalCardTests() {
   const card = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
   check(card.includes('CAR-202609-0010'), 'approval card carries the doc number');
   check(card.includes('Salai Thant Zaw Win'), 'approval card names the requester');
-  check(card.includes('14:30') && card.includes('16:30'), 'approval card shows the CURRENT (possibly shifted) window');
+  check(card.includes('29/9 14:30') && card.includes('29/9 16:30'), 'approval card shows the CURRENT (possibly shifted) window');
   check(card.includes('Chan Yin Factory'), 'approval card shows the pickup point');
   check(card.includes('👥 3'), 'approval card shows the passenger count');
   check(card.includes('Return trip — pickup from Chan Yin Factory'), 'approval card shows the purpose/notes line');
