@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useId } from 'react';
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
@@ -51,8 +51,11 @@ export function Button({
 
 // Shared field chrome for Input/Textarea/Select: identical radius, typography
 // and focus treatment everywhere. `invalid` switches border + focus ring to a
-// subtle error-red (forms highlight the field behind a failed submit) and sets
-// aria-invalid for assistive tech.
+// subtle error-red; `error` additionally shows the reason as a small message
+// under the field and links it via aria-describedby (invalid is implied).
+// Fields are always wrapped in a plain <div> so toggling an error never
+// remounts the control (keeps focus while typing); width utilities like !w-64
+// still land on the control itself.
 function fieldCls(invalid: boolean | undefined, size: string, className?: string) {
   return [
     size,
@@ -64,34 +67,56 @@ function fieldCls(invalid: boolean | undefined, size: string, className?: string
   ].join(' ');
 }
 
-export function Input({ invalid, className, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }) {
+function fieldErrorId(fieldId: string) {
+  return `${fieldId}-error`;
+}
+
+export function Input({ invalid, error, className, id, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean; error?: string }) {
+  const fieldId = id ?? useId();
   return (
-    <input
-      {...props}
-      aria-invalid={invalid || undefined}
-      className={fieldCls(invalid, 'w-full h-10 px-3 py-2', className)}
-    />
+    <div>
+      <input
+        {...props}
+        id={fieldId}
+        aria-invalid={(invalid || !!error) || undefined}
+        aria-describedby={[props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined].filter(Boolean).join(' ') || undefined}
+        className={fieldCls(invalid || !!error, 'w-full h-10 px-3 py-2', className)}
+      />
+      {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
   );
 }
 
-export function Textarea({ invalid, className, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean }) {
+export function Textarea({ invalid, error, className, id, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean; error?: string }) {
+  const fieldId = id ?? useId();
   return (
-    <textarea
-      {...props}
-      aria-invalid={invalid || undefined}
-      className={fieldCls(invalid, 'w-full px-3 py-2', className)}
-    />
+    <div>
+      <textarea
+        {...props}
+        id={fieldId}
+        aria-invalid={(invalid || !!error) || undefined}
+        aria-describedby={[props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined].filter(Boolean).join(' ') || undefined}
+        className={fieldCls(invalid || !!error, 'w-full px-3 py-2', className)}
+      />
+      {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
   );
 }
 
-export function Select({ invalid, className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }) {
+export function Select({ invalid, error, className, id, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; error?: string }) {
+  const fieldId = id ?? useId();
   return (
-    <select
-      {...props}
-      aria-invalid={invalid || undefined}
-      // multi-select boxes size themselves (caller passes h-28 etc.); single ones stay h-10
-      className={fieldCls(invalid, `w-full ${props.multiple ? '' : 'h-10'} px-3 py-2`, className)}
-    />
+    <div>
+      <select
+        {...props}
+        id={fieldId}
+        aria-invalid={(invalid || !!error) || undefined}
+        aria-describedby={[props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined].filter(Boolean).join(' ') || undefined}
+        // multi-select boxes size themselves (caller passes h-28 etc.); single ones stay h-10
+        className={fieldCls(invalid || !!error, `w-full ${props.multiple ? '' : 'h-10'} px-3 py-2`, className)}
+      />
+      {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
+    </div>
   );
 }
 

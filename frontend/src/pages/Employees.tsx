@@ -204,6 +204,11 @@ export default function Employees() {
     }
   };
 
+  // duplicate-username errors from the server attach to the username field;
+  // anything else stays on the dialog banner
+  const usernameError = formError === 'Username already exists' ? formError : undefined;
+  const editUsernameError = modalError === 'Username already exists' ? modalError : undefined;
+
   return (
     <div>
       <PageHeader
@@ -218,7 +223,7 @@ export default function Employees() {
 
       {/* New employee — dialog (errors show inside) */}
       {showForm && (
-        <Modal title="New employee" error={formError} wide onClose={() => { setShowForm(false); setFormError(''); }}>
+        <Modal title="New employee" error={formError && !usernameError ? formError : null} wide onClose={() => { setShowForm(false); setFormError(''); }}>
           <div className="space-y-3">
             <div className="text-xs text-gray-500">Employee master data — the department decides where their requests route for approval. A login account is optional and can be added later via Edit.</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -284,13 +289,13 @@ export default function Employees() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Username {form.authSource === 'AD' ? '(same as Windows login)' : '*'}</label>
-                      <Input placeholder="e.g. aung.kyaw" invalid={!!formError} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+                      <Input placeholder="e.g. aung.kyaw" invalid={!!formError} error={usernameError} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Password {form.authSource === 'LOCAL' ? '(min 8) *' : ''}</label>
                       {form.authSource === 'LOCAL' ? (
                         <>
-                          <Input type="password" placeholder="Min 8 characters" invalid={!!formError} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                          <Input type="password" placeholder="Min 8 characters" invalid={!!formError && !usernameError} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
                           <PasswordStrength value={form.password} />
                         </>
                       ) : (
@@ -409,7 +414,7 @@ export default function Employees() {
 
       {/* Edit modal */}
       {edit && (
-        <Modal title={`Edit employee — ${edit.employeeNo}`} error={modalError} onClose={() => { setEdit(null); setModalError(''); }}>
+        <Modal title={`Edit employee — ${edit.employeeNo}`} error={modalError && !editUsernameError ? modalError : null} onClose={() => { setEdit(null); setModalError(''); }}>
           <div className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -514,9 +519,9 @@ export default function Employees() {
                       </label>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <Input placeholder="Username (AD: same as Windows)" invalid={!!modalError && linkMode === 'create'} value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
+                      <Input placeholder="Username (AD: same as Windows)" invalid={!!modalError && linkMode === 'create'} error={editUsernameError} value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
                       {newLogin.authSource === 'LOCAL' ? (
-                        <Input placeholder="Password (min 8)" type="password" invalid={!!modalError && linkMode === 'create'} value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
+                        <Input placeholder="Password (min 8)" type="password" invalid={!!modalError && linkMode === 'create' && !editUsernameError} value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
                       ) : (
                         <div className="text-xs text-gray-500 self-center">No password here — AD verifies the Windows password at sign-in.</div>
                       )}

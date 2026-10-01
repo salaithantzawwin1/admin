@@ -213,6 +213,9 @@ export default function Suppliers() {
     }
   };
 
+  // duplicate-name errors from the server attach to the name field; the rest stays on the banner
+  const nameFieldError = modalError?.includes('already exists') ? modalError : undefined;
+
   return (
     <div>
       <PageHeader
@@ -295,11 +298,11 @@ export default function Suppliers() {
       )}
 
       {canViewSuppliers && form && (
-        <Modal title={form.id ? `Edit supplier — ${form.name}` : 'New supplier'} error={modalError} onClose={() => { setForm(null); setModalError(''); }}>
+        <Modal title={form.id ? `Edit supplier — ${form.name}` : 'New supplier'} error={modalError && !nameFieldError ? modalError : null} onClose={() => { setForm(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Supplier name *</label>
-              <Input placeholder="e.g. Shwe Yangon Trading" invalid={!!modalError} value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
+              <Input placeholder="e.g. Shwe Yangon Trading" error={nameFieldError} value={form.name ?? ''} onChange={(e) => setForm({ ...form, name: e.target.value })} autoFocus />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Phone</label>

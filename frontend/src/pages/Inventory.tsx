@@ -889,15 +889,23 @@ export default function Inventory() {
                   ))}
                 </Select>
                 <div className="flex gap-3">
-                  <Input type="number" min={1} placeholder="Quantity" value={restock.quantity} onChange={(e) => setRestock({ ...restock, quantity: Number(e.target.value) })} />
-                  <Input type="number" min={0} step="0.01" placeholder="Unit price (optional)" value={restock.unitPrice} onChange={(e) => setRestock({ ...restock, unitPrice: e.target.value })} />
+                  <div className="flex-1">
+                    <Input type="number" min={1} placeholder="Quantity" value={restock.quantity} onChange={(e) => setRestock({ ...restock, quantity: Number(e.target.value) })} />
+                  </div>
+                  <div className="flex-1">
+                    <Input type="number" min={0} step="0.01" placeholder="Unit price (optional)" value={restock.unitPrice} onChange={(e) => setRestock({ ...restock, unitPrice: e.target.value })} />
+                  </div>
                 </div>
                 <div className="flex gap-3">
-                  <Select value={restock.supplierId} onChange={(e) => setRestock({ ...restock, supplierId: e.target.value })}>
-                    <option value="">— Supplier (optional) —</option>
-                    {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}{s.phone ? ` · ${s.phone}` : ''}</option>)}
-                  </Select>
-                  <Input placeholder="Reference (PO / invoice / donor)" value={restock.reference} onChange={(e) => setRestock({ ...restock, reference: e.target.value })} />
+                  <div className="flex-1">
+                    <Select value={restock.supplierId} onChange={(e) => setRestock({ ...restock, supplierId: e.target.value })}>
+                      <option value="">— Supplier (optional) —</option>
+                      {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}{s.phone ? ` · ${s.phone}` : ''}</option>)}
+                    </Select>
+                  </div>
+                  <div className="flex-1">
+                    <Input placeholder="Reference (PO / invoice / donor)" value={restock.reference} onChange={(e) => setRestock({ ...restock, reference: e.target.value })} />
+                  </div>
                 </div>
                 <p className="text-xs text-gray-400">Unit price + supplier are recorded on each PURCHASE entry — used by the Purchases report. Manage suppliers in the Purchases tab.</p>
                 <Button onClick={doRestock} disabled={!restock.itemId || restock.quantity <= 0 || busy}>+ Add stock</Button>

@@ -112,6 +112,7 @@ const emptyVForm: Record<string, string | number> = {
   vin: '', fuelType: '', engineNo: '', chassisNo: '', make: '', model: '', year: '',
 };
 const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'];
+const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i; // same rule as the backend vehicle DTO
 const emptyDForm = { name: '', phone: '', licenseNo: '', status: 'AVAILABLE' };
 
 export default function Fleet() {
@@ -123,6 +124,14 @@ export default function Fleet() {
   const [notice, setNotice] = useState('');
   const [modalError, setModalError] = useState(''); // submit errors show inside the dialog, not on the page
   const [vForm, setVForm] = useState(emptyVForm);
+  // Attribute known vehicle-form errors to their field so the red border comes
+  // with an explanation; anything else stays on the dialog banner.
+  const vinLocal = vForm.vin && !VIN_RE.test(String(vForm.vin)) ? 'VIN must be 17 characters (no I, O, Q)' : undefined;
+  const vinServerError = modalError && /VIN (already registered|must be 17)/.test(modalError) ? modalError : undefined;
+  const vehNoServerError = modalError === 'Vehicle number already exists' ? modalError : undefined;
+  const vinError = vinLocal ?? vinServerError;
+  const vehNoError = vehNoServerError;
+  const vehicleBanner = modalError && !vinServerError && !vehNoServerError ? modalError : null;
   const [dForm, setDForm] = useState(emptyDForm);
   const [showV, setShowV] = useState(false);
   const [showD, setShowD] = useState(false);
@@ -628,12 +637,12 @@ export default function Fleet() {
       )}
 
       {showV && (
-        <Modal title="Add vehicle" error={modalError} onClose={() => { setShowV(false); setModalError(''); }}>
+        <Modal title="Add vehicle" error={vehicleBanner} onClose={() => { setShowV(false); setModalError(''); }}>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Vehicle no. *</label>
-                <Input placeholder="YGN-1234" invalid={!!modalError} value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
+                <Input placeholder="YGN-1234" error={vehNoError} value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Type</label>
@@ -645,7 +654,7 @@ export default function Fleet() {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
-              <Input placeholder="Toyota Corolla" invalid={!!modalError} value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
+              <Input placeholder="Toyota Corolla" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -677,7 +686,7 @@ export default function Fleet() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                    <Input placeholder="JTDKB20U577012345" maxLength={17} invalid={!!modalError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                    <Input placeholder="JTDKB20U577012345" maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Fuel</label>
@@ -708,7 +717,7 @@ export default function Fleet() {
       )}
 
       {editingV && (
-        <Modal title={`Edit vehicle — ${editingV.vehicleNo}`} error={modalError} onClose={() => { setEditingV(null); setModalError(''); }}>
+        <Modal title={`Edit vehicle — ${editingV.vehicleNo}`} error={vehicleBanner} onClose={() => { setEditingV(null); setModalError(''); }}>
           <div className="space-y-3">
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -725,7 +734,7 @@ export default function Fleet() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Brand / model *</label>
-                <Input value={vForm.brandModel} invalid={!!modalError} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
+                <Input value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Default driver</label>
@@ -772,7 +781,7 @@ export default function Fleet() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">VIN (17)</label>
-                    <Input maxLength={17} invalid={!!modalError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
+                    <Input maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Fuel</label>
@@ -1129,12 +1138,14 @@ export default function Fleet() {
           </div>
           {canManage && (
             <div className="flex gap-2 mb-4">
-              <Input
-                placeholder="New type e.g. STAFF_BUS"
-                value={newType}
-                onChange={(e) => setNewType(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') createType(); }}
-              />
+              <div className="flex-1">
+                <Input
+                  placeholder="New type e.g. STAFF_BUS"
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') createType(); }}
+                />
+              </div>
               <Button onClick={createType} disabled={!newType.trim()}>Add type</Button>
             </div>
           )}

@@ -430,7 +430,9 @@ export default function MeetingRooms() {
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {/* (v) Meeting subject */}
-                <Input className="sm:col-span-2" placeholder="Meeting subject * (e.g. Weekly progress review)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                <div className="sm:col-span-2">
+                  <Input placeholder="Meeting subject * (e.g. Weekly progress review)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </div>
                 {/* (i) Meeting Date + (iii) Start time combined; (iv) End time (estimated) */}
                 <div>
                   <label className="text-xs text-gray-500 block mb-1">Meeting date & start time *</label>
@@ -450,7 +452,7 @@ export default function MeetingRooms() {
                 </div>
                 {/* (vii) Participants companies / Person if external */}
                 {form.meetingType === 'EXTERNAL' && (
-                  <Input className="sm:col-span-1" placeholder="External company / person (required for external)" value={form.externalCompanies} onChange={(e) => setForm({ ...form, externalCompanies: e.target.value })} />
+                  <Input placeholder="External company / person (required for external)" value={form.externalCompanies} onChange={(e) => setForm({ ...form, externalCompanies: e.target.value })} />
                 )}
                 {/* (viii) Number of attendees */}
                 <Input type="number" min={1} placeholder="Number of attendees" value={form.attendees} onChange={(e) => setForm({ ...form, attendees: Number(e.target.value) })} />
@@ -467,8 +469,12 @@ export default function MeetingRooms() {
                   Reserved driver needed
                 </label>
                 {/* (xii) Services */}
-                <Input className="sm:col-span-2" placeholder="Services (Coffee, Tea, and so on)" value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} />
-                <Textarea className="sm:col-span-2" rows={2} placeholder="Agenda / notes (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                <div className="sm:col-span-2">
+                  <Input placeholder="Services (Coffee, Tea, and so on)" value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} />
+                </div>
+                <div className="sm:col-span-2">
+                  <Textarea rows={2} placeholder="Agenda / notes (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </div>
               </div>
 
               {slotHint && (
@@ -661,13 +667,15 @@ export default function MeetingRooms() {
             </p>
           </div>
           <div className="flex gap-2 mb-4 max-w-md">
-            <Input
-              placeholder="New facility e.g. Whiteboard"
-              value={newFacility}
-              maxLength={40}
-              onChange={(e) => setNewFacility(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') createFacility(); }}
-            />
+            <div className="flex-1">
+              <Input
+                placeholder="New facility e.g. Whiteboard"
+                value={newFacility}
+                maxLength={40}
+                onChange={(e) => setNewFacility(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') createFacility(); }}
+              />
+            </div>
             <Button onClick={createFacility} disabled={!newFacility.trim()}>Add facility</Button>
           </div>
           {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}

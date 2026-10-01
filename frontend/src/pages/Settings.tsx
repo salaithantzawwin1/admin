@@ -995,12 +995,13 @@ export default function Settings() {
         <div className="mt-4 border-t border-gray-100 pt-4">
           <label className="block text-xs text-gray-500 mb-1">Send test message — chat ID (get yours from @userinfobot)</label>
           <div className="flex gap-2">
-            <Input
-              className="flex-1"
-              placeholder="e.g. 123456789"
-              value={tgTestChat}
-              onChange={(e) => setTgTestChat(e.target.value)}
-            />
+            <div className="flex-1">
+              <Input
+                placeholder="e.g. 123456789"
+                value={tgTestChat}
+                onChange={(e) => setTgTestChat(e.target.value)}
+              />
+            </div>
             <Button variant="ghost" onClick={testTelegram} disabled={tgBusy || !tgTestChat.trim()}>Send test</Button>
           </div>
           {tgTestResult && (

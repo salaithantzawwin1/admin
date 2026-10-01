@@ -30,6 +30,9 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
   const [busy, setBusy] = useState(false);
   const [clashes, setClashes] = useState<{ request?: { docNumber: string }; startDate: string; endDate: string }[]>([]);
   const [forceSubmit, setForceSubmit] = useState(false);
+  // blur-tracking so "required" hints only appear once the user has been in the field
+  const [touched, setTouched] = useState<{ destination?: boolean; startDate?: boolean; endDate?: boolean }>({});
+  const touch = (k: 'destination' | 'startDate' | 'endDate') => setTouched((t) => ({ ...t, [k]: true }));
   // monotonic token for the clash-lookup effect (see effect below)
   const clashRun = useRef(0);
   const navigate = useNavigate();
@@ -103,15 +106,25 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
 
   const hasClash = clashes.length > 0 && !forceSubmit;
 
+  // inline field-level errors — the red border comes with an explanation
+  const destError = touched.destination && !form.destination.trim() ? 'Destination is required' : undefined;
+  const startError = touched.startDate && !form.startDate ? 'Start date is required' : undefined;
+  const endBeforeStart = !!(form.endDate && form.startDate && form.endDate < form.startDate);
+  const endError =
+    (endBeforeStart && "End can't be before the start") ||
+    (touched.endDate && needsEnd && !form.endDate ? 'End is required for custom hours' : undefined) ||
+    undefined;
+  const clashMsg = hasClash ? 'This window overlaps an existing booking — see the warning below' : undefined;
+
   return (
     <div className="space-y-3">
       {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <Input placeholder="Destination *" invalid={!!error} value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
+        <Input placeholder="Destination *" error={destError} onBlur={() => touch('destination')} value={form.destination} onChange={(e) => setForm({ ...form, destination: e.target.value })} />
         <Input placeholder="Pickup location (optional)" value={form.pickupLocation} onChange={(e) => setForm({ ...form, pickupLocation: e.target.value })} />
         <div>
           <label className="block text-xs text-gray-500 mb-1">Start * (defaults to today, pick the time)</label>
-          <Input type="datetime-local" invalid={hasClash} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
+          <Input type="datetime-local" error={startError ?? clashMsg} onBlur={() => touch('startDate')} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">
@@ -119,7 +132,8 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           </label>
           <Input
             type="datetime-local"
-            invalid={hasClash}
+            error={endError ?? clashMsg}
+            onBlur={() => touch('endDate')}
             value={form.endDate}
             onChange={(e) => setForm({ ...form, endDate: e.target.value })}
             min={form.startDate || undefined}
