@@ -72,7 +72,8 @@ function fieldErrorId(fieldId: string) {
 }
 
 export function Input({ invalid, error, className, id, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean; error?: string }) {
-  const fieldId = id ?? useId();
+  const autoId = useId(); // always called — hooks must not be conditional
+  const fieldId = id ?? autoId;
   return (
     <div>
       <input
@@ -88,7 +89,8 @@ export function Input({ invalid, error, className, id, ...props }: React.InputHT
 }
 
 export function Textarea({ invalid, error, className, id, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean; error?: string }) {
-  const fieldId = id ?? useId();
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
     <div>
       <textarea
@@ -104,7 +106,8 @@ export function Textarea({ invalid, error, className, id, ...props }: React.Text
 }
 
 export function Select({ invalid, error, className, id, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; error?: string }) {
-  const fieldId = id ?? useId();
+  const autoId = useId();
+  const fieldId = id ?? autoId;
   return (
     <div>
       <select
