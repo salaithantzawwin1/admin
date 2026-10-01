@@ -12,7 +12,7 @@ export class DelegationsService {
     private audit: AuditService,
   ) {}
 
-  async create(dto: { toUserId: string; startAt: string; endAt: string; reason?: string }, actor: Actor) {
+  async create(dto: { toUserId: string; startAt: string; endAt: string; reason?: string; overrideOverlap?: boolean }, actor: Actor) {
     const startAt = new Date(dto.startAt);
     const endAt = new Date(dto.endAt);
     if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
@@ -24,14 +24,17 @@ export class DelegationsService {
     const target = await this.prisma.user.findUnique({ where: { id: dto.toUserId } });
     if (!target || target.status !== 'ACTIVE') throw new BadRequestException('Delegate user not found or inactive');
 
-    // prevent overlapping active delegations from the same user
+    // prevent overlapping active delegations from the same user — the client may
+    // opt out with overrideOverlap after confirming the warning ("Save anyway")
     const overlap = await this.prisma.approvalDelegation.findFirst({
       where: {
         fromUserId: actor.userId, status: 'ACTIVE',
         startAt: { lte: endAt }, endAt: { gte: startAt },
       },
     });
-    if (overlap) throw new BadRequestException('You already have a delegation covering this period');
+    if (overlap && !dto.overrideOverlap) {
+      throw new BadRequestException('You already have a delegation covering this period');
+    }
 
     const delegation = await this.prisma.approvalDelegation.create({
       data: {

@@ -71,54 +71,64 @@ function fieldErrorId(fieldId: string) {
   return `${fieldId}-error`;
 }
 
-export function Input({ invalid, error, className, id, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean; error?: string }) {
+function fieldHintId(fieldId: string) {
+  return `${fieldId}-hint`;
+}
+
+export function Input({ invalid, error, describe, className, id, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean; error?: string; describe?: string }) {
   const autoId = useId(); // always called — hooks must not be conditional
   const fieldId = id ?? autoId;
+  const describedBy = [props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined, describe ? fieldHintId(fieldId) : undefined].filter(Boolean).join(' ') || undefined;
   return (
     <div>
       <input
         {...props}
         id={fieldId}
         aria-invalid={(invalid || !!error) || undefined}
-        aria-describedby={[props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined].filter(Boolean).join(' ') || undefined}
+        aria-describedby={describedBy}
         className={fieldCls(invalid || !!error, 'w-full h-10 px-3 py-2', className)}
       />
       {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
+      {describe && <p id={fieldHintId(fieldId)} className="mt-1 text-xs text-gray-400">{describe}</p>}
     </div>
   );
 }
 
-export function Textarea({ invalid, error, className, id, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean; error?: string }) {
+export function Textarea({ invalid, error, describe, className, id, ...props }: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { invalid?: boolean; error?: string; describe?: string }) {
   const autoId = useId();
   const fieldId = id ?? autoId;
+  const describedBy = [props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined, describe ? fieldHintId(fieldId) : undefined].filter(Boolean).join(' ') || undefined;
   return (
     <div>
       <textarea
         {...props}
         id={fieldId}
         aria-invalid={(invalid || !!error) || undefined}
-        aria-describedby={[props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined].filter(Boolean).join(' ') || undefined}
+        aria-describedby={describedBy}
         className={fieldCls(invalid || !!error, 'w-full px-3 py-2', className)}
       />
       {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
+      {describe && <p id={fieldHintId(fieldId)} className="mt-1 text-xs text-gray-400">{describe}</p>}
     </div>
   );
 }
 
-export function Select({ invalid, error, className, id, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; error?: string }) {
+export function Select({ invalid, error, describe, className, id, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; error?: string; describe?: string }) {
   const autoId = useId();
   const fieldId = id ?? autoId;
+  const describedBy = [props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined, describe ? fieldHintId(fieldId) : undefined].filter(Boolean).join(' ') || undefined;
   return (
     <div>
       <select
         {...props}
         id={fieldId}
         aria-invalid={(invalid || !!error) || undefined}
-        aria-describedby={[props['aria-describedby'], error ? fieldErrorId(fieldId) : undefined].filter(Boolean).join(' ') || undefined}
+        aria-describedby={describedBy}
         // multi-select boxes size themselves (caller passes h-28 etc.); single ones stay h-10
         className={fieldCls(invalid || !!error, `w-full ${props.multiple ? '' : 'h-10'} px-3 py-2`, className)}
       />
       {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
+      {describe && <p id={fieldHintId(fieldId)} className="mt-1 text-xs text-gray-400">{describe}</p>}
     </div>
   );
 }

@@ -42,14 +42,18 @@ export default function Delegations() {
       .catch(() => {});
   }, [load]);
 
-  const create = async () => {
+  const create = async (override = false) => {
     setError('');
     try {
-      await api('/delegations', { method: 'POST', body: form });
+      await api('/delegations', { method: 'POST', body: { ...form, overrideOverlap: override || undefined } });
       setForm({ toUserId: '', startAt: '', endAt: '', reason: '' });
+      setForceSubmit(false);
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      const msg = e instanceof Error ? e.message : 'Failed';
+      setError(msg);
+      // overlap rejection → offer "Save anyway" instead of a dead end
+      if (msg === 'You already have a delegation covering this period') setForceSubmit(true);
     }
   };
 
@@ -72,6 +76,9 @@ export default function Delegations() {
 
   // inline field-level errors — server messages attach to the field they name,
   // the end-before-start case is mirrored client-side for instant feedback
+  const [forceSubmit, setForceSubmit] = useState(false);
+  // editing anything re-arms the guard — the warning only returns on the next server rejection
+  useEffect(() => setForceSubmit(false), [form]);
   const startBeforeEnd = !!(form.startAt && form.endAt && form.startAt >= form.endAt);
   const userFieldError =
     (error === 'Cannot delegate to yourself' || error === 'Delegate user not found or inactive') ? error : undefined;
@@ -116,7 +123,14 @@ export default function Delegations() {
             <Input id="delegations-to" type="datetime-local" error={endFieldError} value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
           </div>
         </div>
-        <Button onClick={create} disabled={!form.toUserId || !form.startAt || !form.endAt}>Create Delegation</Button>
+        {forceSubmit && (
+          <div className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
+            <div className="font-medium">⚠ Your delegations already cover this period.</div>
+            <div className="mt-1 text-xs">Saving adds an overlapping delegation — the later-created one wins approvals during the overlap.</div>
+            <button className="mt-2 text-xs underline" onClick={() => create(true)}>Save anyway</button>
+          </div>
+        )}
+        <Button onClick={() => create(false)} disabled={!form.toUserId || !form.startAt || !form.endAt}>Create Delegation</Button>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">

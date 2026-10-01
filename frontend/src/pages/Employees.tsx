@@ -463,10 +463,11 @@ export default function Employees() {
                     Unlink user
                   </button>
                 </div>
-                <label htmlFor="employees-roles-ctrl-click-for-multiple" className="block text-xs text-gray-500 mb-1">Roles (Ctrl+click for multiple)</label>
+                <label htmlFor="employees-roles-ctrl-click-for-multiple" className="block text-xs text-gray-500 mb-1">Roles</label>
                 <Select id="employees-roles-ctrl-click-for-multiple"
                   multiple
                   className="h-28"
+                  describe="Ctrl+click for multiple"
                   value={editRoles}
                   onChange={(e) => setEditRoles(Array.from(e.target.selectedOptions).map((o) => o.value))}
                 >

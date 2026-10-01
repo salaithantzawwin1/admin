@@ -133,6 +133,7 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           <Input
             type="datetime-local"
             error={endError ?? clashMsg}
+            describe="Estimate only — the driver's Back at Office frees the car early; empty = 5:00 PM assumed"
             onBlur={() => touch('endDate')}
             value={form.endDate}
             onChange={(e) => setForm({ ...form, endDate: e.target.value })}
