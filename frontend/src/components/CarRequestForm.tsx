@@ -6,7 +6,7 @@ import { Button, Input, Select, Textarea } from './ui';
 
 const EMPTY = {
   destination: '', purpose: '', startDate: '', endDate: '',
-  passengers: 1, timeSlot: 'FULL_DAY', pickupLocation: '', description: '',
+  passengers: 1, timeSlot: 'FULL_DAY', pickupLocation: '', description: '', specialRequest: '',
 };
 
 /** Local datetime-local string (YYYY-MM-DDTHH:mm) for a Date. */
@@ -86,6 +86,7 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           purpose: form.purpose,
           description: form.description,
           pickupLocation: form.pickupLocation,
+          specialRequest: form.specialRequest || undefined,
           startDate: new Date(form.startDate).toISOString(),
           endDate: new Date(form.endDate || `${form.startDate.slice(0, 10)}T17:00`).toISOString(),
           passengers: Number(form.passengers),
@@ -160,6 +161,12 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           }}
         />
         <Input placeholder="Purpose (optional)" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
+        <Input
+          placeholder="Special request (optional)"
+          describe="e.g. wait and call me · carrying goods — plan a load-capable car"
+          value={form.specialRequest}
+          onChange={(e) => setForm({ ...form, specialRequest: e.target.value })}
+        />
       </div>
       <Textarea
         rows={2}

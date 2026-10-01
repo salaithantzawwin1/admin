@@ -13,6 +13,7 @@ interface CarRequest {
   endDate: string;
   timeSlot: string;
   pickupLocation?: string;
+  specialRequest?: string | null;
   passengers: number;
   status: string;
   vehicleTypeRequired?: string;
@@ -182,6 +183,7 @@ export function CarPanel({
         <div><div className="text-gray-400 text-xs uppercase">Passengers</div><div className="mt-1">{car.passengers}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Time slot</div><div className="mt-1">{car.timeSlot}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Pickup</div><div className="mt-1">{car.pickupLocation ?? '—'}</div></div>
+        <div className="col-span-2 sm:col-span-4"><div className="text-gray-400 text-xs uppercase">Special request</div><div className="mt-1">{car.specialRequest ? <Badge color="yellow">⭐ {car.specialRequest}</Badge> : <span className="text-gray-400">—</span>}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Vehicle required</div><div className="mt-1">{car.vehicleTypeRequired ?? 'Any'}</div></div>
         <div>
           <div className="text-gray-400 text-xs uppercase">Assigned</div>
