@@ -94,8 +94,25 @@ echo "== 6. Re-seed (roles, workflows, org, inventory, fleet, rooms) =="
 q "DELETE FROM system_settings WHERE key='seed.demo_data_v1'"
 $COMPOSE exec -T backend sh -c "node prisma/seed.js"
 
+echo "== 6b. Restore the Telegram test user (salaithantzawwin) =="
+# The Telegram-bot test fixture — recreated by the old reset-testing-env.sh on every
+# reset, so keep that contract here (roles: EMPLOYEE + ADMINISTRATION + DEPARTMENT_HEAD,
+# one chat = one binding). Password is the uniform SEED_PASSWORD, NOT Testing#2026.
+CHAT=1501493695
+q "UPDATE users SET \"telegramChatId\"=NULL, \"telegramUsername\"=NULL WHERE \"telegramChatId\"='$CHAT'"
+q "INSERT INTO users (id, username, email, \"passwordHash\", \"fullName\", \"telegramChatId\", \"telegramUsername\", \"createdAt\", \"updatedAt\") VALUES (gen_random_uuid(), 'salaithantzawwin', 'salai.tz@ams-test.local', '$HASH', 'Salai Thant Zaw (Testing)', '$CHAT', 'salaithantzawwin', now(), now())"
+UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
+for ROLE in EMPLOYEE ADMINISTRATION DEPARTMENT_HEAD; do
+  q "INSERT INTO user_roles (\"userId\", \"roleId\") SELECT '$UID_', id FROM roles WHERE name='$ROLE' AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.\"roleId\" WHERE ur.\"userId\"='$UID_' AND r.name='$ROLE')" >/dev/null
+done
+q "INSERT INTO employees (id, \"employeeNo\", \"fullName\", \"userId\", \"createdAt\", \"updatedAt\") SELECT gen_random_uuid(), 'EMP-TG-TEST', 'Salai Thant Zaw (Testing)', '$UID_', now(), now() WHERE NOT EXISTS (SELECT 1 FROM employees WHERE \"userId\"='$UID_')" >/dev/null
+echo "   roles: $(q "SELECT string_agg(r.name::text, ', ' ORDER BY r.name::text) FROM user_roles ur JOIN roles r ON r.id=ur.\"roleId\" WHERE ur.\"userId\"='$UID_'")"
+
 echo "== 7. Verify =="
-curl -fsS "$BASE/api/health" && echo
+# NOTE: BASE already ends in /api (the backend's global prefix) — health is $BASE/health,
+# NOT $BASE/api/health (that double prefix 404s but curl-in-&& does not stop the script)
+curl -fsS "$BASE/health" && echo
+if ! curl -fsS -o /dev/null "$BASE/health"; then echo "FAILED: backend health"; exit 1; fi
 echo "users:         $(q "SELECT count(*) FROM users")"
 echo "roles:         $(q "SELECT count(*) FROM roles")"
 echo "workflows:     $(q "SELECT count(*) FROM approval_workflows")"
@@ -107,6 +124,10 @@ LOGIN_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: ap
   -d "{\"username\":\"sysadmin\",\"password\":\"$SEED_PW\"}" "$BASE/auth/login")
 echo "sysadmin login with seeded password: HTTP $LOGIN_CODE (expect 200/201)"
 [ "$LOGIN_CODE" = "200" ] || [ "$LOGIN_CODE" = "201" ] || { echo "FAILED: seeded login broken"; exit 1; }
+TG_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+  -d "{\"username\":\"salaithantzawwin\",\"password\":\"$SEED_PW\"}" "$BASE/auth/login")
+echo "telegram test user login: HTTP $TG_CODE (expect 200/201)"
+[ "$TG_CODE" = "200" ] || [ "$TG_CODE" = "201" ] || { echo "FAILED: telegram test user login"; exit 1; }
 
 echo
 echo "DONE — TESTING UI: http://192.168.100.110:8030 (all logins: $SEED_PW)"
