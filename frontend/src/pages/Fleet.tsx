@@ -203,11 +203,26 @@ export default function Fleet() {
   const createVehicle = async () => {
     setModalError('');
     try {
-      // note: `status` is not part of the create DTO (defaults to AVAILABLE server-side)
-      const { status: _status, ...rest } = vForm;
+      // note: `status` is not part of the create DTO (defaults to AVAILABLE server-side).
+      // Optional specs must be undefined, not '' — '' fails the backend's @IsOptional
+      // validators (VIN pattern, fuel enum, year range) even when left empty.
+      const opt = (v: string | number) => (v === '' ? undefined : v);
       await api('/fleet/vehicles', {
         method: 'POST',
-        body: { ...rest, capacity: Number(vForm.capacity), driverId: vForm.driverId || undefined },
+        body: {
+          vehicleNo: vForm.vehicleNo,
+          vehicleType: vForm.vehicleType,
+          brandModel: vForm.brandModel,
+          capacity: Number(vForm.capacity),
+          driverId: vForm.driverId || undefined,
+          vin: opt(vForm.vin),
+          fuelType: opt(vForm.fuelType),
+          engineNo: opt(vForm.engineNo),
+          chassisNo: opt(vForm.chassisNo),
+          make: opt(vForm.make),
+          model: opt(vForm.model),
+          year: vForm.year === '' ? undefined : Number(vForm.year),
+        },
       });
       setVForm(emptyVForm);
       setShowV(false);
