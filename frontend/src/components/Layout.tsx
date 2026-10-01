@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { api, getUser, hasPermission, clearSession, AuthUser } from '../api';
 import { NotificationBell } from './NotificationBell';
+import { PageLoader } from './ui';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { ToastHost } from './Toast';
 
@@ -212,7 +213,9 @@ export function Layout() {
         </aside>
 
         <main className="flex-1 p-3 sm:p-6 min-w-0">
-          <Outlet />
+          <Suspense fallback={<PageLoader />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
       {pwOpen && <ChangePasswordModal onClose={() => setPwOpen(false)} />}

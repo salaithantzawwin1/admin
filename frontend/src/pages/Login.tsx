@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, setSession } from '../api';
+import { Input } from '../components/ui';
 
 export default function Login() {
   const [username, setUsername] = useState('');
@@ -41,8 +42,7 @@ export default function Login() {
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="block text-sm text-gray-600 mb-1">Username</label>
-            <input
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+            <Input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="username"
@@ -51,9 +51,8 @@ export default function Login() {
           </div>
           <div>
             <label className="block text-sm text-gray-600 mb-1">Password</label>
-            <input
+            <Input
               type="password"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"

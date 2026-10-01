@@ -162,3 +162,12 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
 export function Empty({ label = 'No data' }: { label?: string }) {
   return <div className="text-center text-sm text-gray-400 py-10">{label}</div>;
 }
+
+/** Route-level lazy-loading fallback — shown while a page chunk loads. */
+export function PageLoader() {
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center" role="status" aria-label="Loading">
+      <div className="w-8 h-8 rounded-full border-2 border-gold border-t-transparent animate-spin" />
+    </div>
+  );
+}

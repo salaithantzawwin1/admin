@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
-import { Badge, Button, Card, Empty, PageHeader } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui';
 import { CarPanel } from '../components/CarPanel';
 import { MeetingRoomPanel } from '../components/MeetingRoomPanel';
 
@@ -173,8 +173,8 @@ export default function RequestDetail() {
             <Button variant="danger" onClick={cancel}>Cancel Request</Button>
           )}
         </div>
-        <input
-          className="mt-3 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+        <Input
+          className="mt-3"
           placeholder="Comment (optional for approve/return, required for reject)"
           value={comment}
           onChange={(e) => setComment(e.target.value)}

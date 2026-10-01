@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { Badge, Button, PageHeader } from '../components/ui';
+import { Badge, Button, Input, PageHeader } from '../components/ui';
 
 interface MatrixRole {
   role: string;
@@ -233,11 +233,11 @@ export default function RbacMatrix() {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="relative">
           <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm pointer-events-none">🔍</span>
-          <input
+          <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search permission…"
-            className="border border-gray-200 rounded-lg pl-8 pr-8 py-1.5 text-sm w-64 focus:outline-none focus:ring-2 focus:ring-gold/60 focus:border-gold"
+            className="!w-64 pl-8 pr-8 py-1.5"
           />
           {search && (
             <button

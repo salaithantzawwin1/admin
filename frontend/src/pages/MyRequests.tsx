@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
-import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 
@@ -142,8 +142,7 @@ export default function MyRequests() {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Description / details</label>
-              <textarea
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              <Textarea
                 rows={3}
                 placeholder="Details the approver should know"
                 value={form.description}
