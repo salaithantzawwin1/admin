@@ -5,6 +5,7 @@ import { hasPermission } from '../api';
 import { Modal } from '../components/Modal';
 import { PasswordStrength } from '../components/PasswordStrength';
 import { toast } from '../components/Toast';
+import { fmtDate, fmtTime } from '../util/yangonTime';
 
 interface DepartmentLite {
   id: string;
@@ -579,8 +580,8 @@ export default function Employees() {
                   {issuedRows.map((t) => (
                     <tr key={t.id}>
                       <td className="py-2 px-2 whitespace-nowrap text-gray-500">
-                        {new Date(t.at).toLocaleDateString()}<br />
-                        <span className="text-[10px] text-gray-400">{new Date(t.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        {fmtDate(t.at)}<br />
+                        <span className="text-[10px] text-gray-400">{fmtTime(t.at)}</span>
                       </td>
                       <td className="py-2 px-2">
                         <div className="font-medium text-gray-700">{t.itemName}</div>

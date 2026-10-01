@@ -5,6 +5,7 @@ import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
 import { Badge, Button, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { fmtDate, fmtDateTime } from '../util/yangonTime';
 
 interface AdConfig {
   url: string;
@@ -85,7 +86,7 @@ function relTime(iso: string): string {
   if (h < 24) return `${h} h ago`;
   const d = Math.floor(h / 24);
   if (d < 30) return `${d} d ago`;
-  return new Date(iso).toLocaleDateString();
+  return fmtDate(iso); // Yangon-anchored via util/yangonTime
 }
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
@@ -709,7 +710,7 @@ export default function Settings() {
                       <span className="font-medium">{j.displayName ?? 'Unknown'}</span>
                       {j.tgUsername && <span className="text-gray-500"> · @{j.tgUsername}</span>}
                       <span className="text-gray-400 text-xs ml-2" title={j.chatId}>
-                        {j.status === 'PENDING' ? '⏳ ' : ''}requested {new Date(j.createdAt).toLocaleString()}
+                        {j.status === 'PENDING' ? '⏳ ' : ''}requested {fmtDateTime(j.createdAt)}
                       </span>
                       <span className="text-gray-300 text-[10px] ml-1 font-mono select-all" title="Telegram chat id">{j.chatId}</span>
                     </div>
@@ -892,7 +893,7 @@ export default function Settings() {
                 <div>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 mb-4">
                     <span className="font-medium text-gray-700">🗂 {histRows.length} event{histRows.length === 1 ? '' : 's'}</span>
-                    <span>· first seen {new Date(first.at).toLocaleDateString()}</span>
+                    <span>· first seen {fmtDate(first.at)}</span>
                     <span>· last change {relTime(last.at)}</span>
                   </div>
                   <ol className="relative ml-2 border-l-2 border-gray-100">
@@ -909,10 +910,10 @@ export default function Settings() {
                                   <span className="ml-2 text-[10px] font-semibold uppercase tracking-wide text-yellow-800 bg-yellow-100 border border-yellow-200 rounded-full px-2 py-0.5">Latest</span>
                                 )}
                               </div>
-                              <span className="text-xs text-gray-500 whitespace-nowrap" title={new Date(r.at).toLocaleString()}>{relTime(r.at)}</span>
+                              <span className="text-xs text-gray-500 whitespace-nowrap" title={fmtDateTime(r.at)}>{relTime(r.at)}</span>
                             </div>
                             <div className="text-xs text-gray-400 mt-1 flex flex-wrap items-center gap-x-2">
-                              <span title={new Date(r.at).toLocaleString()}>{new Date(r.at).toLocaleString()}</span>
+                              <span title={fmtDateTime(r.at)}>{fmtDateTime(r.at)}</span>
                               <span>·</span>
                               <span>by {r.by}</span>
                             </div>

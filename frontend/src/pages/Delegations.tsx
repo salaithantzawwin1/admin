@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getUser } from '../api';
+import { fmtDateTime } from '../util/yangonTime';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 
 interface Delegation {
@@ -66,7 +67,7 @@ export default function Delegations() {
     }
   };
 
-  const fmt = (s: string) => new Date(s).toLocaleString();
+  const fmt = (s: string) => fmtDateTime(s); // Yangon wall clock — see util/yangonTime
   const activeBadge = (d: Delegation) => {
     const now = new Date();
     const isActive = d.status === 'ACTIVE' && new Date(d.startAt) <= now && new Date(d.endAt) >= now;

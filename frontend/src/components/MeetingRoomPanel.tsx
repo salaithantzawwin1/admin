@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Badge, Button, Card, Input, Select } from './ui';
+import { fmtDateTime } from '../util/yangonTime';
 
 interface MeetingRequest {
   id: string;
@@ -82,8 +83,8 @@ export function MeetingRoomPanel({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
         <div><div className="text-gray-400 text-xs uppercase">Meeting</div><div className="mt-1 font-medium">{mr.title}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Attendees</div><div className="mt-1">{mr.attendees}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Start</div><div className="mt-1">{new Date(mr.startTime).toLocaleString()}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">End</div><div className="mt-1">{new Date(mr.endTime).toLocaleString()}</div></div>
+        <div><div className="text-gray-400 text-xs uppercase">Start</div><div className="mt-1">{fmtDateTime(mr.startTime)}</div></div>
+        <div><div className="text-gray-400 text-xs uppercase">End</div><div className="mt-1">{fmtDateTime(mr.endTime)}</div></div>
         {mr.meetingType && (
           <div><div className="text-gray-400 text-xs uppercase">Meeting type</div><div className="mt-1">{mr.meetingType}</div></div>
         )}
@@ -139,7 +140,7 @@ export function MeetingRoomPanel({
         <ConfirmDialog
           title="Shift time?"
           description={
-            <>Move this meeting to <b>{new Date(shiftForm.startTime).toLocaleString()}</b> → <b>{new Date(shiftForm.endTime).toLocaleString()}</b>. Room availability is checked; the requester will be notified.</>
+            <>Move this meeting to <b>{fmtDateTime(shiftForm.startTime)}</b> → <b>{fmtDateTime(shiftForm.endTime)}</b>. Room availability is checked; the requester will be notified.</>
           }
           confirmLabel="Shift time"
           withNote

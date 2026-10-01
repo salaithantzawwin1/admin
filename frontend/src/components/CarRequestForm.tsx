@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
+import { fmtDateTime } from '../util/yangonTime';
 import { Button, Input, Select, Textarea } from './ui';
 
 const EMPTY = {
@@ -173,7 +174,7 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           <ul className="mt-1 list-disc list-inside text-xs">
             {clashes.map((c, i) => (
               <li key={c.request?.docNumber ?? `idx-${i}`}>
-                {c.request?.docNumber ?? '—'}: {new Date(c.startDate).toLocaleString()} → {new Date(c.endDate).toLocaleString()}
+                {c.request?.docNumber ?? '—'}: {fmtDateTime(c.startDate)} → {fmtDateTime(c.endDate)}
               </li>
             ))}
           </ul>

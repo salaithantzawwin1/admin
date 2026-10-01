@@ -4,6 +4,7 @@ import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui';
 import { CarPanel } from '../components/CarPanel';
 import { MeetingRoomPanel } from '../components/MeetingRoomPanel';
+import { fmtDateTime } from '../util/yangonTime';
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
   DRAFT: 'gray',
@@ -195,7 +196,7 @@ export default function RequestDetail() {
                   {a.approver?.fullName ?? '—'}
                   {a.comment && <span className="text-gray-400"> — “{a.comment}”</span>}
                 </span>
-                <span className="text-gray-400 whitespace-nowrap">{new Date(a.createdAt).toLocaleString()}</span>
+                <span className="text-gray-400 whitespace-nowrap">{fmtDateTime(a.createdAt)}</span>
               </li>
             ))}
           </ol>

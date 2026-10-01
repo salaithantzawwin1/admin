@@ -3,6 +3,7 @@ import { api, hasPermission } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
 import { useLiveReload } from '../hooks/useLiveReload';
+import { fmtDateTime, fmtTime } from '../util/yangonTime';
 
 interface CarRequest {
   id: string;
@@ -176,8 +177,8 @@ export function CarPanel({
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
         <div><div className="text-gray-400 text-xs uppercase">Destination</div><div className="mt-1 font-medium">{car.destination}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Start</div><div className="mt-1">{new Date(car.startDate).toLocaleString()}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">End</div><div className="mt-1">{new Date(car.endDate).toLocaleString()}</div></div>
+        <div><div className="text-gray-400 text-xs uppercase">Start</div><div className="mt-1">{fmtDateTime(car.startDate)}</div></div>
+        <div><div className="text-gray-400 text-xs uppercase">End</div><div className="mt-1">{fmtDateTime(car.endDate)}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Passengers</div><div className="mt-1">{car.passengers}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Time slot</div><div className="mt-1">{car.timeSlot}</div></div>
         <div><div className="text-gray-400 text-xs uppercase">Pickup</div><div className="mt-1">{car.pickupLocation ?? '—'}</div></div>
@@ -201,7 +202,7 @@ export function CarPanel({
       {status !== 'DRAFT' && (car.managerAckAt || canManagerAck) && (
         <div className="mb-4 flex items-center gap-2 text-sm">
           {car.managerAckAt ? (
-            <span className="text-green-700">✅ Manager acknowledged{car.managerAckBy ? ` — ${car.managerAckBy.fullName}` : ''} · {new Date(car.managerAckAt).toLocaleString()}</span>
+            <span className="text-green-700">✅ Manager acknowledged{car.managerAckBy ? ` — ${car.managerAckBy.fullName}` : ''} · {fmtDateTime(car.managerAckAt)}</span>
           ) : (
             <>
               <span className="text-gray-500">Department manager has not acknowledged yet (optional — does not delay the trip).</span>
@@ -276,9 +277,9 @@ export function CarPanel({
           title="Shift time?"
           description={
             <>
-              Move this car request to <b>{new Date(shiftForm.startDate).toLocaleString()}</b>
+              Move this car request to <b>{fmtDateTime(shiftForm.startDate)}</b>
               {shiftForm.endDate
-                ? <> → <b>{new Date(shiftForm.endDate).toLocaleString()}</b></>
+                ? <> → <b>{fmtDateTime(shiftForm.endDate)}</b></>
                 : <> (end keeps the original trip duration)</>}. Vehicle availability is checked; the requester will be notified.
             </>
           }
@@ -518,7 +519,7 @@ export function CarPanel({
  *  (car ready) → Back at Office (vehicle free). Filled by the driver's Telegram
  *  buttons; Administration and the requester both see them here. */
 export function DriverAckStages({ a }: { a: NonNullable<CarRequest['assignment']> }) {
-  const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '');
+  const fmt = (iso?: string | null) => (iso ? fmtTime(iso) : '');
   const stages = [
     { key: 'noted', label: 'Noted', at: a.driverNotedAt, icon: '✓' },
     { key: 'arrived', label: 'Ready', at: a.driverArrivedAt, icon: '🚦' },
@@ -534,7 +535,7 @@ export function DriverAckStages({ a }: { a: NonNullable<CarRequest['assignment']
               ? 'bg-green-50 border-green-200 text-green-700'
               : 'bg-gray-50 border-gray-200 text-gray-400'
           }`}
-          title={s.at ? `${s.label} at ${new Date(s.at).toLocaleString()}` : `Waiting for driver — ${s.label}`}
+          title={s.at ? `${s.label} at ${fmtDateTime(s.at)}` : `Waiting for driver — ${s.label}`}
         >
           {s.at ? `${s.icon} ${s.label} ${fmt(s.at)}` : `⏳ ${s.label}`}
         </span>

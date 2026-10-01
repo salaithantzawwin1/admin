@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, getUser } from '../api';
 import { Badge, Button, Empty, Input, PageHeader, Table, statusColor } from '../components/ui';
+import { fmtDateTime } from '../util/yangonTime';
 import { Modal } from '../components/Modal';
 import { PasswordStrength } from '../components/PasswordStrength';
 // PasswordStrength also used in the create-user dialog
@@ -264,7 +265,7 @@ export default function Users() {
                 <span className="text-gray-400">—</span>
               )}
             </td>
-            <td className="px-4 py-3 text-gray-500">{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'}</td>
+            <td className="px-4 py-3 text-gray-500">{u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : '—'}</td>
             <td className="px-4 py-3">
               <div className="flex flex-wrap justify-end gap-1.5">
                 <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => openEdit(u)}>Edit</button>

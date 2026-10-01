@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { Badge, Card, Empty, PageHeader } from '../components/ui';
+import { fmtDateTime } from '../util/yangonTime';
 
 interface AuditRow {
   id: string;
@@ -52,7 +53,7 @@ export default function AuditLogs() {
             {rows.length === 0 && <tr><td colSpan={6}><Empty /></td></tr>}
             {rows.map((r) => (
               <tr key={r.id} className="hover:bg-gray-50">
-                <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{new Date(r.createdAt).toLocaleString()}</td>
+                <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap">{fmtDateTime(r.createdAt)}</td>
                 <td className="px-4 py-2.5">{r.username ?? '—'}</td>
                 <td className="px-4 py-2.5 font-medium text-gray-800">{r.action}</td>
                 <td className="px-4 py-2.5"><Badge>{r.module}</Badge></td>

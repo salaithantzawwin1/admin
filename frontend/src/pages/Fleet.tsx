@@ -6,6 +6,7 @@ import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { useLiveReload } from '../hooks/useLiveReload';
+import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 
 interface Driver {
   id: string;
@@ -990,7 +991,7 @@ export default function Fleet() {
                     <span className="ml-1 text-[10px] text-yellow-800 bg-yellow-100 border border-yellow-200 rounded-full px-1.5 py-0.5" title={d.absences.map((a) => a.reason || 'absence').join(', ')}>on leave</span>
                   )}
                   {d.absences?.some((a) => new Date(a.startsAt) > new Date()) && (
-                    <span className="ml-1 text-[10px] text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5" title={`From ${new Date(d.absences.find((a) => new Date(a.startsAt) > new Date())!.startsAt).toLocaleString()}`}>leave soon</span>
+                    <span className="ml-1 text-[10px] text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5" title={`From ${fmtDateTime(d.absences.find((a) => new Date(a.startsAt) > new Date())!.startsAt)}`}>leave soon</span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -1096,14 +1097,14 @@ export default function Fleet() {
             {absences.filter((a) => a.status === 'ACTIVE').map((a) => (
               <tr key={a.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">{a.driver?.name ?? '?'}</td>
-                  <td className="px-4 py-3 text-gray-600">{new Date(a.startsAt).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</td>
+                  <td className="px-4 py-3 text-gray-600">{fmtDate(a.startsAt)}</td>
                   <td className="px-4 py-3">
                     <Badge color={a.dayType === 'FULL' ? 'blue' : 'yellow'}>
                       {a.dayType === 'FULL' ? 'Full day' : a.period === 'MORNING' ? 'Half · Morning' : 'Half · Evening'}
                     </Badge>
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-500">
-                    {new Date(a.startsAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })} – {new Date(a.endsAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                    {fmtTime(a.startsAt)} – {fmtTime(a.endsAt)}
                   </td>
                   <td className="px-4 py-3 text-gray-500">{a.reason || '—'}</td>
                   {canManage && (
@@ -1228,11 +1229,11 @@ export default function Fleet() {
                       </td>
                       <td className="px-3 py-2">{a.vehicle}{a.brandModel ? <span className="text-gray-400"> · {a.brandModel}</span> : null}</td>
                       <td className="px-3 py-2">{a.requester}</td>
-                      <td className="px-3 py-2 text-gray-500">{new Date(a.assignedAt).toLocaleString()}</td>
+                      <td className="px-3 py-2 text-gray-500">{fmtDateTime(a.assignedAt)}</td>
                       <td className="px-3 py-2">{a.driver ?? '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{a.driverNotedAt ? new Date(a.driverNotedAt).toLocaleTimeString() : '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{a.driverArrivedAt ? new Date(a.driverArrivedAt).toLocaleTimeString() : '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{a.driverBackAtOfficeAt ? new Date(a.driverBackAtOfficeAt).toLocaleTimeString() : '—'}</td>
+                      <td className="px-3 py-2 text-gray-500">{a.driverNotedAt ? fmtTime(a.driverNotedAt) : '—'}</td>
+                      <td className="px-3 py-2 text-gray-500">{a.driverArrivedAt ? fmtTime(a.driverArrivedAt) : '—'}</td>
+                      <td className="px-3 py-2 text-gray-500">{a.driverBackAtOfficeAt ? fmtTime(a.driverBackAtOfficeAt) : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

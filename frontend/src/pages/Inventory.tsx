@@ -5,6 +5,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 
 interface Item {
   id: string;
@@ -789,7 +790,7 @@ export default function Inventory() {
                           {r.supplyRequest?.status === 'PENDING' ? `PENDING (${r.status === 'PENDING_APPROVAL' ? 'awaiting approval' : 'approved — fulfilling'})` : r.supplyRequest?.status ?? r.status}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 text-gray-500">{new Date(r.createdAt).toLocaleDateString()}</td>
+                      <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -844,7 +845,7 @@ export default function Inventory() {
                       <Link to={`/requests/${r.id}`} className="font-medium text-blue-600 hover:underline">{r.docNumber}</Link>
                       <span className="text-sm">{r.requester?.fullName}</span>
                       <span className="text-xs text-gray-400">{r.department?.name}</span>
-                      <span className="text-xs text-gray-400">{new Date(r.createdAt).toLocaleString()}</span>
+                      <span className="text-xs text-gray-400">{fmtDateTime(r.createdAt)}</span>
                     </div>
                     <table className="w-full text-sm mb-2">
                       <tbody className="divide-y divide-gray-100">
@@ -1507,9 +1508,9 @@ export default function Inventory() {
                 <tbody className="divide-y divide-gray-100">
                   {filteredHistory.map((t) => (
                     <tr key={t.id}>
-                      <td className="py-2 px-2 whitespace-nowrap text-gray-500" title={new Date(t.createdAt).toLocaleString()}>
-                        {new Date(t.createdAt).toLocaleDateString()}<br />
-                        <span className="text-[10px] text-gray-400">{new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <td className="py-2 px-2 whitespace-nowrap text-gray-500" title={fmtDateTime(t.createdAt)}>
+                        {fmtDate(t.createdAt)}<br />
+                        <span className="text-[10px] text-gray-400">{fmtTime(t.createdAt)}</span>
                       </td>
                       <td className="py-2 px-2">
                         <Badge color={t.quantity >= 0 ? 'green' : 'blue'}>{t.type}</Badge>

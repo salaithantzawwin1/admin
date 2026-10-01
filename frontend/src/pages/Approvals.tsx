@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Badge, Button, Card, Empty, PageHeader } from '../components/ui';
+import { fmtDateTime } from '../util/yangonTime';
 
 interface RequestRow {
   id: string;
@@ -79,7 +80,7 @@ export default function Approvals() {
                 </div>
                 <div className="text-sm text-gray-800 mt-1">{r.title}</div>
                 <div className="text-xs text-gray-500 mt-0.5">
-                  {r.requester?.fullName ?? '—'} · {r.department?.name ?? '—'} · submitted {r.submittedAt ? new Date(r.submittedAt).toLocaleString() : '—'}
+                  {r.requester?.fullName ?? '—'} · {r.department?.name ?? '—'} · submitted {fmtDateTime(r.submittedAt)}
                 </div>
               </div>
               <div className="flex gap-2 items-start">

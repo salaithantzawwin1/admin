@@ -5,6 +5,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { fmtDate } from '../util/yangonTime';
 
 interface Supplier {
   id: string;
@@ -403,7 +404,7 @@ export default function Suppliers() {
                           {t.reference ? ` · ${t.reference}` : ''}
                           {t.recordedBy && <span className="text-gray-400"> — recorded by {t.recordedBy}</span>}
                         </span>
-                        <span className="text-gray-400 whitespace-nowrap">{new Date(t.createdAt).toLocaleDateString()}</span>
+                        <span className="text-gray-400 whitespace-nowrap">{fmtDate(t.createdAt)}</span>
                       </div>
                     ))}
                   </div>
@@ -452,14 +453,14 @@ export default function Suppliers() {
                           {c.person && <span className="font-medium text-gray-700">{c.person}</span>}
                         </span>
                         <span className="flex items-center gap-2 text-xs text-gray-400 whitespace-nowrap">
-                          {new Date(c.contactedAt).toLocaleDateString()} · {c.createdBy.fullName}
+                          {fmtDate(c.contactedAt)} · {c.createdBy.fullName}
                           {canManage && (
                             <button className="text-red-500 hover:underline" title="Delete entry" onClick={() => removeContact(c.id)}>✕</button>
                           )}
                         </span>
                       </div>
                       <p className="text-gray-600 mt-1">{c.summary}</p>
-                      {c.followUpAt && <p className="text-xs text-orange-600 mt-1">↻ Follow up: {new Date(c.followUpAt).toLocaleDateString()}</p>}
+                      {c.followUpAt && <p className="text-xs text-orange-600 mt-1">↻ Follow up: {fmtDate(c.followUpAt)}</p>}
                     </li>
                   ))}
                 </ul>
@@ -503,7 +504,7 @@ export default function Suppliers() {
                           {d.request && <span className="font-mono text-xs text-gray-500">{d.request.docNumber}</span>}
                         </span>
                         <span className="flex items-center gap-2 text-xs text-gray-400">
-                          {new Date(d.createdAt).toLocaleDateString()} · {d.createdBy.fullName}
+                          {fmtDate(d.createdAt)} · {d.createdBy.fullName}
                           {d.status === 'DRAFT' && canManage && (
                             <>
                               <button className="text-blue-600 hover:underline" onClick={() => submitDraft(d)}>Submit → approval</button>

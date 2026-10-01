@@ -6,6 +6,7 @@ import { Modal } from '../components/Modal';
 import { CarRequestForm } from '../components/CarRequestForm';
 import { DriverAckStages } from '../components/CarPanel';
 import { toast } from '../components/Toast';
+import { fmtDate, fmtDateTime, fmtShort } from '../util/yangonTime';
 
 interface FleetVehicle {
   id: string;
@@ -178,9 +179,9 @@ export default function CarRequests() {
                     <div className="text-xs text-gray-400 uppercase tracking-wide">Booked</div>
                     {v.bookings.map((b) => (
                       <div key={`${v.id}-${b.docNumber}-${b.startDate}`} className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1">
-                        {b.docNumber ?? '—'}: {new Date(b.startDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {b.docNumber ?? '—'}: {fmtShort(b.startDate)}
                         {' → '}
-                        {new Date(b.endDate).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {fmtShort(b.endDate)}
                       </div>
                     ))}
                   </div>
@@ -224,7 +225,7 @@ export default function CarRequests() {
                     </td>
                     <td className="px-3 py-2">{q.carRequest?.destination ?? '—'}</td>
                     <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                      {q.carRequest && `${new Date(q.carRequest.startDate).toLocaleString()} → ${new Date(q.carRequest.endDate).toLocaleString()}`}
+                      {q.carRequest && `${fmtDateTime(q.carRequest.startDate)} → ${fmtDateTime(q.carRequest.endDate)}`}
                     </td>
                     <td className="px-3 py-2 text-gray-500">
                       {q.carRequest?.vehicleTypeRequired ?? 'Any'} · {q.carRequest?.passengers ?? 1} pax
@@ -280,8 +281,7 @@ export default function CarRequests() {
                     <DriverAckStages a={r.carRequest.assignment} />
                   )}
                 </td>
-                <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>
-                <td className="px-4 py-3 text-gray-500">{new Date(r.createdAt).toLocaleDateString()}</td>
+                <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>                      <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
               </tr>
             ))}
           </tbody>

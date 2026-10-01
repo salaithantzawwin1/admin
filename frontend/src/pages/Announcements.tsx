@@ -5,6 +5,7 @@ import { RichTextEditor } from '../components/RichTextEditor';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
+import { fmtDate as fmtDateYgn, fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
 
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'];
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'];
@@ -68,7 +69,7 @@ const relTime = (s: string | null) => {
   if (h < 24) return `${h}h ago`;
   const d = Math.round(h / 24);
   if (d < 7) return `${d}d ago`;
-  return new Date(s).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return fmtDateYgn(s).split(' ').slice(0, 2).join(' '); // "2 Oct" — Yangon-anchored via util/yangonTime
 };
 
 /** Priority card accent — emergencies must be unmissable when scanning. */
@@ -240,7 +241,7 @@ function useDeepLink(items: Announcement[], open: (a: Announcement) => void) {
   }, [items, open]);
 }
 
-const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+const fmtDate = (s: string | null) => fmtDateTimeYgn(s); // "2 Oct 2026, 09:00" — Yangon-anchored
 
 /** Miniature photo strip for list cards — inline, lazy, click-through to the detail view. */
 function PhotoStrip({ photos, onOpen, dim }: { photos: Attachment[]; onOpen: () => void; dim?: boolean }) {

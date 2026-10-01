@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { api, getUser } from '../api';
 import { Badge, Button, Card, Input, PageHeader } from '../components/ui';
+import { fmtDateTime } from '../util/yangonTime';
 
 interface TgBinding {
   telegramChatId: string | null;
@@ -85,7 +86,7 @@ export default function Profile() {
             </span>
           </div>
           {me?.lastLoginAt && (
-            <div className="flex justify-between"><span className="text-gray-500">Last login</span><span>{new Date(me.lastLoginAt).toLocaleString()}</span></div>
+            <div className="flex justify-between"><span className="text-gray-500">Last login</span><span>{fmtDateTime(me.lastLoginAt)}</span></div>
           )}
         </div>
       </Card>

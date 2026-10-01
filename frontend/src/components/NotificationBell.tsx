@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useLiveReload } from '../hooks/useLiveReload';
+import { fmtDate, fmtDateTime } from '../util/yangonTime';
 
 interface Notification {
   id: string;
@@ -56,7 +57,7 @@ export function relTime(iso: string): string {
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return fmtDate(iso).split(' ').slice(0, 2).join(' '); // "2 Oct" — Yangon-anchored via util/yangonTime
 }
 
 export function NotificationBell() {
@@ -328,7 +329,7 @@ export function NotificationBell() {
                     <div className="min-w-0 flex-1">
                       <div className="flex justify-between gap-2">
                         <span className={`text-sm leading-snug ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>{n.title}</span>
-                        <span className="text-[10px] text-gray-400 whitespace-nowrap pt-0.5" title={new Date(n.createdAt).toLocaleString()}>
+                        <span className="text-[10px] text-gray-400 whitespace-nowrap pt-0.5" title={fmtDateTime(n.createdAt)}>
                           {relTime(n.createdAt)}
                         </span>
                       </div>

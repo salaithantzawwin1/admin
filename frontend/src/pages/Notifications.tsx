@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { typeMeta, relTime } from '../components/NotificationBell';
+import { fmtDateTime } from '../util/yangonTime';
 
 interface Notification {
   id: string;
@@ -127,7 +128,7 @@ export default function Notifications() {
                   <div className="min-w-0 flex-1">
                     <div className="flex justify-between gap-3">
                       <span className={`text-sm leading-snug ${isUnread ? 'font-semibold text-gray-900' : 'text-gray-700'}`}>{n.title}</span>
-                      <span className="text-xs text-gray-400 whitespace-nowrap pt-0.5" title={new Date(n.createdAt).toLocaleString()}>
+                      <span className="text-xs text-gray-400 whitespace-nowrap pt-0.5" title={fmtDateTime(n.createdAt)}>
                         {relTime(n.createdAt)}
                       </span>
                     </div>

@@ -6,6 +6,7 @@ import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { MeetingMonthCalendar, Holiday, PrefillSlot } from '../components/MeetingMonthCalendar';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { fmtDate, fmtDateTime, fmtShort } from '../util/yangonTime';
 
 interface RoomInfo {
   id: string;
@@ -498,7 +499,7 @@ export default function MeetingRooms() {
                   Heads-up: overlapping room bookings in this window —
                   {clashes.map((c, i) => (
                     <div key={i} className="mt-1">
-                      {c.room?.name ?? 'Room TBD'} ({c.docNumber ?? '—'}): {new Date(c.startTime).toLocaleString()} → {new Date(c.endTime).toLocaleString()}
+                      {c.room?.name ?? 'Room TBD'} ({c.docNumber ?? '—'}): {fmtDateTime(c.startTime)} → {fmtDateTime(c.endTime)}
                     </div>
                   ))}
                   <div className="mt-1 text-orange-600">You can still submit — Administration will check room availability when assigning.</div>
@@ -561,7 +562,7 @@ export default function MeetingRooms() {
                       <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
                     </td>
                     <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>
-                    <td className="px-4 py-3 text-gray-500">{new Date(r.createdAt).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -597,7 +598,7 @@ export default function MeetingRooms() {
                         </td>
                         <td className="px-3 py-2">{q.meetingRequest?.title ?? '—'} · {q.meetingRequest?.attendees ?? 1} pax</td>
                         <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                          {q.meetingRequest && `${new Date(q.meetingRequest.startTime).toLocaleString()} → ${new Date(q.meetingRequest.endTime).toLocaleString()}`}
+                          {q.meetingRequest && `${fmtDateTime(q.meetingRequest.startTime)} → ${fmtDateTime(q.meetingRequest.endTime)}`}
                         </td>
                       </tr>
                     ))}
@@ -641,9 +642,9 @@ export default function MeetingRooms() {
                         <div className="text-xs text-gray-400 uppercase tracking-wide">Booked</div>
                         {r.bookings.map((b, i) => (
                           <div key={i} className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1">
-                            {b.docNumber ?? '—'}: {new Date(b.startTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            {b.docNumber ?? '—'}: {fmtShort(b.startTime)}
                             {' → '}
-                            {new Date(b.endTime).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            {fmtShort(b.endTime)}
                           </div>
                         ))}
                       </div>

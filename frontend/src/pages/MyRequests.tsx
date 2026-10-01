@@ -4,6 +4,7 @@ import { api } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
+import { fmtDate } from '../util/yangonTime';
 
 interface RequestRow {
   id: string;
@@ -187,7 +188,7 @@ export default function MyRequests() {
                 <td className="px-4 py-3 text-gray-500">{r.docType.replace(/_REQUEST|_/, ' ')}</td>
                 <td className="px-4 py-3"><Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge></td>
                 <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>
-                <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{new Date(r.createdAt).toLocaleDateString()}</td>
+                <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtDate(r.createdAt)}</td>
                 <td className="px-4 py-3 text-right space-x-2">
                   {r.status === 'DRAFT' && (
                     <>
