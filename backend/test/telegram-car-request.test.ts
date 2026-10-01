@@ -755,6 +755,28 @@ async function approvalCardTests() {
   check(card.includes('Chan Yin Factory'), 'approval card shows the pickup point');
   check(card.includes('👥 3'), 'approval card shows the passenger count');
   check(card.includes('Return trip — pickup from Chan Yin Factory'), 'approval card shows the purpose/notes line');
+
+  // 23b. Special Request — requester instructions must reach the approver card
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: 'CAR-202609-0011',
+    title: 'Car to Head Office',
+    requester: { fullName: 'Salai Thant Zaw Win' },
+    requesterId: 'u1',
+    status: 'PENDING_APPROVAL',
+    carRequest: {
+      destination: 'Head Office',
+      startDate: new Date('2026-09-29T08:00:00Z'),
+      endDate: new Date('2026-09-29T10:00:00Z'),
+      passengers: 2,
+      specialRequest: 'စောင့်ပြီးခေါ်ပါ — ပစ္စည်းသယ်မည်',
+    },
+  });
+  apiLog.length = 0;
+  await svc.offerApprovalButtons('req-appr-special');
+  const cardSpecial = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
+  check(cardSpecial.includes('⭐ Special: စောင့်ပြီးခေါ်ပါ'), 'approval card carries the requester\'s special request verbatim');
+
   // restore
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
     id: where.id,
