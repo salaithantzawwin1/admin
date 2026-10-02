@@ -230,6 +230,41 @@ async function main() {
     assert.strictEqual(out[0].bookings[0].docNumber, 'CAR-202609-0005');
   });
 
+  await test('requesterFleetOverview: future booking shows AVAILABLE (badge = physical status)', async () => {
+    const now = new Date();
+    const in2h = new Date(now.getTime() + 2 * 3600 * 1000);
+    const in4h = new Date(now.getTime() + 4 * 3600 * 1000);
+    const ago1h = new Date(now.getTime() - 1 * 3600 * 1000);
+    const in2h2 = new Date(now.getTime() + 2 * 3600 * 1000);
+    const prismaBadge: any = {
+      carAssignment: { findMany: async () => [] },
+      vehicle: {
+        findMany: async () => [
+          { id: 'v-future', vehicleNo: 'FUT/001', brandModel: 'future trip', status: 'IN_USE' },
+          { id: 'v-active', vehicleNo: 'ACT/002', brandModel: 'on the road', status: 'IN_USE' },
+          { id: 'v-maint', vehicleNo: 'MNT/003', brandModel: 'workshop', status: 'UNDER_MAINTENANCE' },
+          { id: 'v-idle', vehicleNo: 'IDL/004', brandModel: 'free pool', status: 'AVAILABLE' },
+        ],
+      },
+      carRequest: {
+        findMany: async () => [
+          // committed for LATER today — car is physically free NOW (the user's bug)
+          { requestId: 'r-fut', vehicleId: 'v-future', startDate: in2h, endDate: in4h, request: { docNumber: 'CAR-202610-0003' } },
+          // window covering now → genuinely on the road
+          { requestId: 'r-act', vehicleId: 'v-active', startDate: ago1h, endDate: in2h2, request: { docNumber: 'CAR-202610-0007' } },
+        ],
+      },
+    };
+    const svcBadge: any = new CarsService(prismaBadge, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const out = await svcBadge.requesterFleetOverview();
+    const byId = Object.fromEntries(out.map((v: any) => [v.id, v]));
+    assert.strictEqual(byId['v-future'].status, 'AVAILABLE', 'car booked for a FUTURE window must not show IN_USE yet');
+    assert.strictEqual(byId['v-future'].bookings.length, 1, 'the booked window is still listed');
+    assert.strictEqual(byId['v-active'].status, 'IN_USE', 'a booking whose window covers now → IN_USE');
+    assert.strictEqual(byId['v-maint'].status, 'UNDER_MAINTENANCE', 'physical workshop state kept verbatim');
+    assert.strictEqual(byId['v-idle'].status, 'AVAILABLE', 'plain pool car stays AVAILABLE');
+  });
+
   // ------------------------------------------ 3) expense access control
   const expenseRows = [{ id: 'e1' }];
   const prismaExp: any = {

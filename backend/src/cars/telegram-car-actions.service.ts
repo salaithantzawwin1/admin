@@ -673,7 +673,10 @@ export class TelegramCarActionsService {
     });
     const busyIds = busy.map((b) => b.vehicleId).filter(Boolean) as string[];
     const vehicles = await this.prisma.vehicle.findMany({
-      where: { status: 'AVAILABLE', ...(busyIds.length ? { id: { notIn: busyIds } } : {}) },
+      // DB status IN_USE also covers cars committed to a FUTURE trip — those are
+      // physically free now; the busyIds window-overlap filter is the real gate.
+      // UNDER_MAINTENANCE / OUT_OF_SERVICE stay excluded.
+      where: { status: { in: ['AVAILABLE', 'IN_USE'] }, ...(busyIds.length ? { id: { notIn: busyIds } } : {}) },
       take: 8,
       select: { id: true, vehicleNo: true, brandModel: true },
     });
@@ -747,7 +750,9 @@ export class TelegramCarActionsService {
         ].filter(Boolean)
       : [];
     const drivers = await this.prisma.driver.findMany({
-      where: { status: 'AVAILABLE', ...(busyDriverIds.length ? { id: { notIn: busyDriverIds as string[] } } : {}) },
+      // same future-booking rule as vehicles: ON_TRIP includes drivers booked for a
+      // LATER window; busyDriverIds excludes only genuine window overlaps. ON_LEAVE / INACTIVE stay excluded.
+      where: { status: { in: ['AVAILABLE', 'ON_TRIP'] }, ...(busyDriverIds.length ? { id: { notIn: busyDriverIds as string[] } } : {}) },
       take: 8,
       select: { id: true, name: true },
     });

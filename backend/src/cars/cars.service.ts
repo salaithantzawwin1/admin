@@ -194,12 +194,27 @@ export class CarsService {
       }),
     ]);
 
-    return vehicles.map((v) => ({
-      ...v,
-      bookings: bookings
-        .filter((b) => b.vehicleId === v.id)
-        .map((b) => ({ docNumber: b.request?.docNumber, startDate: b.startDate, endDate: b.endDate })),
-    }));
+    // The badge is the PHYSICAL status, not the booking state: a car committed
+    // to a FUTURE trip is not "in use" yet — it is merely BOOKED (the windows
+    // below say so). assign()/reassign() flip the DB status to IN_USE at
+    // assignment time, so derive the true badge from live windows instead:
+    //   • a booking whose window covers now           → IN_USE
+    //   • UNDER_MAINTENANCE / OUT_OF_SERVICE          → kept verbatim (physical)
+    //   • otherwise (e.g. DB IN_USE, future booking)  → AVAILABLE
+    return vehicles.map((v) => {
+      const mine = bookings.filter((b) => b.vehicleId === v.id);
+      const parked = v.status === 'UNDER_MAINTENANCE' || v.status === 'OUT_OF_SERVICE';
+      const status: typeof v.status = parked
+        ? v.status
+        : mine.some((b) => b.startDate <= now && b.endDate >= now)
+          ? 'IN_USE'
+          : 'AVAILABLE';
+      return {
+        ...v,
+        status,
+        bookings: mine.map((b) => ({ docNumber: b.request?.docNumber, startDate: b.startDate, endDate: b.endDate })),
+      };
+    });
   }
 
   /**
