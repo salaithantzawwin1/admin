@@ -236,6 +236,15 @@ async function main() {
         { id: 'd-leave', name: 'Leave Driver', status: 'ON_LEAVE' },
       ],
     },
+    carAssignment: {
+      // started-trips probes from the effective-status derivation
+      findMany: async (args: any) => {
+        const sel = JSON.stringify(args.select || {});
+        if (sel.includes('vehicleId')) return [{ vehicleId: 'v-live' }];
+        if (sel.includes('driverId')) return [{ driverId: 'd-live' }];
+        return [];
+      },
+    },
     carRequest: {
       // one query per call — return rows matching whichever select the service used
       findMany: async (args: any) => {

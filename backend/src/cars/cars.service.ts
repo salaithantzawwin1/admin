@@ -202,16 +202,31 @@ export class CarsService {
     //   • only future bookings (or DB IN_USE)         → BOOKED (committed, not rolling)
     //   • UNDER_MAINTENANCE / OUT_OF_SERVICE          → kept verbatim (physical)
     //   • otherwise                                   → AVAILABLE
+    // A trip the driver STARTED that runs past its window keeps covering "now"
+    // through the base-status filter only until endDate — a running-late ride
+    // would flash AVAILABLE and let someone else book the car. Treat the trip
+    // as still covering now until its odometer close-out (Back at Office /
+    // completeTrip) — the same exemption the conflict checks apply.
+    const startedTrips = await this.prisma.carAssignment.findMany({
+      where: { releasedAt: null, trip: { status: 'STARTED' } },
+      select: { vehicleId: true, request: { select: { carRequest: { select: { endDate: true } } } } },
+    });
+    const runningLate = new Map(
+      startedTrips
+        .filter((t) => t.request.carRequest && new Date(t.request.carRequest.endDate) < now)
+        .map((t) => [t.vehicleId, new Date(t.request.carRequest!.endDate)] as const),
+    );
     return vehicles.map((v) => {
       const mine = bookings.filter((b) => b.vehicleId === v.id);
       const parked = v.status === 'UNDER_MAINTENANCE' || v.status === 'OUT_OF_SERVICE';
-      const coversNow = mine.some((b) => b.startDate <= now && b.endDate >= now);
+      const lateEnd = runningLate.get(v.id);
+      const coversNow = mine.some((b) => b.startDate <= now && b.endDate >= now) || (lateEnd !== undefined && lateEnd >= now);
       // BOOKED is a presentational value (not in the Prisma enum) — type it explicitly
       const status: VehicleStatus | 'BOOKED' = parked
         ? v.status
         : coversNow
           ? 'IN_USE'
-          : mine.length > 0 || v.status === 'IN_USE'
+          : mine.length > 0 || lateEnd !== undefined || v.status === 'IN_USE'
             ? 'BOOKED'
             : 'AVAILABLE';
       return {

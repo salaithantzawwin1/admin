@@ -208,7 +208,14 @@ async function main() {
   await test('requesterFleetOverview: Back-at-Office booking leaves the Booked list', async () => {
     const overviewCaptured: any[] = [];
     const prismaOv: any = {
-      carAssignment: { findMany: async () => [{ requestId: 'req-bao' }] },
+      carAssignment: {
+        findMany: async (args: any) => {
+          // shape-aware: the overview's started-trips probe selects vehicleId +
+          // carRequest.endDate; the Back-at-Office exemption probe selects requestId
+          const sel = JSON.stringify(args.select || {});
+          return sel.includes('carRequest') ? [] : [{ requestId: 'req-bao' }];
+        },
+      },
       vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: '1G/5575', brandModel: 'dd test', status: 'AVAILABLE' }] },
       carRequest: {
         findMany: async (args: any) => {

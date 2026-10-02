@@ -130,9 +130,17 @@ export class FleetService {
       select: { vehicleId: true },
     });
     const onRoad = new Set(live.map((r) => r.vehicleId as string));
+    // a trip the driver STARTED that runs past its window must keep the car
+    // IN_USE until the odometer close-out — otherwise a running-late ride
+    // flashes AVAILABLE and someone else books the car mid-trip
+    const startedTrips = await this.prisma.carAssignment.findMany({
+      where: { releasedAt: null, trip: { status: 'STARTED' } },
+      select: { vehicleId: true },
+    });
+    const started = new Set(startedTrips.map((t) => t.vehicleId));
     return rows.map((v) => ({
       ...v,
-      status: onRoad.has(v.id)
+      status: onRoad.has(v.id) || started.has(v.id)
         ? 'IN_USE'
         : v.status === 'IN_USE'
           ? 'AVAILABLE'
@@ -323,9 +331,16 @@ export class FleetService {
       select: { driverId: true },
     });
     const onRoad = new Set(live.map((r) => r.driverId as string));
+    // same running-late rule as vehicles: a STARTED trip keeps the driver
+    // ON_TRIP until the odometer close-out, window or not
+    const startedTrips = await this.prisma.carAssignment.findMany({
+      where: { releasedAt: null, trip: { status: 'STARTED' } },
+      select: { driverId: true },
+    });
+    const started = new Set(startedTrips.map((t) => t.driverId).filter(Boolean) as string[]);
     return rows.map((d) => ({
       ...d,
-      status: onRoad.has(d.id)
+      status: onRoad.has(d.id) || started.has(d.id)
         ? 'ON_TRIP'
         : d.status === 'ON_TRIP'
           ? 'AVAILABLE'
