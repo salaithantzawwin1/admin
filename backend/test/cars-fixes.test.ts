@@ -230,7 +230,7 @@ async function main() {
     assert.strictEqual(out[0].bookings[0].docNumber, 'CAR-202609-0005');
   });
 
-  await test('requesterFleetOverview: future booking shows AVAILABLE (badge = physical status)', async () => {
+  await test('requesterFleetOverview: future booking shows BOOKED (not IN_USE), active shows IN_USE', async () => {
     const now = new Date();
     const in2h = new Date(now.getTime() + 2 * 3600 * 1000);
     const in4h = new Date(now.getTime() + 4 * 3600 * 1000);
@@ -258,7 +258,7 @@ async function main() {
     const svcBadge: any = new CarsService(prismaBadge, {} as any, {} as any, {} as any, {} as any, {} as any);
     const out = await svcBadge.requesterFleetOverview();
     const byId = Object.fromEntries(out.map((v: any) => [v.id, v]));
-    assert.strictEqual(byId['v-future'].status, 'AVAILABLE', 'car booked for a FUTURE window must not show IN_USE yet');
+    assert.strictEqual(byId['v-future'].status, 'BOOKED', 'future-only booking → BOOKED (committed, not rolling)');
     assert.strictEqual(byId['v-future'].bookings.length, 1, 'the booked window is still listed');
     assert.strictEqual(byId['v-active'].status, 'IN_USE', 'a booking whose window covers now → IN_USE');
     assert.strictEqual(byId['v-maint'].status, 'UNDER_MAINTENANCE', 'physical workshop state kept verbatim');

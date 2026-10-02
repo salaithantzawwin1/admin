@@ -133,13 +133,14 @@ export function Select({ invalid, error, describe, className, id, ...props }: Re
   );
 }
 
-export function Badge({ children, color = 'gray', title }: { children: ReactNode; color?: 'gray' | 'green' | 'red' | 'blue' | 'yellow'; title?: string }) {
+export function Badge({ children, color = 'gray', title }: { children: ReactNode; color?: 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'; title?: string }) {
   const styles = {
     gray: 'bg-gray-100 text-gray-700 ring-1 ring-inset ring-gray-200',
     green: 'bg-green-50 text-green-700 ring-1 ring-inset ring-green-200',
     red: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200',
     blue: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-200',
     yellow: 'bg-yellow-50 text-yellow-800 ring-1 ring-inset ring-yellow-200',
+    orange: 'bg-orange-50 text-orange-700 ring-1 ring-inset ring-orange-200',
   }[color];
   return <span title={title} className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${styles}`}>{children}</span>;
 }

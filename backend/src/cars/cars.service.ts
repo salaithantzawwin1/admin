@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { Prisma, TripStatus, WorkflowStatus } from '@prisma/client';
+import { Prisma, TripStatus, VehicleStatus, WorkflowStatus } from '@prisma/client';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.module';
 import { PermissionsService } from '../auth/permissions.service';
@@ -198,17 +198,22 @@ export class CarsService {
     // to a FUTURE trip is not "in use" yet — it is merely BOOKED (the windows
     // below say so). assign()/reassign() flip the DB status to IN_USE at
     // assignment time, so derive the true badge from live windows instead:
-    //   • a booking whose window covers now           → IN_USE
+    //   • a booking whose window covers now           → IN_USE (on the road)
+    //   • only future bookings (or DB IN_USE)         → BOOKED (committed, not rolling)
     //   • UNDER_MAINTENANCE / OUT_OF_SERVICE          → kept verbatim (physical)
-    //   • otherwise (e.g. DB IN_USE, future booking)  → AVAILABLE
+    //   • otherwise                                   → AVAILABLE
     return vehicles.map((v) => {
       const mine = bookings.filter((b) => b.vehicleId === v.id);
       const parked = v.status === 'UNDER_MAINTENANCE' || v.status === 'OUT_OF_SERVICE';
-      const status: typeof v.status = parked
+      const coversNow = mine.some((b) => b.startDate <= now && b.endDate >= now);
+      // BOOKED is a presentational value (not in the Prisma enum) — type it explicitly
+      const status: VehicleStatus | 'BOOKED' = parked
         ? v.status
-        : mine.some((b) => b.startDate <= now && b.endDate >= now)
+        : coversNow
           ? 'IN_USE'
-          : 'AVAILABLE';
+          : mine.length > 0 || v.status === 'IN_USE'
+            ? 'BOOKED'
+            : 'AVAILABLE';
       return {
         ...v,
         status,

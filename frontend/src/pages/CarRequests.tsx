@@ -16,9 +16,11 @@ interface FleetVehicle {
   bookings: { docNumber?: string; startDate: string; endDate: string }[];
 }
 
-// Prisma VehicleStatus enum values (ON_LEAVE is a DriverStatus, not a vehicle one)
-const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red' | 'gray'> = {
+// Prisma VehicleStatus enum values + the derived BOOKED state (future-only
+// bookings — orange, matching the booked-window chips below the card)
+const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red' | 'gray' | 'orange'> = {
   AVAILABLE: 'green',
+  BOOKED: 'orange',
   IN_USE: 'blue',
   UNDER_MAINTENANCE: 'yellow',
   OUT_OF_SERVICE: 'red',

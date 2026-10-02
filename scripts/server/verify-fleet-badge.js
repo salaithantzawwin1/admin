@@ -17,8 +17,9 @@
     for (const b of v.bookings) {
       const s = new Date(b.startDate), e = new Date(b.endDate);
       const covers = s <= now && now <= e;
-      const expect = covers ? 'IN_USE' : 'AVAILABLE';
-      const ok = v.status === expect;
+      // BOOKED is a valid presentational state for future-only bookings;
+      // the invariant that matters: IN_USE only while a window covers now.
+      const ok = covers ? v.status === 'IN_USE' : (v.status === 'AVAILABLE' || v.status === 'BOOKED');
       if (!ok) bad++;
       console.log(`${v.vehicleNo}: badge=${v.status} | ${b.docNumber} ${p(s)}→${p(e)} covers_now=${covers} ${ok ? 'OK' : '<<< MISMATCH'}`);
     }
