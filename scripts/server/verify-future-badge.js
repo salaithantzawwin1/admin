@@ -58,9 +58,10 @@
   if (!me || !me.bookings.length) throw new Error('assigned booking missing from overview');
   const now = new Date();
   const covers = me.bookings.some((b) => new Date(b.startDate) <= now && now <= new Date(b.endDate));
-  const ok = me.status === (covers ? 'IN_USE' : 'AVAILABLE');
+  // future-only booking → BOOKED (orange, committed-not-rolling); active window → IN_USE
+  const ok = covers ? me.status === 'IN_USE' : me.status === 'BOOKED';
   const p = (x) => { const d = new Date(x); return new Date(d.getTime() + 6.5 * 3600 * 1000).toISOString().slice(5, 16).replace('T', ' '); };
-  console.log(`>>> ${me.vehicleNo}: badge=${me.status} | ${me.bookings[0]?.docNumber} ${p(me.bookings[0]?.startDate)}→${p(me.bookings[0]?.endDate)} covers_now=${covers} → ${ok ? 'PASS ✓' : 'FAIL ✗'}`);
+  console.log(`>>> ${me.vehicleNo}: badge=${me.status} | ${me.bookings[0]?.docNumber} ${p(me.bookings[0]?.startDate)}→${p(me.bookings[0]?.endDate)} covers_now=${covers} (expect ${covers ? 'IN_USE' : 'BOOKED'}) → ${ok ? 'PASS ✓' : 'FAIL ✗'}`);
 
   // cleanup: cancel the request (frees the vehicle link) then delete if possible
   const cancel = await fetch(BASE + `/cars/requests/${requestId}/admin-cancel`, { method: 'POST', headers: H(adm.accessToken), body: JSON.stringify({ comment: 'badge proof cleanup' }) });
