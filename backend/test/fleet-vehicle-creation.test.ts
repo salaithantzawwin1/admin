@@ -214,6 +214,67 @@ async function main() {
       });
   });
 
+  // ============================== 3) effective status (window-based) ==============================
+  console.log('\n-- Effective status: DB writes at assign time, lists show physical state --');
+
+  const now = new Date();
+  const in1h = new Date(now.getTime() + 3600 * 1000);
+  const in3h = new Date(now.getTime() + 3 * 3600 * 1000);
+  const ago1h = new Date(now.getTime() - 3600 * 1000);
+  const prismaStatus: any = {
+    vehicle: {
+      findMany: async () => [
+        { id: 'v-fut', vehicleNo: 'FUT/1', status: 'IN_USE', driver: null },
+        { id: 'v-live', vehicleNo: 'LIVE/1', status: 'IN_USE', driver: null },
+        { id: 'v-mnt', vehicleNo: 'MNT/1', status: 'UNDER_MAINTENANCE', driver: null },
+      ],
+    },
+    driver: {
+      findMany: async () => [
+        { id: 'd-fut', name: 'Future Driver', status: 'ON_TRIP' },
+        { id: 'd-live', name: 'Road Driver', status: 'ON_TRIP' },
+        { id: 'd-leave', name: 'Leave Driver', status: 'ON_LEAVE' },
+      ],
+    },
+    carRequest: {
+      // one query per call — return rows matching whichever select the service used
+      findMany: async (args: any) => {
+        const sel = JSON.stringify(args.select || {});
+        if (sel.includes('vehicleId')) {
+          return [
+            { vehicleId: 'v-live' }, // window covering now
+            // v-fut has only a FUTURE window → not returned by the lte/gte filter
+          ];
+        }
+        if (sel.includes('driverId')) {
+          return [
+            { driverId: 'd-live' },
+            // d-fut booked for later only
+          ];
+        }
+        return [];
+      },
+    },
+  };
+
+  await test('listVehicles: future-booking car shows AVAILABLE, active trip IN_USE, maintenance kept', async () => {
+    const svc = makeService(prismaStatus);
+    const rows = await svc.listVehicles();
+    const byId = Object.fromEntries(rows.map((v: any) => [v.id, v.status]));
+    assert.strictEqual(byId['v-fut'], 'AVAILABLE', 'car committed to a FUTURE window must not show IN_USE');
+    assert.strictEqual(byId['v-live'], 'IN_USE', 'window covering now → IN_USE');
+    assert.strictEqual(byId['v-mnt'], 'UNDER_MAINTENANCE', 'physical workshop state kept');
+  });
+
+  await test('listDrivers: future-booking driver shows AVAILABLE, active trip ON_TRIP, leave kept', async () => {
+    const svc = makeService(prismaStatus);
+    const rows = await svc.listDrivers();
+    const byId = Object.fromEntries(rows.map((d: any) => [d.id, d.status]));
+    assert.strictEqual(byId['d-fut'], 'AVAILABLE', 'driver booked for a LATER window must not show ON_TRIP');
+    assert.strictEqual(byId['d-live'], 'ON_TRIP', 'window covering now → ON_TRIP');
+    assert.strictEqual(byId['d-leave'], 'ON_LEAVE', 'administrative leave state kept');
+  });
+
   const total = passed + failures.length;
   console.log(`\n${total} checks, ${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

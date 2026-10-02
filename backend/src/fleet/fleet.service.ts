@@ -103,12 +103,41 @@ export class FleetService {
   }
 
   // ---------- vehicles ----------
-  listVehicles(status?: VehicleStatus) {
-    return this.prisma.vehicle.findMany({
+  /**
+   * Vehicle list with EFFECTIVE status. The DB column is written at ASSIGN time
+   * (assign()/reassign() flip it to IN_USE), so it describes "committed to a
+   * trip", not "physically on the road". The fleet table shows the physical
+   * truth instead: a booking whose window covers now → IN_USE, maintenance
+   * states kept, everything else AVAILABLE (future bookings stay listed as
+   * booked windows elsewhere, they don't make the car "in use").
+   */
+  async listVehicles(status?: VehicleStatus) {
+    const rows = await this.prisma.vehicle.findMany({
       where: status ? { status } : undefined,
       orderBy: { vehicleNo: 'asc' },
       include: { driver: true },
     });
+    const now = new Date();
+    const live = await this.prisma.carRequest.findMany({
+      // same filter as requesterFleetOverview: base document status is the
+      // single source of truth (CarRequest.status can stay DRAFT forever)
+      where: {
+        request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never[] } },
+        startDate: { lte: now },
+        endDate: { gte: now },
+        vehicleId: { not: null },
+      },
+      select: { vehicleId: true },
+    });
+    const onRoad = new Set(live.map((r) => r.vehicleId as string));
+    return rows.map((v) => ({
+      ...v,
+      status: onRoad.has(v.id)
+        ? 'IN_USE'
+        : v.status === 'IN_USE'
+          ? 'AVAILABLE'
+          : v.status,
+    }));
   }
 
   async createVehicle(data: {
@@ -263,9 +292,17 @@ export class FleetService {
     return [...new Set(rows.map((r) => r.driverId).filter(Boolean) as string[])];
   }
 
-  listDrivers(status?: DriverStatus) {
+  /**
+   * Driver list with EFFECTIVE status — same window rule as listVehicles:
+   * ON_TRIP in the DB can mean "booked for a LATER trip" (assign() flips it at
+   * assignment time). ON_LEAVE / INACTIVE are physical/administrative states and
+   * stay; a driver whose booked window covers now shows ON_TRIP, otherwise
+   * AVAILABLE even when the DB still says ON_TRIP for a future ride.
+   */
+  async listDrivers(status?: DriverStatus) {
+    const now = new Date();
     // telegramBindCode deliberately excluded — it is a linking secret (see listTelegramBindings)
-    return this.prisma.driver.findMany({
+    const rows = await this.prisma.driver.findMany({
       where: status ? { status } : undefined,
       orderBy: { name: 'asc' },
       select: {
@@ -273,9 +310,27 @@ export class FleetService {
         status: true, notes: true, telegramChatId: true, telegramUsername: true, createdAt: true, updatedAt: true,
         vehicles: { select: { vehicleNo: true } },
         employee: { select: { id: true, employeeNo: true, fullName: true } },
-        absences: { where: { status: 'ACTIVE', endsAt: { gt: new Date() } }, select: { startsAt: true, endsAt: true, reason: true } },
+        absences: { where: { status: 'ACTIVE', endsAt: { gt: now } }, select: { startsAt: true, endsAt: true, reason: true } },
       },
     });
+    const live = await this.prisma.carRequest.findMany({
+      where: {
+        request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never[] } },
+        startDate: { lte: now },
+        endDate: { gte: now },
+        driverId: { not: null },
+      },
+      select: { driverId: true },
+    });
+    const onRoad = new Set(live.map((r) => r.driverId as string));
+    return rows.map((d) => ({
+      ...d,
+      status: onRoad.has(d.id)
+        ? 'ON_TRIP'
+        : d.status === 'ON_TRIP'
+          ? 'AVAILABLE'
+          : d.status,
+    }));
   }
 
   /** Telegram binding state per driver — bind codes are admin-only (fleet.manage). */
