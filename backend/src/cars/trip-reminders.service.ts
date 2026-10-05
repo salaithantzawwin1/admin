@@ -407,6 +407,97 @@ export class TripRemindersService {
   }
 
   /**
+   * Shift-handover digest (17:00 Yangon — the day shift hands over): today's
+   * remaining trips, what is on the road right now (⏰ delays flagged) and
+   * vehicles blocked for service/inspection. Administration-only (cars.assign
+   * holders with a linked Telegram chat).
+   */
+  @Cron('0 0 17 * * *')
+  async shiftHandoverDigest() {
+    try {
+      const now = new Date();
+      const dayStart = new Date(now);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
+
+      const liveAssignments = await this.prisma.carAssignment.findMany({
+        where: { releasedAt: null, driverBackAtOfficeAt: null },
+        include: {
+          vehicle: { select: { vehicleNo: true } },
+          driver: { select: { name: true } },
+          request: { select: { docNumber: true, carRequest: { select: { endDate: true } } } },
+        },
+      });
+      const onRoad = liveAssignments.filter((a) => a.request?.carRequest);
+      const delayed = onRoad.filter((a) => a.estimatedReturnAt && new Date(a.estimatedReturnAt) > new Date(a.request.carRequest!.endDate));
+
+      const today = await this.prisma.carRequest.findMany({
+        where: {
+          request: { status: { in: ['APPROVED', 'IN_PROGRESS'] as never[] } },
+          startDate: { gte: now, lt: dayEnd },
+          vehicleId: { not: null },
+        },
+        orderBy: { startDate: 'asc' },
+        select: {
+          startDate: true,
+          vehicle: { select: { vehicleNo: true } },
+          driver: { select: { name: true } },
+          request: { select: { docNumber: true } },
+        },
+      });
+
+      const blocked = await this.prisma.vehicleUnavailability.findMany({
+        where: { status: 'ACTIVE', startsAt: { lte: now }, endsAt: { gt: now } },
+        include: { vehicle: { select: { vehicleNo: true } } },
+        orderBy: { endsAt: 'asc' },
+      });
+
+      if (onRoad.length === 0 && today.length === 0 && blocked.length === 0) {
+        this.logger.log('shift-handover digest: nothing to report — skipped');
+        return;
+      }
+
+      const lines: string[] = [`🔄 <b>Shift handover — ${escapeHtml(yangonClock(now))}</b>`];
+      if (onRoad.length > 0) {
+        lines.push('', `<b>🚗 On the road (${onRoad.length}):</b>`);
+        for (const a of onRoad) {
+          const planned = a.request.carRequest ? yangonClock(new Date(a.request.carRequest.endDate)) : '—';
+          const eta = a.estimatedReturnAt ? ` · ⏰ ETA ${yangonClock(new Date(a.estimatedReturnAt))}` : '';
+          lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} · ${escapeHtml(a.driver?.name ?? 'no driver')} · planned end ${planned}${eta}`);
+        }
+      }
+      if (delayed.length > 0) {
+        lines.push('', `<b>⏰ Delayed (${delayed.length}) — driver reported a later return:</b>`);
+        for (const a of delayed) lines.push(`• ${escapeHtml(a.request.docNumber)} — ETA ${yangonClock(new Date(a.estimatedReturnAt!))} (planned ${yangonClock(new Date(a.request.carRequest!.endDate))})`);
+      }
+      if (today.length > 0) {
+        lines.push('', `<b>📅 Still to come today (${today.length}):</b>`);
+        for (const t of today.slice(0, 10)) {
+          lines.push(`• ${yangonClock(new Date(t.startDate))} — ${escapeHtml(t.request.docNumber)} · ${escapeHtml(t.vehicle?.vehicleNo ?? '—')}${t.driver ? ` · ${escapeHtml(t.driver.name)}` : ''}`);
+        }
+        if (today.length > 10) lines.push(`• …and ${today.length - 10} more`);
+      }
+      if (blocked.length > 0) {
+        lines.push('', `<b>🛠 Blocked vehicles (${blocked.length}):</b>`);
+        for (const u of blocked) lines.push(`• ${escapeHtml(u.vehicle?.vehicleNo ?? '—')} — ${escapeHtml(u.reason || 'Unavailable')} · until ${yangonClock(new Date(u.endsAt))}`);
+      }
+      lines.push('', '<i>⏰ ETA သည် ကား ပြန်ရောက်မည့် ခန့်မှန်းချိန် — Back at Office နှိပ်ပါက အလိုအလျောက် ပျက်ပြယ်မည်။</i>');
+      const text = lines.join('\n');
+      const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+      const admins = await this.prisma.user.findMany({
+        where: { id: { in: adminIds }, telegramChatId: { not: null } },
+        select: { telegramChatId: true },
+      });
+      for (const a of admins) {
+        if (a.telegramChatId) await this.telegram.sendRaw(a.telegramChatId, text).catch(() => undefined);
+      }
+      this.logger.log(`shift-handover digest sent to ${admins.length} admin(s): ${onRoad.length} on-road, ${delayed.length} delayed, ${today.length} upcoming, ${blocked.length} blocked`);
+    } catch (e) {
+      this.logger.warn(`shiftHandoverDigest failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
    * Overdue running trips: the booking window ended but the driver never tapped
    * "🏁 Back at Office" — the vehicle still shows IN_USE and blocks new bookings.
    * Ping the driver hourly and raise it to Administration (idempotent: one

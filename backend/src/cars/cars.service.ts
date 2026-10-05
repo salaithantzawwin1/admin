@@ -1145,6 +1145,99 @@ export class CarsService {
   }
 
   /**
+   * Shift-handover summary for Administration: everything the next shift needs
+   * to pick up cleanly — trips on the road (with ⏰ delays flagged), today's
+   * remaining trips, and vehicles currently blocked for service/inspection.
+   * Local day = container TZ (Asia/Rangoon in deployment).
+   */
+  async handover() {
+    const now = new Date();
+    const dayStart = new Date(now);
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
+
+    const liveAssignments = await this.prisma.carAssignment.findMany({
+      where: { releasedAt: null, driverBackAtOfficeAt: null },
+      include: {
+        vehicle: { select: { vehicleNo: true, brandModel: true } },
+        driver: { select: { name: true } },
+        trip: { select: { status: true } },
+        request: { select: { id: true, docNumber: true, carRequest: { select: { endDate: true, destination: true } } } },
+      },
+    });
+    const onRoad = liveAssignments
+      .filter((a) => a.request?.carRequest)
+      .map((a) => {
+        const plannedEnd = new Date(a.request.carRequest!.endDate);
+        const eta = a.estimatedReturnAt ? new Date(a.estimatedReturnAt) : null;
+        return {
+          requestId: a.request.id,
+          docNumber: a.request.docNumber,
+          vehicle: a.vehicle?.vehicleNo ?? '—',
+          driver: a.driver?.name ?? null,
+          destination: a.request.carRequest!.destination,
+          plannedEnd,
+          estimatedReturnAt: a.estimatedReturnAt,
+          tripStarted: a.trip?.status === 'STARTED',
+          overdue: (eta ?? plannedEnd) < now,
+        };
+      });
+
+    const today = await this.prisma.carRequest.findMany({
+      where: {
+        request: { status: { in: ['APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
+        startDate: { lt: dayEnd },
+        endDate: { gte: dayStart },
+        vehicleId: { not: null },
+      },
+      orderBy: { startDate: 'asc' },
+      select: {
+        requestId: true,
+        startDate: true,
+        endDate: true,
+        destination: true,
+        vehicle: { select: { vehicleNo: true } },
+        driver: { select: { name: true } },
+        assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
+        request: { select: { id: true, docNumber: true, status: true } },
+      },
+    });
+
+    const blocked = await this.prisma.vehicleUnavailability.findMany({
+      where: { status: 'ACTIVE', startsAt: { lte: now }, endsAt: { gt: now } },
+      include: { vehicle: { select: { vehicleNo: true, brandModel: true } } },
+      orderBy: { endsAt: 'asc' },
+    });
+
+    return {
+      onRoad,
+      delayedCount: onRoad.filter((t) => t.estimatedReturnAt && new Date(t.estimatedReturnAt) > t.plannedEnd).length,
+      today: today.map((t) => ({
+        requestId: t.request.id,
+        docNumber: t.request.docNumber,
+        status: t.request.status,
+        startDate: t.startDate,
+        endDate: t.endDate,
+        destination: t.destination,
+        vehicle: t.vehicle?.vehicleNo ?? '—',
+        driver: t.driver?.name ?? null,
+        notedAt: t.assignment?.driverNotedAt ?? null,
+        readyAt: t.assignment?.driverArrivedAt ?? null,
+        backAt: t.assignment?.driverBackAtOfficeAt ?? null,
+        estimatedReturnAt: t.assignment?.estimatedReturnAt ?? null,
+      })),
+      blocked: blocked.map((u) => ({
+        vehicle: u.vehicle?.vehicleNo ?? '—',
+        brandModel: u.vehicle?.brandModel ?? '',
+        startsAt: u.startsAt,
+        endsAt: u.endsAt,
+        reason: u.reason || 'Unavailable',
+      })),
+      generatedAt: now,
+    };
+  }
+
+  /**
    * Administration queue: car requests that are APPROVED but still have no vehicle
    * assigned (carRequest.vehicleId is cleared on release too, so re-released
    * requests reappear here automatically).

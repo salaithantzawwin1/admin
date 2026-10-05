@@ -704,6 +704,60 @@ async function main() {
     assert.ok(r.conflicts[0].request.docNumber.includes('🛠'), 'the refusal names the block, not a booking');
   });
 
+  await test('handover(): on-road trips carry plannedEnd/ETA/overdue, blocked vehicles listed', async () => {
+    const now = new Date();
+    const pastEnd = new Date(now.getTime() - 30 * 60000);
+    const etaSoon = new Date(now.getTime() + 45 * 60000);
+    const prismaH: any = {
+      carAssignment: {
+        findMany: async () => [
+          {
+            // delayed but covered: planned end passed, driver reported a future ETA
+            releasedAt: null, driverBackAtOfficeAt: null, estimatedReturnAt: etaSoon,
+            vehicle: { vehicleNo: 'V-1', brandModel: 'Probox' }, driver: { name: 'Kyaw' },
+            trip: { status: 'STARTED' },
+            request: { id: 'r1', docNumber: 'CAR-H1', carRequest: { endDate: pastEnd, destination: 'Taunggyi' } },
+          },
+          {
+            // overdue: planned end passed, NO ETA — nothing accounts for the car
+            releasedAt: null, driverBackAtOfficeAt: null, estimatedReturnAt: null,
+            vehicle: { vehicleNo: 'V-3', brandModel: 'Vitz' }, driver: { name: 'Mg Mg' },
+            trip: { status: 'NOT_STARTED' },
+            request: { id: 'r3', docNumber: 'CAR-H3', carRequest: { endDate: pastEnd, destination: 'Office' } },
+          },
+        ],
+      },
+      carRequest: {
+        findMany: async () => [
+          {
+            requestId: 'r2', startDate: new Date(now.getTime() + 3 * 3600 * 1000), endDate: new Date(now.getTime() + 5 * 3600 * 1000),
+            destination: 'Pyay', vehicle: { vehicleNo: 'V-2' }, driver: { name: 'Ko Ko' },
+            assignment: null, request: { id: 'r2', docNumber: 'CAR-H2', status: 'APPROVED' },
+          },
+        ],
+      },
+      vehicleUnavailability: {
+        findMany: async () => [
+          { vehicle: { vehicleNo: 'V-9', brandModel: 'Hiace' }, startsAt: pastEnd, endsAt: new Date(now.getTime() + 3 * 3600 * 1000), reason: 'Service' },
+        ],
+      },
+    };
+    const svcH: any = new CarsService(prismaH, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const h = await svcH.handover();
+    assert.strictEqual(h.onRoad.length, 2, 'both live assignments are on the road');
+    const h1 = h.onRoad.find((t: any) => t.docNumber === 'CAR-H1');
+    const h3 = h.onRoad.find((t: any) => t.docNumber === 'CAR-H3');
+    assert.strictEqual(new Date(h1.plannedEnd).getTime(), pastEnd.getTime(), 'plannedEnd surfaced');
+    assert.strictEqual(new Date(h1.estimatedReturnAt).getTime(), etaSoon.getTime(), 'ETA surfaced');
+    assert.strictEqual(h1.overdue, false, 'a future ETA still covers the car — not overdue yet');
+    assert.strictEqual(h3.overdue, true, 'planned end passed with no ETA → overdue');
+    assert.strictEqual(h.delayedCount, 1, 'ETA later than planned end counts as delayed');
+    assert.strictEqual(h.today.length, 1, 'today\'s remaining trips listed');
+    assert.strictEqual(h.today[0].docNumber, 'CAR-H2');
+    assert.strictEqual(h.blocked.length, 1, 'active vehicle blocks listed');
+    assert.strictEqual(h.blocked[0].reason, 'Service');
+  });
+
   // ------------------------------------------------------------------ summary
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

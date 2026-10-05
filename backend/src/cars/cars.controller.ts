@@ -92,6 +92,14 @@ export class CarsController {
     return this.cars.listApprovedUnassigned();
   }
 
+  /** Shift-handover summary: on-road trips (⏰ delays flagged), today's trips,
+   *  blocked vehicles — the next Administration shift picks up from here. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('handover')
+  handover() {
+    return this.cars.handover();
+  }
+
   /** Car requests in my department(s) still missing the optional manager ack. */
   @Get('manager-acks/pending')
   pendingManagerAcks(@Req() req) {
