@@ -193,9 +193,18 @@ export class TripRemindersService {
     const stuck = await this.prisma.carAssignment.findMany({
       where: {
         releasedAt: null,
-        // link via requestId — carAssignment.carRequestId is not always set
-        request: { carRequest: { endDate: { lt: now } } },
-        OR: [{ trip: null }, { trip: { status: 'NOT_STARTED' } }],
+        // link via requestId — carAssignment.carRequestId is not always set.
+        // A ⏰ ETA past the planned end keeps the assignment out of the janitor
+        // until the ETA passes (Back at Office remains the early exit).
+        AND: [
+          {
+            OR: [
+              { request: { carRequest: { endDate: { lt: now } } }, estimatedReturnAt: null },
+              { estimatedReturnAt: { lt: now } },
+            ],
+          },
+          { OR: [{ trip: null }, { trip: { status: 'NOT_STARTED' } }] },
+        ],
       },
       include: {
         vehicle: { select: { vehicleNo: true } },
@@ -210,7 +219,7 @@ export class TripRemindersService {
       if (a.driverNotedAt || a.driverArrivedAt) {
         // driver confirmed the ride → complete it, do NOT re-await a car
         await this.prisma.$transaction([
-          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now } }),
+          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
           this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
           ...freedDriver,
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
@@ -242,7 +251,7 @@ export class TripRemindersService {
         // mirror the release on the car row and the base document (back to APPROVED,
         // awaiting a new assignment)
         await this.prisma.$transaction([
-          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now } }),
+          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
           this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
           ...freedDriver,
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } }),

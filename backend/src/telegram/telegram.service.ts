@@ -62,6 +62,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     handleText(text: string, chatId: string): Promise<void>;
     hasPending(chatId: string): boolean;
   };
+  /** ⏰ Delay (driver-reported ETA) executor (wired by CarsModule → CarsService). */
+  etaRef?: {
+    reportEta(assignmentId: string, minutesOrText: number | string, chatId: string, callbackId?: string): Promise<void>;
+  };
   /** AnnouncementsService (wired by AnnouncementsModule) — audience checks for ack buttons. */
   announcementsRef?: { listMine(actor: { userId: string; username: string }): Promise<Array<{ id: string }>> };
   private polling = false;
@@ -239,6 +243,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
       await this.rejects.handleText('/cancel', chatId).catch(() => undefined);
+    }
+    // an armed ⏰ custom-ETA entry — the next text IS the new expected return time
+    if (this.pendingEtaCustom.has(chatId)) {
+      const armed = this.pendingEtaCustom.get(chatId)!;
+      if (text === '/cancel' || !text.startsWith('/')) {
+        this.pendingEtaCustom.delete(chatId);
+        if (text !== '/cancel' && this.etaRef) {
+          await this.etaRef.reportEta(armed.assignmentId, text, chatId).catch(() => undefined);
+        }
+        return;
+      }
+      this.pendingEtaCustom.delete(chatId); // any other slash command aborts the ETA entry
     }
     // an open /car form — the next text is field answers (or /cancel aborts).
     // Runs BEFORE the slash-command fallback so /car itself opens/refreshes
@@ -817,6 +833,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Already done ✓' });
       return;
     }
+    // ⏰ Delay (driver-reported ETA): data = eta:<minutes>:<assignmentId>, minutes=0
+    // meaning "offer the quick options". Handled BEFORE the standard lookup — the
+    // assignment id rides in slot 3 here, not slot 2.
+    if (action === 'eta') {
+      const minutes = Number(assignmentId);
+      const targetId = data.split(':')[2] ?? '';
+      if (!Number.isFinite(minutes) || !targetId) {
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Bad delay request' });
+        return;
+      }
+      if (minutes === 0) {
+        const options: { text: string; minutes: number }[] = [
+          { text: '+30 မိနစ်', minutes: 30 },
+          { text: '+1 နာရီ', minutes: 60 },
+          { text: '+3 နာရီ', minutes: 180 },
+        ];
+        await this.call('sendMessage', {
+          chat_id: fromChatId,
+          text: '⏰ ဘယ်လောက်နောက်ကျမလဲ? — ကား ပြန်ရောက်မယ့် ခန့်မှန်းချိန် (ETA) ကို Administration နှင့် တောင်းခံသူ သိရမည်။',
+          reply_markup: {
+            inline_keyboard: [
+              ...options.map((o) => [{ text: o.text, callback_data: `eta:${o.minutes}:${targetId}` }]),
+              [{ text: '✏️ အချိန်ကိုယ်တိုင်ရေး', callback_data: `etacustom:${targetId}` }],
+            ],
+          },
+        });
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Pick how late' });
+        return;
+      }
+      if (!this.etaRef) {
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'ETA handler not ready' });
+        return;
+      }
+      await this.etaRef.reportEta(targetId, minutes, fromChatId, callbackId);
+      return;
+    }
     const assignment = await this.prisma.carAssignment.findUnique({
       where: { id: assignmentId },
       include: {
@@ -852,6 +904,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.pendingCombinedBack.set(fromChatId, assignmentId);
       setTimeout(() => this.pendingCombinedBack.delete(fromChatId), 30_000).unref?.();
       await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Tap again to confirm BOTH trips are done' });
+      return;
+    }
+    if (action === 'etacustom') {
+      // arm the free-text ETA entry: the driver's next message becomes the ETA
+      // (the assignment was already auth-checked above — this chat owns the card)
+      this.pendingEtaCustom.set(fromChatId, { assignmentId: assignmentId, at: Date.now() });
+      setTimeout(() => this.pendingEtaCustom.delete(fromChatId), 10 * 60_000).unref?.();
+      await this.call('sendMessage', {
+        chat_id: fromChatId,
+        text: '✏️ ပြန်ရောက်မယ့် အချိန်ကို ရေးပါ — (ဥပမာ: 15:30 သို့မဟုတ် 3:30pm)',
+      });
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Type the time' });
       return;
     }
     // Stage machine: each action only fires from its own stage (or later, filling gaps)
@@ -950,6 +1014,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     await this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
     if (a.driverId) {
       await this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+    }
+    // Back at Office is the physical truth — clear any ⏰ ETA so the car's
+    // availability math falls back to the planned window immediately
+    if (a.estimatedReturnAt != null) {
+      await this.prisma.carAssignment.update({ where: { id: assignmentId }, data: { estimatedReturnAt: null } }).catch(() => undefined);
     }
   }
 
@@ -1128,6 +1197,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       btn(!!a.driverArrivedAt, '🚦 Ready', 'arrived'),
       btn(!!a.driverBackAtOfficeAt, '🏁 Back at Office', 'returned'),
     ]];
+    // ⏰ Delay — running late? report the new expected return time. Quick options
+    // (+30 မိနစ် / +1 နာရီ / +3 နာရီ) arm a one-tap report; AMS + the requester
+    // are notified and the car stays blocked until the ETA (or Back at Office).
+    if (!a.driverBackAtOfficeAt) {
+      rows.push([{ text: '⏰ နောက်ကျ', callback_data: `eta:0:${assignmentId}` }]);
+    }
     // shared trip: a one-tap way to close BOTH rides at once (two-tap confirm).
     // Only until this card's own Back is pressed — after that the peer keeps its
     // own button and the regular per-card flow finishes it.
@@ -1147,6 +1222,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       request: { docNumber: string; requester: { fullName: string; employee?: { phone: string | null } | null } };
       vehicle?: { brandModel: string; vehicleNo: string } | null;
       carRequest?: { destination: string; pickupLocation: string | null; startDate: Date; endDate: Date; timeSlot: string; purpose: string | null; specialRequest?: string | null; sharedTripId?: string | null; passengers?: number | null } | null;
+      estimatedReturnAt?: Date | null;
       sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null;
     },
     stages?: { noted?: Date | null; arrived?: Date | null; back?: Date | null } | null,
@@ -1170,6 +1246,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `👥 Passengers: ${cr.passengers ?? 1}`,
       `👤 Requester: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
       cr.purpose ? `📝 ${escapeHtml(cr.purpose)}` : '',
+      // driver-reported ETA (⏰ Delay) — replaces the planned end on the card
+      // until Back at Office clears it
+      a.estimatedReturnAt ? `⏰ ETA: ${fmtTime(a.estimatedReturnAt)} (${fmtDate(a.estimatedReturnAt)})` : '',
       // requester's special instruction ("wait and call me", "carrying goods…")
       // — the driver must see it BEFORE heading out
       cr.specialRequest ? `⭐ Special: ${escapeHtml(cr.specialRequest)}` : '',
@@ -1643,6 +1722,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private callbackMessages = new Map<string, number>();
   /** chatId → assignmentId armed for the two-tap "Back at Office — BOTH trips" confirm (30s TTL). */
   private pendingCombinedBack = new Map<string, string>();
+  /** chatId → assignment armed for the ⏰ custom-ETA text entry (10 min TTL). */
+  private pendingEtaCustom = new Map<string, { assignmentId: string; at: number }>();
 
   /** Shared notification payload — text plus an optional "Open in AMS" deep link. */
   private async sendToChat(chatId: string, title: string, body?: string, link?: string) {

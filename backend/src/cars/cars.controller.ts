@@ -185,6 +185,16 @@ export class CarsController {
     return this.cars.adminShiftTime(requestId, body, this.actor(req));
   }
 
+  /**
+   * Driver-reported ETA (⏰ Delay): when the car is actually expected back.
+   * Administration or the assigned driver may set it; effective-end on the fleet
+   * card / conflict pre-warning = max(planned end, ETA) until Back at Office.
+   */
+  @Post('requests/:requestId/eta')
+  setEta(@Req() req, @Param('requestId') requestId: string, @Body() body: { minutes?: number; eta?: string }) {
+    return this.cars.setEstimatedReturn(requestId, { minutes: body.minutes, eta: body.eta }, this.actor(req));
+  }
+
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Post('requests/:requestId/reassign')
   reassign(@Req() req, @Param('requestId') requestId: string, @Body() body: { vehicleId?: string; driverId?: string }) {
