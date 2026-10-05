@@ -125,6 +125,14 @@ export class FleetController {
     return this.fleet.listVehicles(status);
   }
 
+  /** Vehicle unavailability windows — ACTIVE by default; ?all=true includes cancelled.
+   *  Declared BEFORE vehicles/:id so 'unavailabilities' is never read as an id. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('vehicles/unavailabilities')
+  vehicleUnavailabilities(@Query('all') all?: string) {
+    return this.fleet.listVehicleUnavailabilities(all === 'true');
+  }
+
   @Get('vehicles/:id')
   @RequirePermissions(PERMISSIONS.FLEET_READ)
   vehicleDetail(@Param('id') id: string) {
@@ -301,13 +309,6 @@ export class FleetController {
   }
 
   // ---------- vehicle unavailability windows (service / inspection / repair) ----------
-
-  /** Vehicle unavailability windows — ACTIVE by default; ?all=true includes cancelled. */
-  @RequirePermissions(PERMISSIONS.FLEET_READ)
-  @Get('vehicles/unavailabilities')
-  vehicleUnavailabilities(@Query('all') all?: string) {
-    return this.fleet.listVehicleUnavailabilities(all === 'true');
-  }
 
   @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
   @Post('vehicles/unavailabilities')
