@@ -67,6 +67,7 @@ async function main() {
       findUnique: async () => null,
     },
     carAssignment: { findMany: async () => [] },
+    vehicleUnavailability: { findFirst: async () => null, findMany: async () => [] },
   };
   const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any);
 
@@ -98,7 +99,7 @@ async function main() {
         request: { docNumber: 'CAR-202609-0006' },
       },
     ];
-    const prismaBao: any = { carRequest: { findMany: async () => returned }, carAssignment: { findMany: async () => [] } };
+    const prismaBao: any = { carRequest: { findMany: async () => returned }, carAssignment: { findMany: async () => [] }, vehicleUnavailability: { findMany: async () => [] } };
     const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
     // new request 11:10→12:10: overlaps the PLANNED end (11:45) but NOT the actual absence (ends 11:00)
     const r = await svcBao.checkWindowConflicts('2026-09-24T11:10Z', '2026-09-24T12:10Z');
@@ -113,7 +114,7 @@ async function main() {
         request: { docNumber: 'CAR-202609-0006' },
       },
     ];
-    const prismaBao: any = { carRequest: { findMany: async () => returned }, carAssignment: { findMany: async () => [] } };
+    const prismaBao: any = { carRequest: { findMany: async () => returned }, carAssignment: { findMany: async () => [] }, vehicleUnavailability: { findMany: async () => [] } };
     const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
     // new request 10:50→11:20: genuinely collides with the car until 11:00
     const r = await svcBao.checkWindowConflicts('2026-09-24T10:50Z', '2026-09-24T11:20Z');
@@ -130,7 +131,7 @@ async function main() {
         request: { docNumber: 'CAR-202609-0007' },
       },
     ];
-    const prismaBao: any = { carRequest: { findMany: async () => planned }, carAssignment: { findMany: async () => [] } };
+    const prismaBao: any = { carRequest: { findMany: async () => planned }, carAssignment: { findMany: async () => [] }, vehicleUnavailability: { findMany: async () => [] } };
     const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
     const r = await svcBao.checkWindowConflicts('2026-09-24T11:10Z', '2026-09-24T12:10Z');
     assert.strictEqual(r.conflicts.length, 1, 'without a return tap the planned end still blocks');
@@ -149,6 +150,7 @@ async function main() {
     const prismaBao: any = {
       carRequest: { findMany: async (args: any) => { captured.push(args); return []; } },
       carAssignment: { findMany: async () => [{ requestId: 'req-bao' }] },
+      vehicleUnavailability: { findFirst: async () => null },
     };
     const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);
     const r = await svcBao.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'));
@@ -167,6 +169,7 @@ async function main() {
         findUnique: async () => ({ sharedTripId: GROUP }),
       },
       carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: { findFirst: async () => null, findMany: async () => [] },
     };
     const svcShared: any = new CarsService(prismaShared, {} as any, {} as any, {} as any, {} as any, {} as any);
     const r = await svcShared.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'), 'req-mine');
@@ -183,6 +186,7 @@ async function main() {
         findUnique: async () => ({ sharedTripId: 'group-1' }),
       },
       carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: { findFirst: async () => null, findMany: async () => [] },
     };
     const svcShared: any = new CarsService(prismaShared, {} as any, {} as any, {} as any, {} as any, {} as any);
     const r = await svcShared.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'), 'req-mine');
@@ -217,6 +221,7 @@ async function main() {
         },
       },
       vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: '1G/5575', brandModel: 'dd test', status: 'AVAILABLE' }] },
+      vehicleUnavailability: { findMany: async () => [] },
       carRequest: {
         findMany: async (args: any) => {
           overviewCaptured.push(args);
@@ -245,6 +250,7 @@ async function main() {
     const in2h2 = new Date(now.getTime() + 2 * 3600 * 1000);
     const prismaBadge: any = {
       carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: { findMany: async () => [] },
       vehicle: {
         findMany: async () => [
           { id: 'v-future', vehicleNo: 'FUT/001', brandModel: 'future trip', status: 'IN_USE' },
@@ -386,6 +392,7 @@ async function main() {
     vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: 'YC-1', brandModel: 'Hiace' }] },
     driver: { findMany: async (args: any) => { tgCaptured.push(args); return []; } },
     driverAbsence: { findMany: async () => [] },
+    vehicleUnavailability: { findMany: async () => [] },
   };
   const svcTg: any = new TelegramCarActionsService(
     prismaTg,
@@ -462,8 +469,12 @@ async function main() {
     const t = mkReleasePrisma([]);
     await mkRelSvc(t.prisma).releaseExpired();
     const w = t.where();
-    assert.deepStrictEqual(w.OR, [{ trip: null }, { trip: { status: 'NOT_STARTED' } }], 'STARTED trips must be excluded from the auto-close query');
-    assert.ok(w.request.carRequest.endDate.lt instanceof Date, 'only windows already ended are targeted');
+    assert.deepStrictEqual(w.AND[1].OR, [{ trip: null }, { trip: { status: 'NOT_STARTED' } }], 'STARTED trips must be excluded from the auto-close query');
+    // window-ended + no ETA, OR an expired ETA — either way the car is overdue
+    assert.ok(Array.isArray(w.AND) && w.AND.length === 2, 'window/ETA conditions ride in an AND branch');
+    const overdue = w.AND[0].OR;
+    assert.ok(overdue.some((o: any) => o.request?.carRequest?.endDate?.lt instanceof Date && o.estimatedReturnAt === null), 'ended window without ETA is targeted');
+    assert.ok(overdue.some((o: any) => o.estimatedReturnAt?.lt instanceof Date), 'an expired ETA is targeted');
   });
 
   // ------------------------------------------------- 8) expireStaleRequests + picker guards
@@ -505,6 +516,192 @@ async function main() {
     await svcQ.listApprovedUnassigned();
     const gt = captured[0].where.carRequest.endDate.gt as Date;
     assert.ok(gt instanceof Date && Math.abs(Date.now() - gt.getTime() - 24 * 3600 * 1000) < 60_000, 'queue filter must exclude windows ended >24h ago');
+  });
+
+  // ------------------------------------------------- 8) ⏰ ETA / effective-end (feature: driver Delay)
+  // NOTE: the service now takes 8 constructor args (…, timetable, events) — the
+  // overview resolves the buffer through them; mocks pass undefined and the
+  // private bufferMinutes() helper falls back to the 30-minute default.
+
+  await test('overlaps(): a ⏰ ETA past the planned end keeps the booking blocking', async () => {
+    // planned 09:00→12:00, driver reported ETA 14:00 → a 12:30 booking must clash
+    const lateBookings: any[] = [
+      {
+        requestId: 'req-late', sharedTripId: null,
+        startDate: new Date('2026-09-24T09:00Z'), endDate: new Date('2026-09-24T12:00Z'),
+        assignment: { estimatedReturnAt: new Date('2026-09-24T14:00Z') },
+        request: { docNumber: 'CAR-LATE' },
+      },
+    ];
+    const prismaLate: any = {
+      carRequest: { findMany: async () => lateBookings, findUnique: async () => null },
+      carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: { findFirst: async () => null },
+    };
+    const svcLate: any = new CarsService(prismaLate, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const r = await svcLate.overlaps('veh1', new Date('2026-09-24T12:30Z'), new Date('2026-09-24T13:30Z'));
+    assert.strictEqual(r.available, false, 'the ETA stretches the booking to 14:00 — a 12:30 window must clash');
+    assert.strictEqual(r.conflicts[0].request.docNumber, 'CAR-LATE');
+  });
+
+  await test('overlaps(): SQL net widens to catch planned-end-passed bookings with a live ETA', async () => {
+    const capturedOv: any[] = [];
+    const prismaWide: any = {
+      carRequest: { findMany: async (args: any) => { capturedOv.push(args); return []; }, findUnique: async () => null },
+      carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: { findFirst: async () => null },
+    };
+    const svcWide: any = new CarsService(prismaWide, {} as any, {} as any, {} as any, {} as any, {} as any);
+    await svcWide.overlaps('veh1', new Date('2026-09-24T12:30Z'), new Date('2026-09-24T13:30Z'));
+    const or = capturedOv[0].where.OR;
+    assert.ok(or.some((o: any) => o.endDate?.gt instanceof Date), 'planned-end branch present');
+    assert.ok(or.some((o: any) => o.assignment?.estimatedReturnAt?.gt instanceof Date), 'ETA branch present — a booking whose planned end passed but ETA is live is still fetched');
+  });
+
+  await test('setEstimatedReturn: quick minutes → stores ETA, notifies Administration + requester', async () => {
+    const ops: Array<[string, any]> = [];
+    const plannedEnd = new Date(Date.now() + 3600 * 1000);
+    const prismaEta: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a1', requestId: 'r1', releasedAt: null, estimatedReturnAt: null,
+          vehicle: { vehicleNo: 'V-1', brandModel: 'Probox' }, driver: { name: 'Kyaw' },
+          request: { docNumber: 'CAR-ETA', requesterId: 'u-req', status: 'IN_PROGRESS' },
+          carRequest: { endDate: plannedEnd },
+        }),
+        update: async (p: any) => { ops.push(['ca.update', p.data]); return { estimatedReturnAt: p.data.estimatedReturnAt }; },
+      },
+    };
+    const notifications = { notifyMany: async (ids: string[], data: any) => { ops.push(['notifyMany', { ids, type: data.type, title: data.title }]); return {}; } };
+    const audit = { log: async () => ({}) };
+    const permissions = { usersWithPermissions: async () => ['u-admin1', 'u-admin2'] };
+    const telegram = { mirrorToUser: async () => ({}), sendAssignment: async () => ({}) };
+    const events = { publish: () => undefined };
+    const svcEta: any = new CarsService(prismaEta, permissions, {} as any, notifications, audit, telegram, {} as any, events);
+    const res = await svcEta.setEstimatedReturn('r1', { minutes: 30 });
+    assert.ok(res.success, 'the ETA report succeeds');
+    const eta = ops.find((o) => o[0] === 'ca.update')![1].estimatedReturnAt as Date;
+    assert.ok(eta.getTime() > Date.now() + 25 * 60_000 && eta.getTime() <= Date.now() + 31 * 60_000, 'quick +30m stores now+30min');
+    const notice = ops.find((o) => o[0] === 'notifyMany')![1];
+    assert.deepStrictEqual(notice.ids.sort(), ['u-admin1', 'u-admin2', 'u-req'], 'Administration (cars.assign) AND the requester are notified');
+    assert.ok(notice.title.includes('⏰'), 'the notice carries the delay marker');
+  });
+
+  await test('setEstimatedReturn: rejects past ETAs and assignments without an active row', async () => {
+    const prismaNo: any = { carAssignment: { findUnique: async () => null } };
+    const svcNo: any = new CarsService(prismaNo, {} as any, {} as any, {} as any, {} as any, {} as any);
+    let msg = '';
+    try { await svcNo.setEstimatedReturn('r1', { minutes: 30 }); } catch (e: any) { msg = e.message; }
+    assert.strictEqual(msg, 'No active assignment for this request');
+
+    const prismaPast: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a1', requestId: 'r1', releasedAt: null, estimatedReturnAt: null,
+          vehicle: { vehicleNo: 'V-1', brandModel: 'Probox' }, driver: { name: 'Kyaw' },
+          request: { docNumber: 'CAR-ETA', requesterId: 'u-req', status: 'IN_PROGRESS' },
+          carRequest: { endDate: new Date(Date.now() + 3600 * 1000) },
+        }),
+        update: async () => ({}),
+      },
+    };
+    const svcPast: any = new CarsService(prismaPast, {} as any, {} as any, {} as any, {} as any, {} as any);
+    msg = '';
+    try { await svcPast.setEstimatedReturn('r1', { eta: new Date(Date.now() - 60_000).toISOString() }); } catch (e: any) { msg = e.message; }
+    assert.strictEqual(msg, 'ETA must be in the future', 'a real extension always reaches forward');
+  });
+
+  await test('checkWindowConflicts: a ⏰ ETA past the planned end warns the new window', async () => {
+    const late: any[] = [
+      {
+        startDate: new Date('2026-09-24T09:00Z'), endDate: new Date('2026-09-24T12:00Z'), destination: 'Taunggyi',
+        assignment: { driverBackAtOfficeAt: null, estimatedReturnAt: new Date('2026-09-24T14:00Z') },
+        request: { docNumber: 'CAR-LATE' },
+      },
+    ];
+    const prismaLate: any = {
+      carRequest: { findMany: async () => late },
+      carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: { findMany: async () => [] },
+    };
+    const svcLate: any = new CarsService(prismaLate, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const r = await svcLate.checkWindowConflicts('2026-09-24T12:30Z', '2026-09-24T13:30Z');
+    assert.strictEqual(r.conflicts.length, 1, 'planned end passed, but the live ETA still holds the car');
+    assert.strictEqual(new Date(r.conflicts[0].endDate).toISOString(), '2026-09-24T14:00:00.000Z', 'the warning shows the ETA, not the planned end');
+    assert.strictEqual(r.bufferMinutes, 30, 'default hand-back buffer (30 min) is exposed');
+  });
+
+  await test('requesterFleetOverview: bookings carry likelyFreeFrom (end + default 30 min buffer)', async () => {
+    const start = new Date('2026-09-24T09:00Z');
+    const end = new Date('2026-09-24T12:00Z');
+    const prismaBuf: any = {
+      carAssignment: { findMany: async () => [] },
+      vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: 'V-1', brandModel: 'Probox', status: 'AVAILABLE' }] },
+      vehicleUnavailability: { findMany: async () => [] },
+      carRequest: {
+        findMany: async () => [
+          { requestId: 'r1', vehicleId: 'v1', startDate: start, endDate: end, assignment: { estimatedReturnAt: null }, request: { docNumber: 'CAR-BUF' } },
+        ],
+      },
+    };
+    const svcBuf: any = new CarsService(prismaBuf, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const out = await svcBuf.requesterFleetOverview();
+    const b = out[0].bookings[0];
+    assert.strictEqual(new Date(b.likelyFreeFrom).toISOString(), '2026-09-24T12:30:00.000Z', 'likely free = end + 30 min default buffer');
+    assert.strictEqual(b.estimatedReturnAt, null, 'no ETA reported yet');
+  });
+
+  await test('requesterFleetOverview: a ⏰ ETA stretches the booking and likelyFreeFrom follows', async () => {
+    const start = new Date('2026-09-24T09:00Z');
+    const end = new Date('2026-09-24T12:00Z');
+    const eta = new Date('2026-09-24T14:00Z');
+    const prismaEta: any = {
+      carAssignment: { findMany: async () => [] },
+      vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: 'V-1', brandModel: 'Probox', status: 'AVAILABLE' }] },
+      vehicleUnavailability: { findMany: async () => [] },
+      carRequest: {
+        findMany: async () => [
+          { requestId: 'r1', vehicleId: 'v1', startDate: start, endDate: end, assignment: { estimatedReturnAt: eta }, request: { docNumber: 'CAR-ETA2' } },
+        ],
+      },
+    };
+    const svcEta: any = new CarsService(prismaEta, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const out = await svcEta.requesterFleetOverview();
+    const b = out[0].bookings[0];
+    assert.strictEqual(new Date(b.likelyFreeFrom).toISOString(), '2026-09-24T14:30:00.000Z', 'likely free = ETA + 30 min, NOT the planned end');
+    assert.strictEqual(new Date(b.estimatedReturnAt).toISOString(), '2026-09-24T14:00:00.000Z', 'the ETA is surfaced for the ⏰ badge');
+  });
+
+  await test('requesterFleetOverview: an Administration block covering now shows UNDER_MAINTENANCE + a 🛠 window on the card', async () => {
+    const now = new Date();
+    const prismaBlock: any = {
+      carAssignment: { findMany: async () => [] },
+      vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: 'V-9', brandModel: 'Hiace', status: 'AVAILABLE' }] },
+      vehicleUnavailability: {
+        findMany: async () => [
+          { vehicleId: 'v1', startsAt: new Date(now.getTime() - 3600 * 1000), endsAt: new Date(now.getTime() + 3600 * 1000), reason: 'Service' },
+        ],
+      },
+      carRequest: { findMany: async () => [] },
+    };
+    const svcBlock: any = new CarsService(prismaBlock, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const out = await svcBlock.requesterFleetOverview();
+    assert.strictEqual(out[0].status, 'UNDER_MAINTENANCE', 'a block covering now reads as the workshop state');
+    assert.strictEqual(out[0].bookings[0].docNumber, '🛠 Service', 'the blocked window is listed on the card');
+  });
+
+  await test('overlaps(): an Administration block refuses the vehicle for the window', async () => {
+    const prismaBlk: any = {
+      carRequest: { findMany: async () => { throw new Error('must not reach the booking query'); } },
+      carAssignment: { findMany: async () => [] },
+      vehicleUnavailability: {
+        findFirst: async () => ({ startsAt: new Date('2026-09-24T00:00Z'), endsAt: new Date('2026-09-25T00:00Z'), reason: 'Inspection' }),
+      },
+    };
+    const svcBlk: any = new CarsService(prismaBlk, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const r = await svcBlk.overlaps('veh1', new Date('2026-09-24T08:00Z'), new Date('2026-09-24T10:00Z'));
+    assert.strictEqual(r.available, false, 'a blocked car is blocked for everyone');
+    assert.ok(r.conflicts[0].request.docNumber.includes('🛠'), 'the refusal names the block, not a booking');
   });
 
   // ------------------------------------------------------------------ summary
