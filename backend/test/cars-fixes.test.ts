@@ -509,6 +509,71 @@ async function main() {
     assert.strictEqual(ops.filter((o) => o[0] === 'notification.create').length, 2, 'each expired requester gets a bell notice');
   });
 
+  await test('shiftHandoverDigest: sends on-road/ETA/blocked sections to cars.assign Telegram chats', async () => {
+    const now = new Date();
+    const sent: string[] = [];
+    const prismaDigest: any = {
+      carAssignment: {
+        findMany: async () => [
+          {
+            releasedAt: null, driverBackAtOfficeAt: null,
+            estimatedReturnAt: new Date(now.getTime() + 60 * 60000),
+            vehicle: { vehicleNo: 'V-1' }, driver: { name: 'Kyaw' },
+            request: { docNumber: 'CAR-D1', carRequest: { endDate: new Date(now.getTime() - 30 * 60000) } },
+          },
+        ],
+      },
+      carRequest: {
+        findMany: async () => [
+          {
+            startDate: new Date(now.getTime() + 3 * 3600 * 1000),
+            vehicle: { vehicleNo: 'V-2' }, driver: { name: 'Ko Ko' },
+            request: { docNumber: 'CAR-D2' },
+          },
+        ],
+      },
+      vehicleUnavailability: {
+        findMany: async () => [
+          { vehicle: { vehicleNo: 'V-9' }, endsAt: new Date(now.getTime() + 4 * 3600 * 1000), reason: 'Service' },
+        ],
+      },
+      user: { findMany: async () => [{ telegramChatId: '999' }] },
+    };
+    const svcDigest: any = new TripRemindersService(
+      prismaDigest,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async (chatId: string, text: string) => { sent.push(`${chatId}|${text}`); return {}; }, mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => ['u-admin'] } as any,
+    );
+    await svcDigest.shiftHandoverDigest();
+    assert.strictEqual(sent.length, 1, 'exactly one digest goes to the one linked admin chat');
+    const [chat, text] = sent[0].split('|');
+    assert.strictEqual(chat, '999', 'sent to the linked Telegram chat');
+    assert.ok(text.includes('Shift handover'), 'digest header present');
+    assert.ok(text.includes('CAR-D1'), 'on-road trip listed');
+    assert.ok(text.includes('ETA'), 'driver ETA surfaced');
+    assert.ok(text.includes('CAR-D2'), 'upcoming trip listed');
+    assert.ok(text.includes('V-9') && text.includes('Service'), 'blocked vehicle listed');
+  });
+
+  await test('shiftHandoverDigest: nothing live → no message sent', async () => {
+    let called = false;
+    const prismaQuiet: any = {
+      carAssignment: { findMany: async () => [] },
+      carRequest: { findMany: async () => [] },
+      vehicleUnavailability: { findMany: async () => [] },
+      user: { findMany: async () => { called = true; return []; } },
+    };
+    const svcQuiet: any = new TripRemindersService(
+      prismaQuiet,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+    await svcQuiet.shiftHandoverDigest();
+    assert.strictEqual(called, false, 'an empty shift must not even look up admin chats');
+  });
+
   await test('listApprovedUnassigned: hides requests whose window ended >24h ago', async () => {
     const captured: any[] = [];
     const prismaQ: any = { requestDocument: { findMany: async (args: any) => { captured.push(args); return []; } } };
