@@ -335,9 +335,16 @@ export class FleetService {
     // ON_TRIP until the odometer close-out, window or not
     const startedTrips = await this.prisma.carAssignment.findMany({
       where: { releasedAt: null, trip: { status: 'STARTED' } },
-      select: { driverId: true },
+      select: { driverId: true, estimatedReturnAt: true },
     });
     const started = new Set(startedTrips.map((t) => t.driverId).filter(Boolean) as string[]);
+    // driver → live ⏰ ETA (only when the ETA is still in the future — an expired
+    // one means the driver is overdue, which the escalations already surface)
+    const etaByDriver = new Map(
+      startedTrips
+        .filter((t) => t.driverId && t.estimatedReturnAt && t.estimatedReturnAt > now)
+        .map((t) => [t.driverId as string, t.estimatedReturnAt as Date]),
+    );
     return rows.map((d) => ({
       ...d,
       status: onRoad.has(d.id) || started.has(d.id)
@@ -345,6 +352,7 @@ export class FleetService {
         : d.status === 'ON_TRIP'
           ? 'AVAILABLE'
           : d.status,
+      ...(etaByDriver.has(d.id) ? { activeEta: etaByDriver.get(d.id) } : {}),
     }));
   }
 

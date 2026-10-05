@@ -6,7 +6,7 @@ import { Modal } from '../components/Modal';
 import { CarRequestForm } from '../components/CarRequestForm';
 import { DriverAckStages } from '../components/CarPanel';
 import { toast } from '../components/Toast';
-import { fmtDate, fmtDateTime, fmtShort } from '../util/yangonTime';
+import { fmtDate, fmtDateTime, fmtShort, fmtTime } from '../util/yangonTime';
 
 interface FleetVehicle {
   id: string;
@@ -37,12 +37,14 @@ interface RequestRow {
   requester?: { fullName?: string } | null;
   department?: { name?: string } | null;
   carRequest?: {
+    endDate?: string;
     assignment?: {
       id: string;
       assignedAt: string;
       driverNotedAt?: string | null;
       driverArrivedAt?: string | null;
       driverBackAtOfficeAt?: string | null;
+      estimatedReturnAt?: string | null;
     } | null;
   } | null;
 }
@@ -62,19 +64,50 @@ interface QueueRow {
   } | null;
 }
 
+/** ⏰ chip for a live driver-reported ETA — red when it passes the planned end. */
+function EtaChip({ eta, plannedEnd }: { eta: string; plannedEnd?: string }) {
+  const late = plannedEnd ? new Date(eta) > new Date(plannedEnd) : false;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-medium border ${late ? 'bg-red-50 border-red-200 text-red-700' : 'bg-blue-50 border-blue-200 text-blue-700'}`}
+      title={`Driver reported the car back at ${fmtDateTime(eta)}`}
+    >
+      ⏰ ETA {fmtTime(eta)}{late ? ' · late' : ''}
+    </span>
+  );
+}
 
 
-type CarTab = 'availability' | 'requests';
+
+type CarTab = 'availability' | 'requests' | 'handover';
+
+/** Shift-handover summary — Administration sees what the next shift inherits. */
+interface Handover {
+  onRoad: {
+    requestId: string; docNumber: string; vehicle: string; driver?: string | null;
+    destination: string; plannedEnd: string; estimatedReturnAt?: string | null;
+    tripStarted: boolean; overdue: boolean;
+  }[];
+  delayedCount: number;
+  today: {
+    requestId: string; docNumber: string; status: string; startDate: string; endDate: string;
+    destination: string; vehicle: string; driver?: string | null;
+    notedAt?: string | null; readyAt?: string | null; backAt?: string | null; estimatedReturnAt?: string | null;
+  }[];
+  blocked: { vehicle: string; brandModel: string; startsAt: string; endsAt: string; reason: string }[];
+  generatedAt: string;
+}
 
 export default function CarRequests() {
   // active tab lives in the URL (?tab=requests) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as CarTab | null;
-  const tab: CarTab = tabParam === 'requests' ? 'requests' : 'availability';
+  const tab: CarTab = tabParam === 'requests' || tabParam === 'handover' ? tabParam : 'availability';
   const setTab = (t: CarTab) => setSearchParams(t === 'availability' ? {} : { tab: t }, { replace: false });
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [fleet, setFleet] = useState<FleetVehicle[]>([]);
+  const [handover, setHandover] = useState<Handover | null>(null);
   const [showForm, setShowForm] = useState(false); // "New car request" dialog
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -94,6 +127,8 @@ export default function CarRequests() {
       api<QueueRow[]>('/cars/requests/approved-unassigned')
         .then(setQueue)
         .catch(() => setQueue([]));
+      // shift-handover summary (next Administration shift picks up from here)
+      api<Handover>('/cars/handover').then(setHandover).catch(() => setHandover(null));
     }
   }, []);
 
@@ -137,6 +172,18 @@ export default function CarRequests() {
         >
           Requests ({rows.length})
         </button>
+        {canAssign && (
+        <button
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+            tab === 'handover'
+              ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+          }`}
+          onClick={() => setTab('handover')}
+        >
+          🔄 Handover{handover && handover.delayedCount > 0 ? ` (⏰ ${handover.delayedCount})` : ''}
+        </button>
+        )}
       </div>
 
       {/* New car request — dialog (clash warnings + errors show inside) */}
@@ -291,6 +338,9 @@ export default function CarRequests() {
                   {r.status === 'IN_PROGRESS' && r.carRequest?.assignment && (
                     <DriverAckStages a={r.carRequest.assignment} />
                   )}
+                  {r.status === 'IN_PROGRESS' && r.carRequest?.assignment?.estimatedReturnAt && (
+                    <EtaChip eta={r.carRequest.assignment.estimatedReturnAt} plannedEnd={r.carRequest?.endDate} />
+                  )}
                 </td>
                 <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>                      <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
               </tr>
@@ -298,6 +348,105 @@ export default function CarRequests() {
           </tbody>
         </table>
       </Card>
+      )}
+
+      {/* ============ Tab: Shift Handover (Administration) ============ */}
+      {tab === 'handover' && canAssign && (
+      <>
+      <p className="text-xs text-gray-400 mb-3">
+        What the next shift inherits — trips on the road (⏰ delays flagged), today's remaining trips and blocked
+        vehicles. A Telegram copy is sent to Administration at 17:00 daily.
+      </p>
+      {!handover ? (
+        <Empty label="Handover summary unavailable" />
+      ) : (
+      <>
+      <Card className="mb-5 p-5">
+        <h2 className="font-semibold text-gray-800 mb-1 text-sm uppercase tracking-wide">🚗 On the road right now ({handover.onRoad.length})</h2>
+        {handover.delayedCount > 0 && (
+          <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 mb-2 inline-block">
+            ⏰ {handover.delayedCount} delayed — driver reported a later return
+          </p>
+        )}
+        {handover.onRoad.length === 0 ? (
+          <Empty label="Nothing on the road — the pool is quiet." />
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                <th className="px-3 py-2 font-medium">Doc No.</th>
+                <th className="px-3 py-2 font-medium">Vehicle</th>
+                <th className="px-3 py-2 font-medium">Driver</th>
+                <th className="px-3 py-2 font-medium">Planned end</th>
+                <th className="px-3 py-2 font-medium">ETA</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {handover.onRoad.map((t) => {
+                const late = !!(t.estimatedReturnAt && new Date(t.estimatedReturnAt) > new Date(t.plannedEnd));
+                return (
+                <tr key={t.requestId} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 font-medium">
+                    <Link to={`/requests/${t.requestId}`} className="text-blue-600 hover:underline">{t.docNumber}</Link>
+                  </td>
+                  <td className="px-3 py-2">{t.vehicle}</td>
+                  <td className="px-3 py-2">{t.driver ?? '—'}</td>
+                  <td className={`px-3 py-2 ${t.overdue ? 'text-red-600' : 'text-gray-500'}`}>{fmtDateTime(t.plannedEnd)}</td>
+                  <td className="px-3 py-2">
+                    {t.estimatedReturnAt ? (
+                      <EtaChip eta={t.estimatedReturnAt} plannedEnd={t.plannedEnd} />
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
+                    )}
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <Card className="mb-5 p-5">
+        <h2 className="font-semibold text-gray-800 mb-2 text-sm uppercase tracking-wide">📅 Still to come today ({handover.today.length})</h2>
+        {handover.today.length === 0 ? (
+          <Empty label="No more trips today — the plan is clear." />
+        ) : (
+          <div className="space-y-1">
+            {handover.today.map((t) => (
+              <div key={t.requestId} className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-gray-500 w-32 whitespace-nowrap">{fmtDateTime(t.startDate)}</span>
+                <Link to={`/requests/${t.requestId}`} className="text-blue-600 hover:underline font-medium">{t.docNumber}</Link>
+                <Badge color={t.status === 'IN_PROGRESS' ? 'blue' : 'orange'}>{t.status}</Badge>
+                <span className="text-gray-500">{t.vehicle}{t.driver ? ` · ${t.driver}` : ''} · {t.destination}</span>
+                {t.estimatedReturnAt && <EtaChip eta={t.estimatedReturnAt} plannedEnd={t.endDate} />}
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card className="mb-5 p-5">
+        <h2 className="font-semibold text-gray-800 mb-2 text-sm uppercase tracking-wide">🛠 Blocked vehicles ({handover.blocked.length})</h2>
+        {handover.blocked.length === 0 ? (
+          <Empty label="No vehicles blocked — the whole pool is usable." />
+        ) : (
+          <div className="space-y-1">
+            {handover.blocked.map((u) => (
+              <div key={`${u.vehicle}-${u.endsAt}`} className="flex flex-wrap items-center gap-2 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded px-2 py-1">
+                <span className="font-medium">{u.vehicle}</span>
+                <span>{u.brandModel}</span>
+                <Badge color="yellow">{u.reason}</Badge>
+                <span className="text-gray-500">until {fmtDateTime(u.endsAt)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="mt-3 text-xs text-gray-400">Generated {fmtDateTime(handover.generatedAt)} — not a decision tool; assignment decisions stay with Administration.</p>
+      </Card>
+      </>
+      )}
+      </>
       )}
     </div>
   );

@@ -19,6 +19,8 @@ interface Driver {
   telegramUsername?: string | null;
   employee?: { id: string; employeeNo: string; fullName: string } | null;
   absences?: { startsAt: string; endsAt: string; reason?: string | null }[];
+  /** live ⏰ ETA from the driver's Telegram Delay report (present when future-dated) */
+  activeEta?: string | null;
 }
 
 interface Absence {
@@ -1186,6 +1188,11 @@ export default function Fleet() {
                   )}
                   {d.absences?.some((a) => new Date(a.startsAt) > new Date()) && (
                     <span className="ml-1 text-[10px] text-gray-600 bg-gray-100 border border-gray-200 rounded-full px-1.5 py-0.5" title={`From ${fmtDateTime(d.absences.find((a) => new Date(a.startsAt) > new Date())!.startsAt)}`}>leave soon</span>
+                  )}
+                  {d.activeEta && (
+                    <span className="ml-1 text-[10px] text-red-700 bg-red-50 border border-red-200 rounded-full px-1.5 py-0.5" title={`Driver-reported ETA ${fmtDateTime(d.activeEta)}`}>
+                      ⏰ {fmtTime(d.activeEta)}
+                    </span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-right whitespace-nowrap">

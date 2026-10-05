@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
+import { toast } from './Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDateTime, fmtTime } from '../util/yangonTime';
 
@@ -29,6 +30,7 @@ interface CarRequest {
     driverNotedAt?: string | null;
     driverArrivedAt?: string | null;
     driverBackAtOfficeAt?: string | null;
+    estimatedReturnAt?: string | null;
     trip?: { id: string; status: string; startMileage?: number; endMileage?: number } | null;
   } | null;
 }
@@ -95,6 +97,9 @@ export function CarPanel({
   // change vehicle/driver of a live assignment (fleet plan change)
   const [reassignForm, setReassignForm] = useState({ vehicleId: '', driverId: '' });
   const [confirmReassign, setConfirmReassign] = useState(false);
+  // Administration ⏰ ETA override (driver reported a delay by phone — record it)
+  const [etaBusy, setEtaBusy] = useState(false);
+  const [etaMinutes, setEtaMinutes] = useState('30');
   // optional manager ack (Department Head FYI — never blocks)
   const [canManagerAck, setCanManagerAck] = useState(false);
   const canAssign = hasPermission('cars.assign');
@@ -192,6 +197,80 @@ export function CarPanel({
             {car.driver && <div className="text-xs text-gray-500 mt-1">Driver: {car.driver.name}</div>}
           </div>
           {assignment && <DriverAckStages a={assignment} />}
+          {/* ⏰ driver-reported ETA (Telegram ⏰ Delay) — red when it passes the planned end */}
+          {assignment?.estimatedReturnAt && (
+            <div className="mt-1">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${
+                  new Date(assignment.estimatedReturnAt) > new Date(car.endDate)
+                    ? 'bg-red-50 border-red-200 text-red-700'
+                    : 'bg-blue-50 border-blue-200 text-blue-700'
+                }`}
+              >
+                ⏰ ETA {fmtTime(assignment.estimatedReturnAt)}
+                {new Date(assignment.estimatedReturnAt) > new Date(car.endDate) ? ' · late' : ''}
+              </span>
+            </div>
+          )}
+          {/* Administration ⏰ ETA control — record a delay the driver reported by phone */}
+          {canAssign && assignment && !assignment.driverBackAtOfficeAt && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <span>⏰ Set ETA:</span>
+              {[
+                { label: '+30 မ', m: 30 },
+                { label: '+1 န', m: 60 },
+                { label: '+3 န', m: 180 },
+              ].map((q) => (
+                <button
+                  key={q.m}
+                  className="px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                  disabled={etaBusy}
+                  onClick={async () => {
+                    setEtaBusy(true); setError('');
+                    try {
+                      await api(`/cars/requests/${requestId}/eta`, { method: 'POST', body: { minutes: q.m } });
+                      toast(`ETA set to ${q.label} from now`);
+                      load();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : 'Failed to set ETA');
+                    } finally {
+                      setEtaBusy(false);
+                    }
+                  }}
+                >
+                  {q.label}
+                </button>
+              ))}
+              <Input
+                type="number"
+                min={1}
+                max={4320}
+                value={etaMinutes}
+                onChange={(e) => setEtaMinutes(e.target.value)}
+                className="!w-20 !py-0.5 !text-xs"
+                placeholder="min"
+              />
+              <Button
+                variant="ghost"
+                disabled={etaBusy || !Number(etaMinutes)}
+                onClick={async () => {
+                  setEtaBusy(true); setError('');
+                  try {
+                    await api(`/cars/requests/${requestId}/eta`, { method: 'POST', body: { minutes: Number(etaMinutes) } });
+                    toast('ETA saved — Administration & requester notified');
+                    setEtaMinutes('30');
+                    load();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : 'Failed to set ETA');
+                  } finally {
+                    setEtaBusy(false);
+                  }
+                }}
+              >
+                Save
+              </Button>
+            </div>
+          )}
           {car.sharedTripId && car.sharedRiders && car.sharedRiders.length > 0 && (
             <div className="mt-1 text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">
               🧑‍🤝‍🧑 Shared trip with {car.sharedRiders.map((r) => `${r.docNumber} (${r.requester})`).join(', ')}
