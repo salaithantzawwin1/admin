@@ -77,6 +77,19 @@ class AbsenceDto {
   @IsOptional() @IsString() @MaxLength(300) reason?: string;
 }
 
+class VehicleUnavailabilityDto {
+  @IsString() vehicleId!: string;
+  @IsDateString() startsAt!: string;
+  @IsDateString() endsAt!: string;
+  @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+class VehicleUnavailabilityUpdateDto {
+  @IsDateString() startsAt!: string;
+  @IsDateString() endsAt!: string;
+  @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
 class AbsenceUpdateDto {
   @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) date!: string;
   @IsIn(['FULL', 'HALF']) dayType!: 'FULL' | 'HALF';
@@ -285,5 +298,56 @@ export class FleetController {
   @Delete('absences/:id')
   deleteAbsence(@Req() req, @Param('id') id: string) {
     return this.fleet.deleteAbsence(id, this.actor(req));
+  }
+
+  // ---------- vehicle unavailability windows (service / inspection / repair) ----------
+
+  /** Vehicle unavailability windows — ACTIVE by default; ?all=true includes cancelled. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('vehicles/unavailabilities')
+  vehicleUnavailabilities(@Query('all') all?: string) {
+    return this.fleet.listVehicleUnavailabilities(all === 'true');
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Post('vehicles/unavailabilities')
+  async createVehicleUnavailability(@Req() req, @Body() dto: VehicleUnavailabilityDto) {
+    try {
+      return await this.fleet.createVehicleUnavailability(
+        { vehicleId: dto.vehicleId, startsAt: dto.startsAt, endsAt: dto.endsAt, reason: dto.reason?.trim() || undefined },
+        this.actor(req),
+      );
+    } catch (e) {
+      if ((e as Error).message.includes('after start') || (e as Error).message.includes('not found') || (e as Error).message.includes('Invalid')) throw new BadRequestException((e as Error).message);
+      throw new ConflictException((e as Error).message);
+    }
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Patch('vehicles/unavailabilities/:id')
+  async updateVehicleUnavailability(@Req() req, @Param('id') id: string, @Body() dto: VehicleUnavailabilityUpdateDto) {
+    try {
+      return await this.fleet.updateVehicleUnavailability(
+        id,
+        { startsAt: dto.startsAt, endsAt: dto.endsAt, reason: dto.reason?.trim() || undefined },
+        this.actor(req),
+      );
+    } catch (e) {
+      if ((e as Error).message.includes('after start') || (e as Error).message.includes('not found') || (e as Error).message.includes('Invalid')) throw new BadRequestException((e as Error).message);
+      throw new ConflictException((e as Error).message);
+    }
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Post('vehicles/unavailabilities/:id/cancel')
+  cancelVehicleUnavailability(@Req() req, @Param('id') id: string) {
+    return this.fleet.cancelVehicleUnavailability(id, this.actor(req));
+  }
+
+  /** Delete outright (admin cleanup) — unlike cancel, the row is removed. */
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Delete('vehicles/unavailabilities/:id')
+  deleteVehicleUnavailability(@Req() req, @Param('id') id: string) {
+    return this.fleet.deleteVehicleUnavailability(id, this.actor(req));
   }
 }

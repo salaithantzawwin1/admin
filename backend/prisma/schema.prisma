@@ -907,6 +907,7 @@ model Vehicle {
   assignments   CarAssignment[]
   expenses      CarExpense[]
   carRequests   CarRequest[]
+  unavailabilities VehicleUnavailability[]
 
   @@map("vehicles")
 }
@@ -933,6 +934,24 @@ model Driver {
   absences       DriverAbsence[]
 
   @@map("drivers")
+}
+
+/// Planned non-availability of a VEHICLE (service, inspection, repair…).
+/// Assign/booking flows must skip vehicles with a window overlapping the trip;
+/// shown on the requester 7-day fleet card like a booking (but administration-made).
+model VehicleUnavailability {
+  id          String   @id @default(uuid()) @db.Uuid
+  vehicleId   String   @db.Uuid
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  startsAt    DateTime
+  endsAt      DateTime // exclusive end
+  reason      String?
+  status      String   @default("ACTIVE") // ACTIVE | CANCELLED
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  @@index([vehicleId, startsAt, endsAt])
+  @@map("vehicle_unavailabilities")
 }
 
 /// Planned non-availability of a driver (leave, training, sickness…).
@@ -1004,6 +1023,11 @@ model CarAssignment {
   driverNotedAt       DateTime? // driver acknowledged the assignment (Telegram "Noted")
   driverArrivedAt     DateTime? // driver signalled car is ready for the requester
   driverBackAtOfficeAt DateTime? // driver back at office — vehicle free again
+  /// Driver-reported Delay (Telegram ⏰): when the car is actually expected
+  /// back. ETA lives here (assignment-level, cleared on Back at Office / release)
+  /// and extends the booking's effective end = max(endDate, estimatedReturnAt)
+  /// for the fleet card, conflict pre-warning and availability checks.
+  estimatedReturnAt   DateTime?
   telegramMessageId    String?   // Telegram message carrying the ack buttons (for stage edits)
 
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)

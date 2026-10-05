@@ -35,6 +35,17 @@ interface Absence {
   createdAt: string;
 }
 
+/** A vehicle unavailability window (service / inspection / repair) — like a driver absence but for the car. */
+interface VUnavail {
+  id: string;
+  vehicleId: string;
+  vehicle?: { id: string; vehicleNo: string; brandModel: string };
+  startsAt: string;
+  endsAt: string;
+  reason?: string | null;
+  status: string;
+}
+
 /** The Company Time Table (Settings → Company Time Table). */
 interface Timetable {
   fullStart: string;
@@ -163,6 +174,16 @@ export default function Fleet() {
   const [editForm, setEditForm] = useState<{ date: string; dayType: 'FULL' | 'HALF'; period: 'MORNING' | 'EVENING'; reason: string }>({
     date: '', dayType: 'FULL', period: 'MORNING', reason: '',
   });
+  // vehicle unavailability windows (service / inspection / repair) — Administration
+  // blocks a car for a known period; respected by pickers, conflict checks and the 7-day card
+  const [vUnavails, setVUnavails] = useState<VUnavail[]>([]);
+  const [vuModal, setVuModal] = useState(false);
+  const [vuForm, setVuForm] = useState<{ vehicleId: string; startsAt: string; endsAt: string; reason: string }>({
+    vehicleId: '', startsAt: '', endsAt: '', reason: '',
+  });
+  const [editingVu, setEditingVu] = useState<VUnavail | null>(null);
+  const [cancelingVu, setCancelingVu] = useState<VUnavail | null>(null);
+  const [deletingVu, setDeletingVu] = useState<VUnavail | null>(null);
   const canManage = hasPermission('fleet.manage');
   const canSetup = hasPermission('fleet.types.manage');
 
@@ -172,13 +193,14 @@ export default function Fleet() {
   // fleet view lives in the URL (?tab=absences) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const fleetTab: 'main' | 'absences' | 'setup' = tabParam === 'absences' || tabParam === 'setup' ? tabParam : 'main';
-  const setFleetTab = (t: 'main' | 'absences' | 'setup') => setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
+  const fleetTab: 'main' | 'absences' | 'unavail' | 'setup' = tabParam === 'absences' || tabParam === 'setup' || tabParam === 'unavail' ? tabParam : 'main';
+  const setFleetTab = (t: 'main' | 'absences' | 'unavail' | 'setup') => setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
 
   const load = useCallback(() => {
     api<Vehicle[]>('/fleet/vehicles').then(setVehicles).catch((e) => setError(e.message));
     api<Driver[]>('/fleet/drivers').then(setDrivers).catch(() => {});
     api<Absence[]>('/fleet/absences').then(setAbsences).catch(() => {});
+    api<VUnavail[]>('/fleet/vehicles/unavailabilities').then(setVUnavails).catch(() => {});
     api<VehicleTypeRow[]>('/fleet/vehicle-types').then(setTypes).catch(() => {});
     api<Timetable>('/settings/timetable').then(setTimetable).catch(() => {});
     if (hasPermission('fleet.manage')) {
@@ -393,6 +415,14 @@ export default function Fleet() {
             {t === 'main' ? 'Vehicles & Drivers' : `🗓 Driver Absences (${absences.filter((a) => a.status === 'ACTIVE').length})`}
           </button>
         ))}
+        <button
+          className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+            fleetTab === 'unavail' ? 'bg-yellow-50 border-yellow-300 text-yellow-800' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+          }`}
+          onClick={() => setFleetTab('unavail')}
+        >
+          {`🛠 Vehicle Blocks (${vUnavails.filter((u) => u.status === 'ACTIVE').length})`}
+        </button>
         {canSetup && (
           <button
             className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
@@ -485,6 +515,170 @@ export default function Fleet() {
             }
           }}
           onClose={() => setCancelingAbsence(null)}
+        />
+      )}
+
+      {/* vehicle unavailability — create dialog */}
+      {vuModal && (
+        <Modal title="Block a vehicle" error={modalError} onClose={() => { setVuModal(false); setModalError(''); }}>
+          <div className="space-y-3">
+            <div className="text-xs text-gray-500">The vehicle is skipped in pickers and shown as blocked on the fleet card during the window. Existing bookings inside it are listed after saving so you can reshuffle them.</div>
+            <div>
+              <label htmlFor="fleet-vu-vehicle" className="block text-xs text-gray-500 mb-1">Vehicle *</label>
+              <Select id="fleet-vu-vehicle" value={vuForm.vehicleId} onChange={(e) => setVuForm({ ...vuForm, vehicleId: e.target.value })}>
+                <option value="">— Vehicle —</option>
+                {vehicles.map((v) => (
+                  <option key={v.id} value={v.id}>{v.vehicleNo} — {v.brandModel}</option>
+                ))}
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="fleet-vu-start" className="block text-xs text-gray-500 mb-1">From *</label>
+                <Input id="fleet-vu-start" type="datetime-local" value={vuForm.startsAt} onChange={(e) => setVuForm({ ...vuForm, startsAt: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-vu-end" className="block text-xs text-gray-500 mb-1">Until *</label>
+                <Input id="fleet-vu-end" type="datetime-local" value={vuForm.endsAt} onChange={(e) => setVuForm({ ...vuForm, endsAt: e.target.value })} />
+              </div>
+            </div>
+            <div>
+              <label htmlFor="fleet-vu-reason" className="block text-xs text-gray-500 mb-1">Reason</label>
+              <Input id="fleet-vu-reason" placeholder="Service, inspection…" value={vuForm.reason} onChange={(e) => setVuForm({ ...vuForm, reason: e.target.value })} />
+            </div>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setVuModal(false)}>Cancel</Button>
+              <Button
+                disabled={!vuForm.vehicleId || !vuForm.startsAt || !vuForm.endsAt}
+                onClick={async () => {
+                  setModalError('');
+                  try {
+                    const res = await api<{ clashes: string[] }>('/fleet/vehicles/unavailabilities', {
+                      method: 'POST',
+                      body: {
+                        vehicleId: vuForm.vehicleId,
+                        startsAt: new Date(vuForm.startsAt).toISOString(),
+                        endsAt: new Date(vuForm.endsAt).toISOString(),
+                        reason: vuForm.reason || undefined,
+                      },
+                    });
+                    toast(res.clashes?.length ? `Vehicle blocked — ⚠️ ${res.clashes.length} booking(s) fall inside this window (${res.clashes.join(', ')}) — reshuffle them.` : 'Vehicle blocked — it is skipped in pickers for that window.', res.clashes?.length ? 'info' : 'success');
+                    setVuModal(false);
+                    setVuForm({ vehicleId: '', startsAt: '', endsAt: '', reason: '' });
+                    load();
+                  } catch (e) {
+                    setModalError(e instanceof Error ? e.message : 'Failed to block the vehicle');
+                  }
+                }}
+              >
+                Block vehicle
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* vehicle unavailability — edit dialog */}
+      {editingVu && (
+        <Modal title={`Edit block — ${editingVu.vehicle?.vehicleNo ?? '?'}`} error={modalError} onClose={() => { setEditingVu(null); setModalError(''); }}>
+          <div className="space-y-3">
+            {(() => {
+              const loc = (iso: string) => {
+                const d = new Date(iso);
+                const pad = (n: number) => String(n).padStart(2, '0');
+                return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+              };
+              return (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label htmlFor="fleet-vu-start-2" className="block text-xs text-gray-500 mb-1">From *</label>
+                      <Input id="fleet-vu-start-2" type="datetime-local" value={vuForm.startsAt || loc(editingVu.startsAt)} onChange={(e) => setVuForm({ ...vuForm, startsAt: e.target.value })} />
+                    </div>
+                    <div>
+                      <label htmlFor="fleet-vu-end-2" className="block text-xs text-gray-500 mb-1">Until *</label>
+                      <Input id="fleet-vu-end-2" type="datetime-local" value={vuForm.endsAt || loc(editingVu.endsAt)} onChange={(e) => setVuForm({ ...vuForm, endsAt: e.target.value })} />
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="fleet-vu-reason-2" className="block text-xs text-gray-500 mb-1">Reason</label>
+                    <Input id="fleet-vu-reason-2" placeholder="Service, inspection…" value={vuForm.reason} onChange={(e) => setVuForm({ ...vuForm, reason: e.target.value })} />
+                  </div>
+                </div>
+              );
+            })()}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setEditingVu(null)}>Cancel</Button>
+              <Button
+                disabled={!vuForm.startsAt || !vuForm.endsAt}
+                onClick={async () => {
+                  setModalError('');
+                  try {
+                    await api(`/fleet/vehicles/unavailabilities/${editingVu.id}`, {
+                      method: 'PATCH',
+                      body: {
+                        startsAt: new Date(vuForm.startsAt).toISOString(),
+                        endsAt: new Date(vuForm.endsAt).toISOString(),
+                        reason: vuForm.reason || editingVu.reason || undefined,
+                      },
+                    });
+                    toast('Unavailability window updated.');
+                    setEditingVu(null);
+                    setVuForm({ vehicleId: '', startsAt: '', endsAt: '', reason: '' });
+                    load();
+                  } catch (e) {
+                    setModalError(e instanceof Error ? e.message : 'Failed to update the window');
+                  }
+                }}
+              >
+                Save changes
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {deletingVu && (
+        <ConfirmDialog
+          title={`Delete the block record for ${deletingVu.vehicle?.vehicleNo ?? '?'}?`}
+          description="This removes the unavailability window outright — the vehicle becomes bookable for that period."
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={async () => {
+            setError(''); setNotice('');
+            try {
+              await api(`/fleet/vehicles/unavailabilities/${deletingVu.id}`, { method: 'DELETE' });
+              toast('Unavailability record deleted.');
+              setDeletingVu(null);
+              load();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Failed to delete the window');
+              setDeletingVu(null);
+            }
+          }}
+          onClose={() => setDeletingVu(null)}
+        />
+      )}
+
+      {cancelingVu && (
+        <ConfirmDialog
+          title={`Cancel the block for ${cancelingVu.vehicle?.vehicleNo ?? '?'}?`}
+          description="The vehicle becomes available again for that period (the record is kept as CANCELLED)."
+          confirmLabel="Cancel block"
+          variant="danger"
+          onConfirm={async () => {
+            setError(''); setNotice('');
+            try {
+              await api(`/fleet/vehicles/unavailabilities/${cancelingVu.id}/cancel`, { method: 'POST' });
+              setCancelingVu(null);
+              toast('Block cancelled — vehicle is available again.');
+              load();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Cancel failed');
+              throw e; // dialog stays open, error shown inside
+            }
+          }}
+          onClose={() => setCancelingVu(null)}
         />
       )}
 
@@ -1137,6 +1331,75 @@ export default function Fleet() {
                     </button>
                   </td>
                   )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        )}
+      </Card>
+      </>
+      )}
+
+      {fleetTab === 'unavail' && (
+      <>
+      {canManage ? (
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Block a vehicle for a known period (service, inspection, repair) — the car is skipped in pickers and shown as blocked on the fleet card</div>
+          <div className="text-xs text-gray-400">Existing bookings inside the window are NOT cancelled — the confirmation lists them so you can reshuffle. Assignments into a blocked window are refused.</div>
+        </div>
+        <Button onClick={() => { setVuForm({ vehicleId: '', startsAt: '', endsAt: '', reason: '' }); setModalError(''); setVuModal(true); }}>＋ Block vehicle</Button>
+      </div>
+      ) : (
+        <Empty label="Only fleet managers can manage vehicle unavailability windows." />
+      )}
+      <Card>
+        {vUnavails.filter((u) => u.status === 'ACTIVE').length === 0 ? (
+          <Empty label="No blocked windows — all vehicles are assumed available." />
+        ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+              <th className="px-4 py-3 font-medium">Vehicle</th>
+              <th className="px-4 py-3 font-medium">From</th>
+              <th className="px-4 py-3 font-medium">Until</th>
+              <th className="px-4 py-3 font-medium">Reason</th>
+              {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {vUnavails.filter((u) => u.status === 'ACTIVE').map((u) => (
+              <tr key={u.id} className="hover:bg-gray-50">
+                <td className="px-4 py-3 font-medium">{u.vehicle?.vehicleNo ?? '?'}</td>
+                <td className="px-4 py-3 text-gray-600">{fmtDateTime(u.startsAt)}</td>
+                <td className="px-4 py-3 text-gray-600">{fmtDateTime(u.endsAt)}</td>
+                <td className="px-4 py-3 text-gray-500">{u.reason || '—'}</td>
+                {canManage && (
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <button
+                    className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1 mr-2 transition-colors"
+                    onClick={() => {
+                      setError(''); setNotice(''); setModalError('');
+                      setEditingVu(u);
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    className="text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg px-2.5 py-1 mr-2 transition-colors"
+                    onClick={() => { setError(''); setNotice(''); setCancelingVu(u); }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="text-xs font-medium text-red-700 hover:text-red-800 underline"
+                    title="Delete the record outright"
+                    onClick={() => { setError(''); setNotice(''); setDeletingVu(u); }}
+                  >
+                    Delete
+                  </button>
+                </td>
+                )}
               </tr>
             ))}
           </tbody>

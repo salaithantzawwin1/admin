@@ -811,4 +811,147 @@ export class FleetService {
       }
     }
   }
+
+  // ---------- vehicle unavailability windows (service / inspection / repair) ----------
+
+  /** All vehicle unavailability windows — ACTIVE by default; ?all=true includes cancelled. */
+  listVehicleUnavailabilities(all = false) {
+    return this.prisma.vehicleUnavailability.findMany({
+      where: all ? undefined : { status: 'ACTIVE' },
+      orderBy: { startsAt: 'asc' },
+      take: 200,
+      include: { vehicle: { select: { id: true, vehicleNo: true, brandModel: true } } },
+    });
+  }
+
+  /**
+   * Block a vehicle for a known period (service, inspection, repair). Mirrors
+   * createAbsence for drivers — Administration-only, overlapping windows for the
+   * same vehicle are rejected as a double entry. Existing bookings inside the
+   * window are NOT silently cancelled: the response lists them so the admin can
+   * reshuffle (they stay visible in the conflict pre-warning and the assign
+   * guards now block any re-assignment into this window).
+   */
+  async createVehicleUnavailability(
+    data: { vehicleId: string; startsAt: string; endsAt: string; reason?: string },
+    actor: Actor,
+  ) {
+    const vehicle = await this.prisma.vehicle.findUnique({ where: { id: data.vehicleId }, select: { id: true, vehicleNo: true } });
+    if (!vehicle) throw new NotFoundException('Vehicle not found');
+    return this.writeVehicleUnavailability({ vehicleId: data.vehicleId, startsAt: data.startsAt, endsAt: data.endsAt, reason: data.reason }, actor);
+  }
+
+  /** Update a window (reschedule or edit the reason). */
+  async updateVehicleUnavailability(
+    id: string,
+    data: { startsAt: string; endsAt: string; reason?: string },
+    actor: Actor,
+  ) {
+    const row = await this.prisma.vehicleUnavailability.findUnique({ where: { id }, include: { vehicle: { select: { id: true, vehicleNo: true } } } });
+    if (!row) throw new NotFoundException('Unavailability window not found');
+    if (row.status !== 'ACTIVE') throw new BadRequestException('Unavailability window already cancelled');
+    return this.writeVehicleUnavailability(
+      { vehicleId: row.vehicleId, startsAt: data.startsAt, endsAt: data.endsAt, reason: data.reason, existingId: id },
+      actor,
+    );
+  }
+
+  private async writeVehicleUnavailability(
+    data: { vehicleId: string; startsAt: string; endsAt: string; reason?: string; existingId?: string },
+    actor: Actor,
+  ) {
+    const startsAt = new Date(data.startsAt);
+    const endsAt = new Date(data.endsAt);
+    if (Number.isNaN(startsAt.getTime()) || Number.isNaN(endsAt.getTime())) {
+      throw new BadRequestException('Invalid start/end time');
+    }
+    if (!(endsAt > startsAt)) throw new BadRequestException('End must be after start');
+    // overlapping ACTIVE window for the same vehicle is a mistake (double entry)
+    const overlap = await this.prisma.vehicleUnavailability.findFirst({
+      where: {
+        vehicleId: data.vehicleId,
+        status: 'ACTIVE',
+        ...(data.existingId ? { id: { not: data.existingId } } : {}),
+        startsAt: { lt: endsAt },
+        endsAt: { gt: startsAt },
+      },
+      select: { startsAt: true, endsAt: true },
+    });
+    if (overlap) {
+      throw new ConflictException(
+        `Vehicle already has an unavailability window ${overlap.startsAt.toISOString()} → ${overlap.endsAt.toISOString()}`,
+      );
+    }
+    const row = data.existingId
+      ? await this.prisma.vehicleUnavailability.update({
+          where: { id: data.existingId },
+          data: { startsAt, endsAt, reason: data.reason },
+        })
+      : await this.prisma.vehicleUnavailability.create({
+          data: { vehicleId: data.vehicleId, startsAt, endsAt, reason: data.reason, createdById: actor.userId },
+        });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: data.existingId ? 'VEHICLE_UNAVAILABILITY_UPDATED' : 'VEHICLE_UNAVAILABILITY_CREATED',
+      module: 'FLEET', recordId: row.id,
+      newValue: { vehicleId: data.vehicleId, startsAt: row.startsAt, endsAt: row.endsAt, reason: row.reason },
+    });
+    try {
+      this.events.publish('vehicle.updated');
+    } catch {
+      /* SSE push is best-effort */
+    }
+    // transparency: surface the live bookings the window collides with so the
+    // admin can reshuffle them — the windows themselves stay untouched
+    const clashes = await this.prisma.carRequest.findMany({
+      where: {
+        vehicleId: data.vehicleId,
+        request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never[] } },
+        startDate: { lt: endsAt },
+        endDate: { gt: startsAt },
+      },
+      select: { request: { select: { docNumber: true } } },
+      orderBy: { startDate: 'asc' },
+      take: 10,
+    });
+    return { ...row, clashes: clashes.map((c) => c.request?.docNumber).filter(Boolean) };
+  }
+
+  /** Cancel a window — the vehicle becomes bookable for that period again. */
+  async cancelVehicleUnavailability(id: string, actor: Actor) {
+    const row = await this.prisma.vehicleUnavailability.findUnique({ where: { id }, include: { vehicle: { select: { vehicleNo: true } } } });
+    if (!row) throw new NotFoundException('Unavailability window not found');
+    if (row.status !== 'ACTIVE') throw new BadRequestException('Unavailability window already cancelled');
+    const updated = await this.prisma.vehicleUnavailability.update({ where: { id }, data: { status: 'CANCELLED' } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_UNAVAILABILITY_CANCELLED', module: 'FLEET', recordId: id,
+      oldValue: { vehicle: row.vehicle?.vehicleNo, startsAt: row.startsAt, endsAt: row.endsAt },
+      newValue: { status: updated.status },
+    });
+    try {
+      this.events.publish('vehicle.updated');
+    } catch {
+      /* SSE push is best-effort */
+    }
+    return updated;
+  }
+
+  /** Delete a window outright (admin cleanup). */
+  async deleteVehicleUnavailability(id: string, actor: Actor) {
+    const row = await this.prisma.vehicleUnavailability.findUnique({ where: { id }, include: { vehicle: { select: { vehicleNo: true } } } });
+    if (!row) throw new NotFoundException('Unavailability window not found');
+    await this.prisma.vehicleUnavailability.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_UNAVAILABILITY_DELETED', module: 'FLEET', recordId: id,
+      oldValue: { vehicle: row.vehicle?.vehicleNo, startsAt: row.startsAt, endsAt: row.endsAt, reason: row.reason },
+    });
+    try {
+      this.events.publish('vehicle.updated');
+    } catch {
+      /* SSE push is best-effort */
+    }
+    return { ok: true };
+  }
 }

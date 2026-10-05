@@ -48,6 +48,12 @@ export class TelegramCarActionsService {
       handleText: (text, chatId) => this.handleCarText(text, chatId),
       hasPending: (chatId) => this.pendingCarRequests.has(chatId),
     };
+    // ⏰ Delay flow — the driver-reported ETA is EXECUTED BY CarsService (the same
+    // one the web panel uses: guards, notifications, audit — nothing bypassed)
+    this.telegram.etaRef = {
+      reportEta: (assignmentId, minutesOrText, chatId, callbackId) =>
+        this.reportEta(assignmentId, minutesOrText, chatId, callbackId),
+    };
     this.workflow.onSubmittedTelegram = (requestId) => this.offerApprovalButtons(requestId);
   }
 
@@ -672,11 +678,18 @@ export class TelegramCarActionsService {
       select: { vehicleId: true },
     });
     const busyIds = busy.map((b) => b.vehicleId).filter(Boolean) as string[];
+    // Administration-blocked windows (service / inspection / repair) overlapping
+    // the trip window exclude the car exactly like a live booking would.
+    const blocked = await this.prisma.vehicleUnavailability.findMany({
+      where: { status: 'ACTIVE', startsAt: { lt: cr.endDate }, endsAt: { gt: cr.startDate } },
+      select: { vehicleId: true },
+    });
+    const exclude = [...new Set([...busyIds, ...blocked.map((b) => b.vehicleId)])];
     const vehicles = await this.prisma.vehicle.findMany({
       // DB status IN_USE also covers cars committed to a FUTURE trip — those are
       // physically free now; the busyIds window-overlap filter is the real gate.
       // UNDER_MAINTENANCE / OUT_OF_SERVICE stay excluded.
-      where: { status: { in: ['AVAILABLE', 'IN_USE'] }, ...(busyIds.length ? { id: { notIn: busyIds } } : {}) },
+      where: { status: { in: ['AVAILABLE', 'IN_USE'] }, ...(exclude.length ? { id: { notIn: exclude } } : {}) },
       take: 8,
       select: { id: true, vehicleNo: true, brandModel: true },
     });
@@ -1637,6 +1650,90 @@ export class TelegramCarActionsService {
   /** Myanmar digits (၇ → 7 …) → ASCII digits. */
   private static toAsciiDigits(text: string): string {
     return text.replace(/[\u1040-\u1049]/g, (ch) => String(ch.charCodeAt(0) - 0x1040));
+  }
+
+  /**
+   * ⏰ Delay report from the driver's Telegram card — quick options arrive as
+   * relative minutes (+30/+60/+180), the custom entry as a typed clock time
+   * ("15:30" / "3:30pm"; bare "18" means the next 18:00, Yangon office time).
+   * Delegates to CarsService.setEstimatedReturn (guards, Administration +
+   * requester notifications, audit) and answers the callback in place.
+   */
+  private async reportEta(
+    assignmentId: string,
+    minutesOrText: number | string,
+    chatId: string,
+    callbackId?: string,
+  ): Promise<void> {
+    const done = (toast: string) =>
+      callbackId ? this.telegram.answer(callbackId, toast).catch(() => undefined) : Promise.resolve();
+    const assignment = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { id: true, requestId: true, driverId: true, releasedAt: true, driver: { select: { name: true, telegramChatId: true } }, request: { select: { docNumber: true } } },
+    });
+    if (!assignment || assignment.releasedAt !== null) {
+      await done('Assignment not found');
+      if (!callbackId) await this.telegram.sendRaw(chatId, '❌ Assignment not found.');
+      return;
+    }
+    // security: only the bound driver's chat may report the ETA (same rule as
+    // the Noted/Ready/Back buttons — a stolen callback id can't move someone's car)
+    if (!assignment.driver || assignment.driver.telegramChatId !== chatId) {
+      await done('Not authorized');
+      return;
+    }
+    let minutes: number | undefined;
+    let etaIso: string | undefined;
+    if (typeof minutesOrText === 'number') {
+      minutes = minutesOrText;
+    } else {
+      const parsed = TelegramCarActionsService.parseEtaClockStatic(minutesOrText);
+      if (!parsed) {
+        await this.telegram.sendRaw(chatId, '❌ အချိန်မထောက်ခံပါ — 15:30 သို့မဟုတ် 3:30pm လိုမျိုး ရေးပါ။');
+        return;
+      }
+      etaIso = parsed;
+    }
+    try {
+      const res = await this.cars.setEstimatedReturn(
+        assignment.requestId,
+        { ...(minutes != null ? { minutes } : {}), ...(etaIso ? { eta: etaIso } : {}) },
+        undefined, // driver voice — no AMS actor; the audit stamps the driver name
+      );
+      const eta = res?.estimatedReturnAt ? yangonShort(new Date(res.estimatedReturnAt)) : '';
+      await done(`⏰ ETA saved: ${eta}`);
+      await this.telegram.sendRaw(
+        chatId,
+        `⏰ ETA မွတ်တမ်းတင်ပြီး — ${escapeHtml(assignment.request.docNumber)}\n🕒 ခန့်မှန်း ပြန်ရောက်ချိန်: ${escapeHtml(eta)}\n· Administration နှင့် တောင်းခံသူ အား အသိပေးလိုက်ပါပြီ`,
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      await done(msg.slice(0, 190));
+      if (!callbackId) await this.telegram.sendRaw(chatId, `❌ ${escapeHtml(msg)}`);
+    }
+  }
+
+  /** "15:30" / "3:30pm" / "15" → ISO (Yangon +06:30). A bare hour means the NEXT
+   *  occurrence of that clock time — "18" at 17:00 is today 18:00, at 19:00 tomorrow. */
+  private static parseEtaClockStatic(raw: string): string | null {
+    const line = TelegramCarActionsService.toAsciiDigits(raw.trim());
+    const m = line.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i);
+    if (!m) return null;
+    const [, hRaw, mRaw, half] = m;
+    if (!mRaw && !half) return null; // needs minutes or am/pm — a lone "3" is not a clock time
+    let h = Number(hRaw);
+    const mi = mRaw ? Number(mRaw) : 0;
+    if (half?.toLowerCase() === 'pm' && h < 12) h += 12;
+    if (half?.toLowerCase() === 'am' && h === 12) h = 0;
+    if (h > 23 || mi > 59) return null;
+    const nowY = yangonNow();
+    // build today's Yangon wall-clock date string, then attach the typed time
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    const ymd = `${nowY.getUTCFullYear()}-${p2(nowY.getUTCMonth() + 1)}-${p2(nowY.getUTCDate())}`;
+    const todayAt = new Date(`${ymd}T${p2(h)}:${p2(mi)}:00+06:30`);
+    // a bare "18" typed at 19:00 means TOMORROW's 18:00 — the ETA must reach forward
+    const dt = todayAt <= nowY ? new Date(todayAt.getTime() + 24 * 3600 * 1000) : todayAt;
+    return dt.toISOString();
   }
 
   /** "Open in AMS" button row when a web URL is configured. */

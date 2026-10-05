@@ -8,6 +8,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { TelegramService } from '../telegram/telegram.service';
+import { TimetableService } from '../settings/timetable.service';
+import { EventsService } from '../events/events.service';
 import { yangonShort } from '../util/yangon-time';
 import { Actor } from '../org/org.service';
 
@@ -20,6 +22,8 @@ export class CarsService {
     private notifications: NotificationsService,
     private audit: AuditService,
     private telegram: TelegramService,
+    private timetable: TimetableService,
+    private events: EventsService,
   ) {}
 
   /**
@@ -152,6 +156,27 @@ export class CarsService {
   }
 
   /**
+   * Effective end of a booking window = the later of the planned end and the
+   * driver-reported ETA (⏰ Delay). A driver running past the planned window
+   * keeps the car occupied — the fleet card and every conflict check use this.
+   */
+  private effectiveEnd(plannedEnd: Date, eta?: Date | null): Date {
+    return eta && eta > plannedEnd ? eta : plannedEnd;
+  }
+
+  /** Administration-configured hand-back buffer (Settings → Fleet), default 30 min.
+   *  Falls back silently when the settings module is absent (unit-test mocks). */
+  private async bufferMinutes(): Promise<number> {
+    try {
+      const b = await this.timetable.fleetBufferMinutes();
+      if (Number.isFinite(b) && b >= 0 && b <= 240) return b;
+    } catch {
+      /* mock-prisma tests construct the service without TimetableService */
+    }
+    return 30;
+  }
+
+  /**
    * Fleet overview for requesters (information only — assignment decisions
    * stay with Administration): each vehicle's current status plus its booked
    * windows over the next 7 days from live (PENDING/APPROVED/IN_PROGRESS)
@@ -170,7 +195,7 @@ export class CarsService {
       select: { requestId: true },
     });
 
-    const [vehicles, bookings] = await Promise.all([
+    const [vehicles, bookings, blocks] = await Promise.all([
       this.prisma.vehicle.findMany({
         orderBy: { vehicleNo: 'asc' },
         select: { id: true, vehicleNo: true, brandModel: true, status: true },
@@ -189,8 +214,15 @@ export class CarsService {
           startDate: true,
           endDate: true,
           request: { select: { docNumber: true } },
+          assignment: { select: { estimatedReturnAt: true } },
         },
         orderBy: { startDate: 'asc' },
+      }),
+      // Administration-blocked windows (service / inspection / repair) — shown
+      // on the 7-day card like a booking and treated as a hard status below.
+      this.prisma.vehicleUnavailability.findMany({
+        where: { status: 'ACTIVE', startsAt: { lt: in7days }, endsAt: { gt: now } },
+        select: { vehicleId: true, startsAt: true, endsAt: true, reason: true },
       }),
     ]);
 
@@ -209,30 +241,52 @@ export class CarsService {
     // completeTrip) — the same exemption the conflict checks apply.
     const startedTrips = await this.prisma.carAssignment.findMany({
       where: { releasedAt: null, trip: { status: 'STARTED' } },
-      select: { vehicleId: true, request: { select: { carRequest: { select: { endDate: true } } } } },
+      select: { vehicleId: true, estimatedReturnAt: true, request: { select: { carRequest: { select: { endDate: true } } } } },
     });
+    // running-late map carries the EFFECTIVE end (planned end vs driver ETA —
+    // whichever is later) so a delayed STARTED trip keeps covering "now" that long
     const runningLate = new Map(
       startedTrips
-        .filter((t) => t.request.carRequest && new Date(t.request.carRequest.endDate) < now)
-        .map((t) => [t.vehicleId, new Date(t.request.carRequest!.endDate)] as const),
+        .filter((t) => t.request.carRequest)
+        .map((t) => [t.vehicleId, this.effectiveEnd(new Date(t.request.carRequest!.endDate), t.estimatedReturnAt)] as const),
     );
+    const buf = await this.bufferMinutes();
     return vehicles.map((v) => {
       const mine = bookings.filter((b) => b.vehicleId === v.id);
       const parked = v.status === 'UNDER_MAINTENANCE' || v.status === 'OUT_OF_SERVICE';
       const lateEnd = runningLate.get(v.id);
       const coversNow = mine.some((b) => b.startDate <= now && b.endDate >= now) || (lateEnd !== undefined && lateEnd >= now);
+      // Administration-blocked window (service/inspection) covering now → the car
+      // is physically not drivable regardless of any booking around it.
+      const blockedNow = blocks.some((u) => u.vehicleId === v.id && u.startsAt <= now && u.endsAt > now);
       // BOOKED is a presentational value (not in the Prisma enum) — type it explicitly
-      const status: VehicleStatus | 'BOOKED' = parked
-        ? v.status
-        : coversNow
-          ? 'IN_USE'
-          : mine.length > 0 || lateEnd !== undefined || v.status === 'IN_USE'
-            ? 'BOOKED'
-            : 'AVAILABLE';
+      const status: VehicleStatus | 'BOOKED' = blockedNow
+        ? 'UNDER_MAINTENANCE'
+        : parked
+          ? v.status
+          : coversNow
+            ? 'IN_USE'
+            : mine.length > 0 || lateEnd !== undefined || v.status === 'IN_USE'
+              ? 'BOOKED'
+              : 'AVAILABLE';
       return {
         ...v,
         status,
-        bookings: mine.map((b) => ({ docNumber: b.request?.docNumber, startDate: b.startDate, endDate: b.endDate })),
+        bookings: [
+          // effective end (planned end vs driver-reported ETA) + the hand-back
+          // buffer produce the "likely free from ~HH:mm" hint requesters see
+          ...mine.map((b) => ({
+            docNumber: b.request?.docNumber,
+            startDate: b.startDate,
+            endDate: b.endDate,
+            estimatedReturnAt: b.assignment?.estimatedReturnAt ?? null,
+            likelyFreeFrom: new Date(this.effectiveEnd(b.endDate, b.assignment?.estimatedReturnAt).getTime() + buf * 60_000),
+          })),
+          // blocked windows surface on the same card (reason = the booking label)
+          ...blocks
+            .filter((u) => u.vehicleId === v.id)
+            .map((u) => ({ docNumber: `🛠 ${u.reason || 'Unavailable'}`, startDate: u.startsAt, endDate: u.endsAt })),
+        ].sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime()),
       };
     });
   }
@@ -261,12 +315,21 @@ export class CarsService {
         startDate: true,
         endDate: true,
         destination: true,
-        // Back-at-Office trim: a driver who signalled "Back at Office" freed the
-        // vehicle at that moment — the alert must not cover time after it.
-        assignment: { select: { driverBackAtOfficeAt: true } },
+        // Back-at-Office trim + driver-ETA extension: a driver who signalled
+        // "Back at Office" freed the vehicle at that moment — the alert must not
+        // cover time after it; a ⏰ Delay report extends the window instead.
+        assignment: { select: { driverBackAtOfficeAt: true, estimatedReturnAt: true } },
         request: { select: { docNumber: true } },
       },
       orderBy: { startDate: 'asc' },
+      take: 10,
+    });
+    // Administration-blocked windows (service/inspection) warn too — a new
+    // request landing inside them cannot be assigned until reshuffled.
+    const blocked = await this.prisma.vehicleUnavailability.findMany({
+      where: { status: 'ACTIVE', startsAt: { lt: end }, endsAt: { gt: start } },
+      select: { startsAt: true, endsAt: true, reason: true, vehicle: { select: { vehicleNo: true } } },
+      orderBy: { startsAt: 'asc' },
       take: 10,
     });
     // SQL already checked the PLANNED windows overlap; trim each clash to the
@@ -274,16 +337,29 @@ export class CarsService {
     // reach the new window at all — same "Back at Office" exemption the
     // availability/assign paths already apply, now also for the pre-warning.
     const trimmed = conflicts
-      .map((c) => ({
-        ...c,
-        // effective end = the earlier of planned end and the driver's return
-        ...(c.assignment?.driverBackAtOfficeAt && c.assignment.driverBackAtOfficeAt < c.endDate
-          ? { endDate: c.assignment.driverBackAtOfficeAt }
-          : {}),
-      }))
+      .map((c) => {
+        const planned = c.endDate;
+        const back = c.assignment?.driverBackAtOfficeAt;
+        // no Back at Office yet → the driver's ⏰ ETA (when later) holds the car
+        const late = !back ? this.effectiveEnd(planned, c.assignment?.estimatedReturnAt) : planned;
+        // effective end = the earlier of the ETA-extended end and the driver's return
+        return {
+          ...c,
+          ...(back && back < late ? { endDate: back } : late > planned ? { endDate: late } : {}),
+        };
+      })
       .filter((c) => c.endDate > start)
       .map(({ assignment: _assignment, ...rest }) => rest);
-    return { conflicts: trimmed };
+    // blocked windows are surfaced as their own list so the form can name the
+    // car + reason ("🛠 Service") instead of pretending it is a booking
+    const blockedWindows = blocked.map((u) => ({
+      startDate: u.startsAt,
+      endDate: u.endsAt,
+      vehicleNo: u.vehicle?.vehicleNo ?? '—',
+      reason: u.reason || 'Unavailable',
+    }));
+    // the form's "likely free from ~" hint uses the same buffer as the fleet card
+    return { conflicts: trimmed, blockedWindows, bufferMinutes: await this.bufferMinutes() };
   }
 
   /**
@@ -306,6 +382,27 @@ export class CarsService {
       where: { vehicleId, releasedAt: null, driverBackAtOfficeAt: { not: null } },
       select: { requestId: true },
     });
+    // Administration-blocked window (service/inspection/repair) overlapping the
+    // requested window → the vehicle is NOT available for it. No exemption — a
+    // blocked car is blocked for everyone (the admin must cancel the window).
+    const block = await this.prisma.vehicleUnavailability.findFirst({
+      where: { vehicleId, status: 'ACTIVE', startsAt: { lt: end }, endsAt: { gt: start } },
+      select: { startsAt: true, endsAt: true, reason: true },
+    });
+    if (block) {
+      return {
+        available: false,
+        conflicts: [
+          {
+            requestId: 'BLOCKED',
+            sharedTripId: null,
+            startDate: block.startsAt,
+            endDate: block.endsAt,
+            request: { docNumber: `🛠 ${block.reason || 'Vehicle unavailable'} — cancel the unavailability window first` },
+          },
+        ],
+      };
+    }
     const conflicts = await this.prisma.carRequest.findMany({
       where: {
         vehicleId,
@@ -320,23 +417,29 @@ export class CarsService {
         // plans the car) — CarRequest.status is only a mirror
         request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as WorkflowStatus[] } },
         startDate: { lt: end },
-        endDate: { gt: start },
+        // a ⏰ Delay report stretches a booking past its planned end, so the SQL net
+        // is widened: planned end OR the driver-reported ETA may still reach `start`
+        OR: [{ endDate: { gt: start } }, { assignment: { estimatedReturnAt: { gt: start } } }],
       },
-      select: { requestId: true, sharedTripId: true, startDate: true, endDate: true, request: { select: { docNumber: true } } },
+      select: { requestId: true, sharedTripId: true, startDate: true, endDate: true, request: { select: { docNumber: true } }, assignment: { select: { estimatedReturnAt: true } } },
     });
+    // effective end (planned end vs ETA — whichever is later) decides the clash
+    const stretched = conflicts
+      .filter((c) => this.effectiveEnd(c.endDate, c.assignment?.estimatedReturnAt) > start)
+      .map(({ assignment: _assignment, ...rest }) => rest);
     // a shared-trip member only blocks rides OUTSIDE its own group — when the
     // caller belongs to a group, same-group bookings are not conflicts
     if (excludeRequestId) {
       const own = await this.prisma.carRequest.findUnique({ where: { requestId: excludeRequestId }, select: { sharedTripId: true } });
       if (own?.sharedTripId) {
-        const inGroup = conflicts.filter((c) => c.sharedTripId === own.sharedTripId);
+        const inGroup = stretched.filter((c) => c.sharedTripId === own.sharedTripId);
         if (inGroup.length > 0) {
-          const remaining = conflicts.filter((c) => c.sharedTripId !== own.sharedTripId);
+          const remaining = stretched.filter((c) => c.sharedTripId !== own.sharedTripId);
           return { available: remaining.length === 0, conflicts: remaining };
         }
       }
     }
-    return { available: conflicts.length === 0, conflicts };
+    return { available: stretched.length === 0, conflicts: stretched };
   }
 
   /** Administration assigns vehicle (+ optional driver) to an APPROVED car request.
@@ -368,6 +471,19 @@ export class CarsService {
     if (!vehicle) throw new NotFoundException('Vehicle not found');
     if (vehicle.status === 'OUT_OF_SERVICE' || vehicle.status === 'UNDER_MAINTENANCE') {
       throw new ConflictException(`Vehicle ${vehicle.vehicleNo} is ${vehicle.status}`);
+    }
+
+    // planned-unavailability guard: a vehicle blocked by Administration (service /
+    // inspection / repair) for the trip window cannot be assigned — no exemption
+    // (even shared trips must take another car; cancel the window first instead)
+    const blocked = await this.prisma.vehicleUnavailability.findFirst({
+      where: { vehicleId: data.vehicleId, status: 'ACTIVE', startsAt: { lt: request.carRequest.endDate }, endsAt: { gt: request.carRequest.startDate } },
+      select: { startsAt: true, endsAt: true, reason: true },
+    });
+    if (blocked) {
+      throw new ConflictException(
+        `Vehicle ${vehicle.vehicleNo} is unavailable ${blocked.startsAt.toISOString()} → ${blocked.endsAt.toISOString()}${blocked.reason ? ` (${blocked.reason})` : ''} — overlaps this trip`,
+      );
     }
 
     // planned-absence guard: a driver with ACTIVE absence covering the trip window cannot be assigned
@@ -638,6 +754,16 @@ export class CarsService {
     if (vehicle.status === 'OUT_OF_SERVICE' || vehicle.status === 'UNDER_MAINTENANCE') {
       throw new ConflictException(`Vehicle ${vehicle.vehicleNo} is ${vehicle.status}`);
     }
+    // planned-unavailability guard for the replacement vehicle (same rule as assign)
+    const blockedRe = await this.prisma.vehicleUnavailability.findFirst({
+      where: { vehicleId: data.vehicleId, status: 'ACTIVE', startsAt: { lt: request.carRequest.endDate }, endsAt: { gt: request.carRequest.startDate } },
+      select: { startsAt: true, endsAt: true, reason: true },
+    });
+    if (blockedRe) {
+      throw new ConflictException(
+        `Vehicle ${vehicle.vehicleNo} is unavailable ${blockedRe.startsAt.toISOString()} → ${blockedRe.endsAt.toISOString()}${blockedRe.reason ? ` (${blockedRe.reason})` : ''} — overlaps this trip`,
+      );
+    }
     // planned-absence guard for the replacement driver (same rule as assign)
     if (data.driverId && data.driverId !== assignment.driverId) {
       const start = request.carRequest.startDate;
@@ -782,7 +908,7 @@ export class CarsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.carAssignment.update({ where: { id: assignment.id }, data: { releasedAt: new Date() } });
+      await tx.carAssignment.update({ where: { id: assignment.id }, data: { releasedAt: new Date(), estimatedReturnAt: null } });
       await tx.carRequest.update({ where: { requestId }, data: { vehicleId: null, driverId: null, sharedTripId: null, status: 'APPROVED' } });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'APPROVED' } });
       await tx.vehicle.update({ where: { id: assignment.vehicleId }, data: { status: 'AVAILABLE' } });
@@ -839,7 +965,7 @@ export class CarsService {
       }
       // release the assignment row (if any) so its booking window no longer blocks others
       if (request.carRequest?.assignment && request.carRequest.assignment.releasedAt === null) {
-        await tx.carAssignment.update({ where: { id: request.carRequest.assignment.id }, data: { releasedAt: new Date() } });
+        await tx.carAssignment.update({ where: { id: request.carRequest.assignment.id }, data: { releasedAt: new Date(), estimatedReturnAt: null } });
       }
       // clear vehicle links + mirror the new status on the CarRequest row so
       // availability checks / fleet overview immediately stop counting this booking
@@ -931,6 +1057,91 @@ export class CarsService {
       await this.telegram.notifyDriverOfTimeChange(requestId, request.docNumber, request.carRequest.driverId, start, end, data.comment).catch(() => undefined);
     }
     return { success: true };
+  }
+
+  /**
+   * Driver-reported ETA (Telegram ⏰ Delay quick options / custom time).
+   * Stores the expected return on the ASSIGNMENT (not the request): the booking
+   * window stays the plan, the ETA is the operational truth layered on top.
+   * effective end = max(planned end, ETA) feeds the fleet card, the conflict
+   * pre-warning and every availability check until Back at Office clears it.
+   */
+  async setEstimatedReturn(requestId: string, data: { minutes?: number; eta?: string }, actor?: Actor) {
+    const assignment = await this.prisma.carAssignment.findUnique({
+      where: { requestId },
+      include: {
+        vehicle: { select: { vehicleNo: true, brandModel: true } },
+        driver: { select: { name: true } },
+        request: { select: { docNumber: true, requesterId: true, status: true } },
+        carRequest: { select: { endDate: true } },
+      },
+    });
+    if (!assignment || assignment.releasedAt !== null) throw new NotFoundException('No active assignment for this request');
+
+    // quick options arrive as relative minutes (+30 / +60 / custom); the Telegram
+    // custom option and the web panel arrive as an absolute ISO timestamp
+    let eta: Date;
+    if (data.eta) {
+      eta = new Date(data.eta);
+    } else if (Number.isFinite(data.minutes) && (data.minutes as number) > 0) {
+      eta = new Date(Date.now() + (data.minutes as number) * 60_000);
+    } else {
+      throw new BadRequestException('Provide minutes (> 0) or an eta timestamp');
+    }
+    if (Number.isNaN(eta.getTime())) throw new BadRequestException('Invalid eta timestamp');
+    const planned = assignment.carRequest ? new Date(assignment.carRequest.endDate) : new Date();
+    const now = new Date();
+    const cap = new Date(now.getTime() + 72 * 3600 * 1000);
+    // ETA must land after "now" and inside sane bounds: no wiping a delay back
+    // to the past (a real extension always reaches forward), capped at +72h
+    if (eta <= now) throw new BadRequestException('ETA must be in the future');
+    if (eta > cap) throw new BadRequestException('ETA cannot be more than 72 hours ahead');
+
+    const updated = await this.prisma.carAssignment.update({
+      where: { requestId },
+      data: { estimatedReturnAt: eta },
+    });
+    await this.audit.log({
+      ...(actor ? { userId: actor.userId, username: actor.username } : {}),
+      action: 'CAR_ETA_SET',
+      module: 'CARS',
+      recordId: requestId,
+      username: actor?.username ?? assignment.driver?.name ?? 'driver-telegram',
+      oldValue: { plannedEnd: planned, previousEta: assignment.estimatedReturnAt ?? null },
+      newValue: { estimatedReturnAt: eta },
+    });
+
+    // who learns about the delay: Administration (cars.assign) + the requester —
+    // the dispatcher is watching the trip and the rider is waiting for the car
+    const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+    const recipients = adminIds.includes(assignment.request.requesterId) ? adminIds : [...adminIds, assignment.request.requesterId];
+    const when = yangonShort(eta);
+    const plannedTxt = yangonShort(planned);
+    const late = eta > planned;
+    const veh = assignment.vehicle ? `${assignment.vehicle.brandModel} · ${assignment.vehicle.vehicleNo}` : 'vehicle';
+    const title = `⏰ Delay reported — ${assignment.request.docNumber}`;
+    const body = late
+      ? `Driver reports the car (${veh}) will be back around ${when} — past the planned ${plannedTxt}. The car stays blocked until then (or Back at Office).`
+      : `Driver reports the car (${veh}) will be back around ${when} (planned: ${plannedTxt}).`;
+    await this.notifications.notifyMany(recipients, {
+      type: 'CAR_ETA_SET' as never,
+      title,
+      body,
+      link: `/requests/${assignment.requestId}`,
+      requestId: assignment.requestId,
+    });
+    // mirror into the linked Telegram chats (Administration + requester)
+    for (const userId of recipients) {
+      await this.telegram.mirrorToUser(userId, title, body, `/requests/${assignment.requestId}`).catch(() => undefined);
+    }
+    // the driver's own trip card shows the ETA line (editStageMessage repaints it)
+    await this.telegram.sendAssignment(assignment.id, true).catch(() => undefined);
+    try {
+      this.events.publish('assignment.updated', { requestId: assignment.requestId });
+    } catch {
+      /* SSE push is best-effort */
+    }
+    return { success: true, estimatedReturnAt: updated.estimatedReturnAt };
   }
 
   /**
