@@ -605,12 +605,18 @@ export class CarsService {
       return a;
     });
 
+    // the requester's bell/Telegram copy names the driver when one is assigned
+    // (same wording as the driver's "Car is ready" message); no driver yet →
+    // vehicle line only
+    const driver = data.driverId
+      ? await this.prisma.driver.findUnique({ where: { id: data.driverId }, select: { name: true } })
+      : null;
     await this.notifications.notify({
       userId: request.requesterId,
       type: 'CAR_ASSIGNED',
       title: `Vehicle assigned to ${request.docNumber}`,
       // shared-trip riders are told up front: one car, other riders, same window
-      body: `${vehicle.vehicleNo} (${vehicle.brandModel}) has been assigned for your trip.${share ? ' Note: this is a SHARED trip — you ride the same car as another request in this window.' : ''}`,
+      body: `${vehicle.vehicleNo} (${vehicle.brandModel}) has been assigned for your trip${driver?.name ? ` — Driver ${driver.name}` : ''}.${share ? ' Note: this is a SHARED trip — you ride the same car as another request in this window.' : ''}`,
       link: `/requests/${requestId}`, requestId,
     });
 
@@ -861,21 +867,25 @@ export class CarsService {
     const prevVehicleLabel = `${carReq.vehicle?.vehicleNo ?? ''}${carReq.vehicle?.brandModel ? ` (${carReq.vehicle.brandModel})` : ''}`.trim() || 'previous vehicle';
     const vehicleChanged = data.vehicleId !== assignment.vehicleId;
     const driverChanged = (data.driverId ?? null) !== (assignment.driverId ?? null);
+    // name the new driver in the requester's notification; the same row also
+    // feeds the AMS-account bell mirror below (one lookup instead of two)
+    const newDriver = (driverChanged && data.driverId)
+      ? await this.prisma.driver.findUnique({ where: { id: data.driverId }, select: { name: true, employee: { select: { user: { select: { id: true } } } } } })
+      : null;
     await this.notifications.notify({
       userId: request.requesterId,
       type: 'CAR_ASSIGNED',
       title: `Assignment changed for ${request.docNumber}`,
       body: [
         vehicleChanged ? `Vehicle: ${prevVehicleLabel} → ${vehicle.vehicleNo} (${vehicle.brandModel})` : null,
-        driverChanged ? 'Driver has been updated.' : null,
+        driverChanged ? (newDriver?.name ? `Driver: ${newDriver.name}.` : 'Driver has been updated.') : null,
         `Schedule: ${yangonShort(carReq.startDate)} → ${yangonShort(carReq.endDate)} (unchanged unless you were told otherwise).`,
       ].filter(Boolean).join(' · '),
       link: `/requests/${requestId}`, requestId,
     });
     // NEW driver holds an AMS account in some setups — mirror a bell notification too
     if (driverChanged && data.driverId) {
-      const driverUser = await this.prisma.driver.findUnique({ where: { id: data.driverId }, select: { employee: { select: { user: { select: { id: true } } } } } });
-      const newDriverUserId = driverUser?.employee?.user?.id;
+      const newDriverUserId = newDriver?.employee?.user?.id;
       if (newDriverUserId) {
         await this.notifications.notify({
           userId: newDriverUserId,

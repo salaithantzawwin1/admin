@@ -209,6 +209,71 @@ async function main() {
     assert.strictEqual(msg, 'Shared trips need a driver — pick the driver of the trip you are joining');
   });
 
+  await test('assign(): requester notification includes the driver name', async () => {
+    const captured: any[] = [];
+    const notifications = { notify: async (p: any) => { captured.push(p); } };
+    const audit = { log: async () => {} };
+    const telegram = { sendAssignment: async () => {}, repaintDriverCards: async () => {} };
+    const tx = {
+      carAssignment: { upsert: async () => ({ id: 'a1' }), findMany: async () => [] },
+      carRequest: { update: async () => {}, findMany: async () => [] },
+      requestDocument: { update: async () => {} },
+      vehicle: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prismaDrv: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'r1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
+          carRequest: { id: 'cr1', requestId: 'r1', startDate: new Date(), endDate: new Date(), assignment: null },
+        }),
+      },
+      vehicle: { findUnique: async () => ({ id: 'v1', vehicleNo: '2P2942', brandModel: ' Hyundai Grand Starex / 2011 (2497CC)', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      driverAbsence: { findFirst: async () => null },
+      driver: { findUnique: async () => ({ name: 'Kyaw Thiha Maw' }), update: async () => {} },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const svcDrv: any = new CarsService(prismaDrv, {} as any, {} as any, notifications, audit, telegram);
+    await svcDrv.assign('r1', { vehicleId: 'v1', driverId: 'd1' }, { userId: 'u9', username: 'admin' });
+    const bell = captured.find((n) => n.type === 'CAR_ASSIGNED' && n.title === 'Vehicle assigned to r1');
+    assert.ok(bell, 'requester CAR_ASSIGNED notification must be sent');
+    assert.ok(bell.body.includes('2P2942'), `body must still name the vehicle, got: ${bell.body}`);
+    assert.ok(bell.body.includes('Driver Kyaw Thiha Maw'), `body must name the driver, got: ${bell.body}`);
+    assert.ok(bell.body.includes('has been assigned for your trip'), 'body must keep the assigned-for-your-trip wording');
+  });
+
+  await test('assign(): requester notification without driver stays vehicle-only', async () => {
+    const captured: any[] = [];
+    const notifications = { notify: async (p: any) => { captured.push(p); } };
+    const audit = { log: async () => {} };
+    const telegram = { sendAssignment: async () => {}, repaintDriverCards: async () => {} };
+    const tx = {
+      carAssignment: { upsert: async () => ({ id: 'a1' }), findMany: async () => [] },
+      carRequest: { update: async () => {}, findMany: async () => [] },
+      requestDocument: { update: async () => {} },
+      vehicle: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prismaNoDrv: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'r1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
+          carRequest: { id: 'cr1', requestId: 'r1', startDate: new Date(), endDate: new Date(), assignment: null },
+        }),
+      },
+      vehicle: { findUnique: async () => ({ id: 'v1', vehicleNo: '2P2942', brandModel: ' Hyundai Grand Starex / 2011 (2497CC)', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const svcNoDrv: any = new CarsService(prismaNoDrv, {} as any, {} as any, notifications, audit, telegram);
+    await svcNoDrv.assign('r1', { vehicleId: 'v1' }, { userId: 'u9', username: 'admin' });
+    const bell = captured.find((n) => n.type === 'CAR_ASSIGNED' && n.title === 'Vehicle assigned to r1');
+    assert.ok(bell, 'requester CAR_ASSIGNED notification must be sent');
+    assert.ok(!bell.body.includes('Driver'), `no driver line expected without driverId, got: ${bell.body}`);
+    assert.ok(bell.body.includes('has been assigned for your trip.'), `vehicle-only wording expected, got: ${bell.body}`);
+  });
+
   await test('requesterFleetOverview: Back-at-Office booking leaves the Booked list', async () => {
     const overviewCaptured: any[] = [];
     const prismaOv: any = {
