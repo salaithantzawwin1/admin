@@ -44,6 +44,10 @@ export const DEFAULT_TIMETABLE: CompanyTimetable = {
 };
 
 const KEY = 'timetable.company';
+/** Settings key for the fleet hand-back buffer (feature: "likely free from ~end+buffer"). */
+const FLEET_BUFFER_KEY = 'fleet.bufferMinutes';
+/** Default hand-back buffer shown/used when nothing is configured (30 min). */
+export const DEFAULT_FLEET_BUFFER_MINUTES = 30;
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 /** Accept either the new 3-range shape or the legacy 3-field triple. */
@@ -107,5 +111,35 @@ export class TimetableService {
       oldValue: before, newValue: next,
     });
     return next;
+  }
+
+  /**
+   * Fleet hand-back buffer (minutes): how long a car typically needs after the
+   * planned end for parking / handover before it is realistically free again.
+   * The fleet availability card and the conflict pre-warning show
+   * "likely free from ~end + buffer". Stored under `fleet.bufferMinutes`.
+   */
+  async fleetBufferMinutes(): Promise<number> {
+    const row = await this.prisma.systemSetting.findUnique({ where: { key: FLEET_BUFFER_KEY } });
+    const n = row?.value == null ? NaN : Number(JSON.parse(row.value));
+    return Number.isFinite(n) && n >= 0 && n <= 240 ? n : DEFAULT_FLEET_BUFFER_MINUTES;
+  }
+
+  /** Set the hand-back buffer (0–240 minutes; 0 disables the hint). */
+  async setFleetBufferMinutes(minutes: number, actor: { userId: string; username: string }): Promise<number> {
+    const n = Math.round(Number(minutes));
+    if (!Number.isFinite(n) || n < 0 || n > 240) throw new BadRequestException('Buffer must be 0–240 minutes');
+    const before = await this.fleetBufferMinutes();
+    await this.prisma.systemSetting.upsert({
+      where: { key: FLEET_BUFFER_KEY },
+      update: { value: JSON.stringify(n) },
+      create: { key: FLEET_BUFFER_KEY, value: JSON.stringify(n) },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'FLEET_BUFFER_UPDATED', module: 'SETTINGS', recordId: FLEET_BUFFER_KEY,
+      oldValue: { minutes: before }, newValue: { minutes: n },
+    });
+    return n;
   }
 }

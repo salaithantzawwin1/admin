@@ -13,7 +13,7 @@ interface FleetVehicle {
   vehicleNo: string;
   brandModel: string;
   status: string;
-  bookings: { docNumber?: string; startDate: string; endDate: string }[];
+  bookings: { docNumber?: string; startDate: string; endDate: string; estimatedReturnAt?: string | null; likelyFreeFrom?: string | null }[];
 }
 
 // Prisma VehicleStatus enum values + the derived BOOKED state (future-only
@@ -179,13 +179,22 @@ export default function CarRequests() {
                 ) : (
                   <div className="mt-2 space-y-1">
                     <div className="text-xs text-gray-400 uppercase tracking-wide">Booked</div>
-                    {v.bookings.map((b) => (
-                      <div key={`${v.id}-${b.docNumber}-${b.startDate}`} className="text-xs text-orange-700 bg-orange-50 rounded px-2 py-1">
-                        {b.docNumber ?? '—'}: {fmtShort(b.startDate)}
-                        {' → '}
-                        {fmtShort(b.endDate)}
-                      </div>
-                    ))}
+                    {v.bookings.map((b) => {
+                      const blocked = (b.docNumber ?? '').startsWith('🛠');
+                      return (
+                        <div key={`${v.id}-${b.docNumber}-${b.startDate}`} className={`text-xs rounded px-2 py-1 ${blocked ? 'text-gray-600 bg-gray-100' : 'text-orange-700 bg-orange-50'}`}>
+                          {b.docNumber ?? '—'}: {fmtShort(b.startDate)}
+                          {' → '}
+                          {fmtShort(b.endDate)}
+                          {b.estimatedReturnAt && new Date(b.estimatedReturnAt) > new Date(b.endDate) && (
+                            <span className="text-red-600 font-medium"> · ⏰ ETA {fmtShort(b.estimatedReturnAt)}</span>
+                          )}
+                          {!blocked && b.likelyFreeFrom && (
+                            <span className="text-gray-500"> · likely free ~{fmtShort(b.likelyFreeFrom)}</span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

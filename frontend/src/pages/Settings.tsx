@@ -91,7 +91,7 @@ function relTime(iso: string): string {
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
 
-type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins';
+type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet';
 
 /** Company Time Table — office hours the leave windows are derived from. */
 interface Timetable {
@@ -109,7 +109,7 @@ export default function Settings() {
   // active tab lives in the URL (?tab=holidays) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as SettingsTab | null;
-  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' ? tabParam : 'ad';
+  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' ? tabParam : 'ad';
   const setTab = (t: SettingsTab) => setSearchParams(t === 'ad' ? {} : { tab: t }, { replace: false });
   const [cfg, setCfg] = useState<AdConfig | null>(null);
   const [msg, setMsg] = useState('');
@@ -122,6 +122,11 @@ export default function Settings() {
   const [ttMsg, setTtMsg] = useState('');
   const [ttError, setTtError] = useState('');
   const [ttBusy, setTtBusy] = useState(false);
+
+  // ---------- Fleet (hand-back buffer) state ----------
+  const [fleetBuffer, setFleetBuffer] = useState<number | null>(null);
+  const [fleetMsg, setFleetMsg] = useState('');
+  const [fleetError, setFleetError] = useState('');
 
   // ---------- Public Holidays editor state ----------
   const now = new Date();
@@ -186,6 +191,24 @@ export default function Settings() {
       setTtError(e instanceof Error ? e.message : 'Failed to save the time table');
     } finally {
       setTtBusy(false);
+    }
+  };
+
+  // ---------- Fleet (hand-back buffer) ----------
+  useEffect(() => {
+    if (tab !== 'fleet') return;
+    api<number>('/settings/fleet-buffer').then((m) => setFleetBuffer(m)).catch(() => setFleetBuffer(30));
+  }, [tab]);
+
+  const saveFleetBuffer = async () => {
+    if (fleetBuffer == null) return;
+    setFleetMsg(''); setFleetError('');
+    try {
+      const saved = await api<{ minutes: number }>('/settings/fleet-buffer', { method: 'PUT', body: { minutes: fleetBuffer } });
+      setFleetBuffer(saved.minutes);
+      setFleetMsg(`Hand-back buffer saved — the fleet card now shows "likely free from ~end + ${saved.minutes} min".`);
+    } catch (e) {
+      setFleetError(e instanceof Error ? e.message : 'Failed to save the buffer');
     }
   };
 
@@ -369,6 +392,7 @@ export default function Settings() {
           { key: 'ad' as SettingsTab, label: 'AD / LDAP' },
           { key: 'timetable' as SettingsTab, label: 'Company Time Table' },
           { key: 'holidays' as SettingsTab, label: 'Public Holidays' },
+          { key: 'fleet' as SettingsTab, label: 'Fleet' },
           { key: 'telegram' as SettingsTab, label: 'Telegram' },
           { key: 'joins' as SettingsTab, label: 'Telegram Joins' },
         ]).map((t) => (
@@ -522,6 +546,42 @@ export default function Settings() {
           </Button>
         </div>
         </>
+        )}
+      </div>
+      )}
+
+      {/* ---------- Tab: Fleet (hand-back buffer) ---------- */}
+      {tab === 'fleet' && (
+      <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-gray-800">Fleet — hand-back buffer</h2>
+          {fleetBuffer != null && <Badge color="blue">{fleetBuffer} min</Badge>}
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          How long a car typically needs after its window ends for parking / handover before it is realistically free.
+          The Fleet Availability card and the request form's clash hint show "likely free from ~end + buffer" for each booking.
+          Set 0 to hide the hint.
+        </p>
+
+        {fleetError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{fleetError}</div>}
+        {fleetMsg && <div className="mb-3 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{fleetMsg}</div>}
+
+        {fleetBuffer != null && (
+        <div className="flex items-end gap-3">
+          <div>
+            <label htmlFor="settings-fleet-buffer" className="block text-xs text-gray-500 mb-1">Buffer (minutes, 0–240)</label>
+            <Input
+              id="settings-fleet-buffer"
+              type="number"
+              min={0}
+              max={240}
+              value={fleetBuffer}
+              onChange={(e) => setFleetBuffer(e.target.value === '' ? null : Number(e.target.value))}
+              className="!w-32"
+            />
+          </div>
+          <Button onClick={saveFleetBuffer} disabled={fleetBuffer == null || fleetBuffer < 0 || fleetBuffer > 240}>Save</Button>
+        </div>
         )}
       </div>
       )}

@@ -1,6 +1,6 @@
 import { Body, Controller, ConflictException, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsArray, IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsBoolean, IsInt, IsOptional, IsString, MaxLength, Max, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
@@ -56,6 +56,11 @@ class TimetableDto {
   @IsOptional() @IsArray() workDays?: number[];
 }
 
+class FleetBufferDto {
+  /** Hand-back buffer in minutes (0–240). */
+  @IsInt() @Min(0) @Max(240) minutes!: number;
+}
+
 @ApiTags('settings')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -73,6 +78,19 @@ export class SettingsController {
   @Put('timetable')
   setTimetable(@Body() dto: TimetableDto, @Req() req) {
     return this.timetable.update(dto as Partial<CompanyTimetable>, { userId: req.user.id, username: req.user.username });
+  }
+
+  /** Fleet hand-back buffer (minutes) — "likely free from ~end + buffer" on the fleet card. */
+  @Get('fleet-buffer')
+  getFleetBuffer() {
+    return this.timetable.fleetBufferMinutes();
+  }
+
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Put('fleet-buffer')
+  async setFleetBuffer(@Body() dto: FleetBufferDto, @Req() req) {
+    const minutes = await this.timetable.setFleetBufferMinutes(dto.minutes, { userId: req.user.id, username: req.user.username });
+    return { minutes };
   }
 
   @RequirePermissions(PERMISSIONS.USERS_MANAGE)

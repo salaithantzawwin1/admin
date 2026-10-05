@@ -30,6 +30,10 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [clashes, setClashes] = useState<{ request?: { docNumber: string }; startDate: string; endDate: string }[]>([]);
+  // Administration-blocked vehicle windows (service/inspection) overlapping the requested time
+  const [blocked, setBlocked] = useState<{ vehicleNo: string; reason: string; startDate: string; endDate: string }[]>([]);
+  // hand-back buffer (minutes) — "likely free from ~end+buffer" on the clash hint
+  const [bufferMin, setBufferMin] = useState<number | null>(null);
   const [forceSubmit, setForceSubmit] = useState(false);
   // blur-tracking so "required" hints only appear once the user has been in the field
   const [touched, setTouched] = useState<{ destination?: boolean; startDate?: boolean; endDate?: boolean }>({});
@@ -60,17 +64,20 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
     if (!valid) return;
     const end = form.endDate || `${form.startDate.slice(0, 10)}T17:00`;
     const run = ++clashRun.current;
-    api<{ conflicts: { request?: { docNumber: string }; startDate: string; endDate: string }[] }>(
+    api<{ conflicts: { request?: { docNumber: string }; startDate: string; endDate: string }[]; blockedWindows?: { vehicleNo: string; reason: string; startDate: string; endDate: string }[]; bufferMinutes?: number }>(
       `/cars/availability/conflicts?startDate=${encodeURIComponent(new Date(form.startDate).toISOString())}&endDate=${encodeURIComponent(new Date(end).toISOString())}`,
     )
       .then((r) => {
         if (clashRun.current !== run) return; // a newer keystroke already superseded us
         setClashes(r.conflicts ?? []);
+        setBlocked(r.blockedWindows ?? []);
+        setBufferMin(typeof r.bufferMinutes === 'number' ? r.bufferMinutes : null);
         setForceSubmit(false);
       })
       .catch(() => {
         if (clashRun.current !== run) return;
         setClashes([]);
+        setBlocked([]);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.startDate, form.endDate, form.timeSlot, valid]);
@@ -175,6 +182,19 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
         onChange={(e) => setForm({ ...form, description: e.target.value })}
       />
 
+      {blocked.length > 0 && (
+        <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+          <div className="font-medium">🛠 A vehicle is blocked for service / inspection during this window:</div>
+          <ul className="mt-1 list-disc list-inside text-xs">
+            {blocked.map((b, i) => (
+              <li key={`${b.vehicleNo}-${i}`}>
+                {b.vehicleNo}: {b.reason} — {fmtDateTime(b.startDate)} → {fmtDateTime(b.endDate)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {hasClash && (
         <div className="text-sm text-orange-700 bg-orange-50 border border-orange-200 rounded-lg px-3 py-2">
           <div className="font-medium">⚠ Another request already covers this time window:</div>
@@ -185,7 +205,12 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
               </li>
             ))}
           </ul>
-          <div className="mt-1 text-xs">You can still submit — Administration will check vehicle availability when assigning.</div>
+          <div className="mt-1 text-xs">
+            You can still submit — Administration will check vehicle availability when assigning.
+            {bufferMin != null && bufferMin > 0
+              ? ` Keep in mind a car usually becomes free ~${bufferMin} min after its window ends.`
+              : ''}
+          </div>
           <button className="mt-2 text-xs underline" onClick={() => setForceSubmit(true)}>
             Submit anyway
           </button>
