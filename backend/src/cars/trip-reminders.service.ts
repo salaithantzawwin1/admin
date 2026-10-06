@@ -207,9 +207,9 @@ export class TripRemindersService {
           },
           { OR: [{ trip: null }, { trip: { status: 'NOT_STARTED' } }] },
         ],
-      },
-      include: {
+      },        include: {
         vehicle: { select: { vehicleNo: true } },
+        driver: { select: { name: true } },
         request: { select: { docNumber: true, requesterId: true, carRequest: { select: { endDate: true } } } },
       },
     });
@@ -248,6 +248,18 @@ export class TripRemindersService {
         await this.telegram
           .mirrorToUser(a.request.requesterId, `✅ Trip completed — ${a.request.docNumber}`, 'The trip window ended, so the request was closed automatically.', `/requests/${a.requestId}`)
           .catch(() => undefined);
+        // Administration learns IMMEDIATELY (not only at the 17:30 digest) that
+        // the driver never tapped "🏁 Back at Office" and the ride was auto-closed
+        try {
+          const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+          await this.notifications.notifyMany(adminIds.filter((id) => id !== a.request.requesterId), {
+            type: 'TRIP_COMPLETED' as never,
+            title: `🤖 Auto-closed — ${a.request.docNumber}`,
+            body: `${a.driver?.name ?? 'The driver'} never tapped "🏁 Back at Office" and the window ended, so the ride was closed and ${a.vehicle?.vehicleNo ?? 'the vehicle'} returned to the pool automatically.`,
+            link: `/requests/${a.requestId}`,
+            requestId: a.requestId,
+          });
+        } catch { /* best-effort */ }
         console.log(`[cars] auto-COMPLETED ${a.request.docNumber} (driver acknowledged, window over)`);
       } else {
         // mirror the release on the car row and the base document (back to APPROVED,
@@ -390,6 +402,94 @@ export class TripRemindersService {
     } catch (e) {
       this.logger.warn(`expireStaleRequests failed: ${(e as Error).message}`);
     }
+  }
+
+  /**
+   * T-15 "ending soon" nudge: a live assignment whose window ends within the
+   * next 15 minutes pings the driver — "can you make it back on time? If not,
+   * tap ⏰ နောက်ကျ and report the new return time." Purpose: the Late button
+   * only helps if the driver remembers it BEFORE the window ends. Idempotent
+   * per assignment (one WINDOW_ENDING bell ever); the janitor's later sweeps
+   * cover whatever the driver does with it.
+   */
+  @Cron('0 */15 * * * *') // every 15 min at :00/:15/:30/:45 — the tick just before the T-15 point
+  async endingSoonNudge() {
+    try {
+      const now = new Date();
+      const soon = new Date(now.getTime() + 15 * 60 * 1000);
+      const ending = await this.prisma.carAssignment.findMany({
+        where: {
+          releasedAt: null,
+          driverBackAtOfficeAt: null,
+          trip: null, // never started the mileage form
+          request: { status: 'IN_PROGRESS', carRequest: { endDate: { gt: now, lte: soon } } },
+        },
+        include: {
+          driver: { select: { id: true, name: true, telegramChatId: true } },
+          vehicle: { select: { vehicleNo: true } },
+          request: { select: { id: true, docNumber: true, requesterId: true, requester: { select: { fullName: true } } } },
+        },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for (const a of ending) {
+        const endAt = await this.prisma.carRequest.findUnique({ where: { requestId: a.request.id }, select: { endDate: true } });
+        const end = endAt?.endDate ? new Date(endAt.endDate) : null;
+        const when = end ? yangonClock(end) : '—';
+        // idempotency: one WINDOW_ENDING bell per assignment ever
+        const already = await this.prisma.notification.findFirst({
+          where: { type: 'WINDOW_ENDING' as never, requestId: a.request.id },
+          select: { id: true },
+        });
+        if (already) continue;
+        await this.prisma.notification.create({
+          data: {
+            userId: a.request.requesterId,
+            type: 'WINDOW_ENDING' as never,
+            title: `⏳ Trip ending soon — ${a.request.docNumber}`,
+            body: `The vehicle window ends at ${when}. The driver was asked to confirm the return time.`,
+            link: `/requests/${a.request.id}`,
+            requestId: a.request.id,
+          },
+        }).catch(() => undefined);
+        const driverMsg = [
+          `⏳ <b>Ending soon — ${escapeHtml(a.request.docNumber)}</b>`,
+          `The booking window ends at ${escapeHtml(when)}.`,
+          ``,
+          `Can you make it back on time?`,
+          `• Yes — tap <b>"🏁 Back at Office"</b> on your assignment message right when you return.`,
+          `• Running late — tap <b>"⏰ နောက်ကျ"</b> and report your new return time so Administration knows the car is still out.`,
+        ].join('\n');
+        if (a.driver?.telegramChatId) {
+          await this.telegram.sendRaw(a.driver.telegramChatId, driverMsg).catch(() => undefined);
+        } else {
+          // no Telegram link — a bell in the driver's AMS account, if any
+          const driverUser = await this.prisma.driver.findUnique({ where: { id: a.driver?.id ?? '' }, select: { employee: { select: { user: { select: { id: true } } } } } }).catch(() => null);
+          const uid = driverUser?.employee?.user?.id;
+          if (uid) {
+            await this.prisma.notification.create({
+              data: {
+                userId: uid,
+                type: 'WINDOW_ENDING' as never,
+                title: `⏳ Trip ending soon — ${a.request.docNumber}`,
+                body: `The booking window ends at ${when}. If you are running late, tell Administration so they can note the new return time.`,
+                link: `/requests/${a.request.id}`,
+                requestId: a.request.id,
+              },
+            }).catch(() => undefined);
+          }
+        }
+        await this.auditLogCreateSafe(a.request.id, { windowEnd: end });
+      }
+      if (ending.length > 0) this.logger.log(`ending-soon nudge sent for ${ending.length} assignment(s)`);
+    } catch (e) {
+      this.logger.warn(`endingSoonNudge failed: ${(e as Error).message}`);
+    }
+  }
+
+  private async auditLogCreateSafe(requestId: string, meta: Record<string, unknown>) {
+    await this.prisma.auditLog.create({
+      data: { action: 'WINDOW_ENDING_NUDGE', module: 'CARS', recordId: requestId, newValue: meta as never },
+    }).catch(() => undefined);
   }
 
   /**

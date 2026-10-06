@@ -602,6 +602,86 @@ async function main() {
     assert.ok(ops.some((o) => o[0] === 'auditLog.create' && o[1].action === 'VEHICLE_AUTO_FREED' && o[1].recordId === 'v-stale'), 'VEHICLE_AUTO_FREED audit must be written for the stale vehicle');
   });
 
+  await test('endingSoonNudge: window ending within 15min → driver Telegram nudge + requester bell, idempotent', async () => {
+    const raws: string[] = [];
+    const notifs: any[] = [];
+    const in10min = new Date(Date.now() + 10 * 60e3);
+    const prismaNudge: any = {
+      carAssignment: {
+        findMany: async () => [
+          {
+            releasedAt: null, driverBackAtOfficeAt: null, trip: null,
+            driver: { id: 'd1', name: 'Kyaw Thiha Maw', telegramChatId: 'chat-1' },
+            vehicle: { vehicleNo: '2P2942' },
+            request: { id: 'r-end', docNumber: 'CAR-202610-0099', requesterId: 'u-req', requester: { fullName: 'Rider One' } },
+          },
+        ],
+      },
+      carRequest: { findUnique: async () => ({ endDate: in10min }) },
+      notification: {
+        findFirst: async ({ where }: any) => (where.requestId === 'r-end' ? (notifs.length ? { id: 'n1' } : null) : null),
+        create: async (p: any) => { notifs.push(p.data); return {}; },
+      },
+      driver: { findUnique: async () => null },
+      auditLog: { create: async () => {} },
+    };
+    const svcNudge: any = new TripRemindersService(
+      prismaNudge,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async (_chat: string, text: string) => { raws.push(text); }, mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+    await svcNudge.endingSoonNudge();
+    assert.strictEqual(raws.length, 1, 'driver must get exactly one Telegram nudge');
+    assert.ok(raws[0].includes('Ending soon') && raws[0].includes('နောက်ကျ'), 'nudge must name the window end and the ⏰ Late button');
+    assert.ok(notifs.some((n) => n.type === 'WINDOW_ENDING' && n.userId === 'u-req'), 'requester must get the ending-soon bell');
+    // second run: idempotent — no duplicate nudge/bell
+    await svcNudge.endingSoonNudge();
+    assert.strictEqual(raws.length, 1, 'no duplicate Telegram nudge on the next tick');
+    assert.strictEqual(notifs.length, 1, 'no duplicate bell on the next tick');
+  });
+
+  await test('releaseExpired auto-close notifies Administration immediately', async () => {
+    const adminNotifs: any[] = [];
+    const endPast = new Date(Date.now() - 3600e3);
+    const prismaAuto: any = {
+      carAssignment: {
+        findMany: async () => [
+          {
+            id: 'a-end', requestId: 'r-auto', vehicleId: 'v1', driverId: 'd1',
+            driverNotedAt: new Date(), driverArrivedAt: null, driverBackAtOfficeAt: null,
+            vehicle: { vehicleNo: '2P2942' },
+            driver: { name: 'Kyaw Thiha Maw' },
+            request: { docNumber: 'CAR-202610-0098', requesterId: 'u-req', carRequest: { endDate: endPast } },
+            trip: null,
+          },
+        ],
+        update: async () => ({}),
+      },
+      $transaction: async (list: any[]) => { for (const op of list) await op; },
+      vehicle: { update: async () => ({}) },
+      driver: { update: async () => ({}) },
+      carRequest: { update: async () => ({}) },
+      requestDocument: { update: async () => ({}) },
+      auditLog: { create: async () => {} },
+      notification: { create: async (p: any) => ({ userId: p.data.userId, title: p.data.title }) },
+    };
+    const svcAuto: any = new TripRemindersService(
+      prismaAuto,
+      {
+        notify: async () => ({}),
+        notifyMany: async (ids: string[], n: any) => { for (const id of ids) adminNotifs.push({ ...n, userId: id }); },
+      } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => ['admin-1', 'admin-2'] } as any,
+    );
+    await svcAuto.releaseExpired();
+    assert.strictEqual(adminNotifs.length, 2, 'both cars.assign holders must be notified');
+    const n = adminNotifs[0];
+    assert.ok(n.title.includes('🤖 Auto-closed') && n.title.includes('CAR-202610-0098'), 'title must flag the auto-close and the doc number');
+    assert.ok(n.body.includes('Kyaw Thiha Maw') && n.body.includes('Back at Office'), 'body must name the driver and the missed tap');
+  });
+
   await test('shiftHandoverDigest: sends on-road/ETA/blocked sections to cars.assign Telegram chats', async () => {
     const now = new Date();
     const sent: string[] = [];
