@@ -285,10 +285,16 @@ export class InventoryService {
     });
   }
 
-  /** Administration queue: PENDING requests awaiting fulfillment decision. */
+  /**
+   * Administration queue: requests awaiting fulfillment decision.
+   * Includes COMPLETED docs whose supplies never finished — a fully-short
+   * request auto-completes at approval time (stock untouched) with the
+   * requester told "Administration will restock and fulfill later"; those
+   * must stay visible here until fulfilled or cancelled.
+   */
   async pendingRequests() {
     return this.prisma.requestDocument.findMany({
-      where: { docType: 'OFFICE_SUPPLY_REQUEST', status: 'APPROVED', supplyRequest: { status: 'PENDING' } },
+      where: { docType: 'OFFICE_SUPPLY_REQUEST', status: { in: ['APPROVED', 'COMPLETED'] }, supplyRequest: { status: 'PENDING' } },
       orderBy: { submittedAt: 'asc' },
       include: {
         requester: { select: { username: true, fullName: true } },
@@ -315,7 +321,9 @@ export class InventoryService {
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
     const supply = doc.supplyRequest;
     if (supply.status !== 'PENDING') throw new ConflictException(`Already ${supply.status}`);
-    if (!['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(doc.status)) {
+    // COMPLETED here means "approved and auto-fulfilled" — a short request
+    // completes with lines OUT_OF_STOCK and can be retried after restocking
+    if (!['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS', 'COMPLETED'].includes(doc.status)) {
       throw new BadRequestException(`Workflow status is ${doc.status} — cannot fulfill yet`);
     }
     if (doc.status === 'PENDING_APPROVAL') {
@@ -325,7 +333,9 @@ export class InventoryService {
     const result = await this.prisma.$transaction(async (tx) => {
       const shortages: { code: string; requested: number; available: number }[] = [];
       for (const line of supply.lines) {
-        if (line.status !== 'PENDING') continue;
+        // PENDING = not yet attempted; OUT_OF_STOCK = a previous pass found the
+        // shelf short — retry it (fresh locked balance read below decides again)
+        if (line.status !== 'PENDING' && line.status !== 'OUT_OF_STOCK') continue;
         // fresh, locked read — line.item.balance may be stale (another request
         // could have consumed stock between the load above and this transaction)
         const current = await tx.inventoryItem.findUnique({ where: { id: line.itemId }, select: { code: true, balance: true } });
