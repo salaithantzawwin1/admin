@@ -67,8 +67,10 @@ export class TripRemindersService {
     return sent;
   }
 
-  // every day 07:30 — in time for the morning's trips
-  @Cron('0 30 7 * * *')
+  // twice hourly (:25/:55) — a single 07:30 tick died with the morning reboots
+  // (no reminder ever sent since Sep 25); idempotent per request, so extra
+  // sweeps are free and each request still gets at most one REMINDER
+  @Cron('0 25,55 * * * *')
   async daily() {
     const sent = await this.runOnce();
     if (sent > 0) console.log(`[cars] sent ${sent} trip reminder(s)`);
@@ -301,7 +303,11 @@ export class TripRemindersService {
    * contain trips that can still be served. Assigned/STARTED rides are never
    * touched (those close via Back-at-Office / the trip form).
    */
-  @Cron('0 0 7 * * *') // daily 07:00 — clear yesterday's leftovers before the day starts
+  // twice hourly (:05/:35) instead of a single 07:00 tick — the box boots late
+  // morning after power cuts, so a once-a-day 07:00 tick kept getting killed
+  // before it ever ran; windows ended >24h then sat APPROVED forever
+  // (CAR-202610-0007). Same 24h rule, just a cadence that survives reboots.
+  @Cron('0 5,35 * * * *')
   async expireStaleRequests() {
     try {
       const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
