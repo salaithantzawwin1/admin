@@ -74,6 +74,17 @@ const BASE = 'http://127.0.0.1:3000/api';
   // still in queue, fulfill-after-restock completes the rest
   const item2 = await j(await fetch(BASE + '/inventory/items', { method: 'POST', headers: H(adm.accessToken), body: JSON.stringify({ name: 'E2E Partial Item', category: 'PAPER', unit: 'ream', balance: 5, minStock: 1, reorderLevel: 2 }) }));
   assert(item2.id, 'second item created');
+
+  // ---- Path C-prime: admin REJECTS a PENDING_APPROVAL supply → supply tables
+  //  sync via the status mirror (was: inert PENDING rows left forever)
+  const docE = await issue(item2.id, 1);
+  assert(docE.id, 'reject-path request created');
+  const rj = await j(await fetch(BASE + `/requests/${docE.id}/reject`, { method: 'POST', headers: H(adm.accessToken), body: JSON.stringify({ comment: 'e2e reject-sync proof' }) }));
+  assert(rj && !rj.error, 'reject accepted: ' + JSON.stringify(rj).slice(0, 120));
+  const strays = await j(await fetch(BASE + '/inventory/requests/mine', { headers: H(emp.accessToken) }));
+  const strayE = strays.find((d) => d.id === docE.id);
+  assert(strayE && strayE.supplyRequest.status === 'REJECTED', `supply header REJECTED after workflow reject (got ${strayE?.supplyRequest?.status})`);
+  assert(strayE.supplyRequest.lines.every((l) => l.status === 'REJECTED'), 'no inert PENDING lines after reject');
   const docC = await j(await fetch(BASE + '/inventory/requests', { method: 'POST', headers: H(emp.accessToken), body: JSON.stringify({ items: [{ itemId: item.id, quantity: 1 }, { itemId: item2.id, quantity: 50 }] }) }));
   assert(docC.id, 'multi-line request created');
   await approve(docC.id);
@@ -93,9 +104,17 @@ const BASE = 'http://127.0.0.1:3000/api';
   assert((await balance(item2.id)) === 5, '50 issued from 55 → 5');
   q2 = await j(await fetch(BASE + '/inventory/requests/pending', { headers: H(adm.accessToken) }));
   assert(!q2.some((d) => d.id === docC.id), 'FULFILLED request left the queue');
-  await fetch(BASE + `/inventory/items/${item2.id}`, { method: 'PATCH', headers: H(adm.accessToken), body: JSON.stringify({ isActive: false }) });
 
-  // cleanup: deactivate the test item (cannot hard-delete — has ledger rows)
+  // ---- Path D: requester cancels a PENDING_APPROVAL supply → the cancel hook
+  //  (adminCancelSupply) closes the supply tables; stock untouched, no inert rows
+  const docD = await issue(item2.id, 2);
+  assert(docD.id, 'cancel-path request created');
+  const cd = await j(await fetch(BASE + `/requests/${docD.id}`, { method: 'DELETE', headers: H(emp.accessToken) }));
+  assert(cd && !cd.error, 'requester cancel accepted: ' + JSON.stringify(cd).slice(0, 120));
+  assert((await balance(item2.id)) === 5, 'stock untouched by the cancel');
+
+  // cleanup: deactivate the test items (cannot hard-delete — have ledger rows)
+  await fetch(BASE + `/inventory/items/${item2.id}`, { method: 'PATCH', headers: H(adm.accessToken), body: JSON.stringify({ isActive: false }) });
   await fetch(BASE + `/inventory/items/${item.id}`, { method: 'PATCH', headers: H(adm.accessToken), body: JSON.stringify({ isActive: false }) });
   console.log(`PASS — inventory full cycle OK (${item.code}: 50 → issue 3 auto-fulfilled → 47; short 999 → OUT_OF_STOCK queue → manual fulfill; spending 499,500)`);
   process.exit(0);
