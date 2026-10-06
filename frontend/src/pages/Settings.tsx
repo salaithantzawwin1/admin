@@ -58,6 +58,7 @@ const EVENT_STYLE: Record<string, { icon: string; tone: 'green' | 'red' | 'blue'
   TELEGRAM_USER_BOUND: { icon: '🔗', tone: 'green' },
   TELEGRAM_DRIVER_BOUND: { icon: '🚗', tone: 'green' },
   TELEGRAM_ADMIN_UNBIND: { icon: '🔓', tone: 'red' },
+  TELEGRAM_JOIN_DELETED: { icon: '🗑️', tone: 'red' },
 };
 
 const TONE_RING: Record<string, string> = {
@@ -157,6 +158,7 @@ export default function Settings() {
   const [joinPick, setJoinPick] = useState<Record<string, { kind: 'user' | 'driver'; id: string }>>({});
   const [joinEditing, setJoinEditing] = useState<Record<string, boolean>>({}); // APPROVED rows: pickers stay hidden until the admin clicks Re-assign
   const [unbindJoin, setUnbindJoin] = useState<TgJoin | null>(null); // in-app confirm (replaces window.confirm)
+  const [deleteJoin, setDeleteJoin] = useState<TgJoin | null>(null); // in-app confirm for permanent removal
   const [joinMsg, setJoinMsg] = useState('');
   const [joinError, setJoinError] = useState('');
   // chat bind-history dialog state
@@ -792,6 +794,13 @@ export default function Settings() {
                           }
                         }}
                       >History</button>
+                      {j.status !== 'APPROVED' && (
+                        <button
+                          className="text-xs text-red-600 hover:underline"
+                          title="Remove this join request from the list permanently"
+                          onClick={() => setDeleteJoin(j)}
+                        >Delete</button>
+                      )}
                     </div>
                   </div>
                   {j.status === 'APPROVED' && j.bound && (
@@ -1105,6 +1114,33 @@ export default function Settings() {
             }
           }}
           onClose={() => setUnbindJoin(null)}
+        />
+      )}
+
+      {deleteJoin && (
+        <ConfirmDialog
+          title={`Delete ${deleteJoin.displayName ?? deleteJoin.chatId}?`}
+          description={
+            <>
+              Permanently removes this {deleteJoin.status.toLowerCase()} join request from the list
+              (chat {deleteJoin.chatId}). If the person sends /start again they appear as a new request.
+              This cannot be undone.
+            </>
+          }
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={async () => {
+            try {
+              await api(`/settings/telegram/joins/${deleteJoin.id}`, { method: 'DELETE' });
+              setDeleteJoin(null);
+              setJoinMsg('Join request deleted.');
+              loadJoins();
+            } catch (e) {
+              setJoinError(e instanceof Error ? e.message : 'Delete failed');
+              throw e; // dialog stays open, error shown inside
+            }
+          }}
+          onClose={() => setDeleteJoin(null)}
         />
       )}
     </div>

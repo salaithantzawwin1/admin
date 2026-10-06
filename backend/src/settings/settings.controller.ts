@@ -1,4 +1,4 @@
-import { Body, Controller, ConflictException, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ConflictException, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsBoolean, IsInt, IsOptional, IsString, MaxLength, Max, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -210,6 +210,17 @@ export class SettingsController {
   async unbindJoin(@Req() req, @Param('id') id: string) {
     try {
       return await this.telegramConfig.unbindJoinChat(id, { userId: req.user.id, username: req.user.username });
+    } catch (e) {
+      throw new ConflictException((e as Error).message);
+    }
+  }
+
+  /** Permanently delete a join request from the list (PENDING/REJECTED/SUPERSEDED only). */
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Delete('telegram/joins/:id')
+  async deleteJoin(@Req() req, @Param('id') id: string) {
+    try {
+      return await this.telegramConfig.deleteJoin(id, { userId: req.user.id, username: req.user.username });
     } catch (e) {
       throw new ConflictException((e as Error).message);
     }

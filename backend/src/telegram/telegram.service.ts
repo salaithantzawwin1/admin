@@ -371,7 +371,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           in: [
             'TELEGRAM_JOIN_REQUESTED', 'TELEGRAM_JOIN_APPROVED', 'TELEGRAM_JOIN_REJECTED',
             'TELEGRAM_JOIN_REASSIGNED', 'TELEGRAM_USER_BOUND', 'TELEGRAM_DRIVER_BOUND',
-            'TELEGRAM_ADMIN_UNBIND',
+            'TELEGRAM_ADMIN_UNBIND', 'TELEGRAM_JOIN_DELETED',
           ],
         },
         OR: [{ recordId: chatId }, { newValue: { path: ['chatId'], equals: chatId } }, { oldValue: { path: ['chatId'], equals: chatId } }],
@@ -402,6 +402,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         label = 'Linked via /start code (driver)';
       } else if (l.action === 'TELEGRAM_ADMIN_UNBIND') {
         label = 'Unlinked by Administration';
+      } else if (l.action === 'TELEGRAM_JOIN_DELETED') {
+        label = 'Deleted by Administration — removed from the join list';
       }
       return { at: l.createdAt, action: l.action, label, account, by: l.username ?? 'system' };
     });
@@ -566,6 +568,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       userId: actor.userId, username: actor.username,
       action: 'TELEGRAM_JOIN_REJECTED', module: 'SETTINGS', recordId: joinId,
       oldValue: { chatId: join.chatId },
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Administration: permanently delete a join request from the list.
+   * Approved joins are refused — unbind the chat first (that also drops the join
+   * back to PENDING, where it can be deleted). Deleting a PENDING draft is safe:
+   * if the person sends /start again they simply appear as a brand-new request.
+   */
+  async deleteJoin(joinId: string, actor: { userId: string; username: string }) {
+    const join = await this.prisma.telegramJoinRequest.findUnique({ where: { id: joinId } });
+    if (!join) throw new Error('Join request not found');
+    if (join.status === 'APPROVED') throw new Error('This join is approved and linked — unbind it first, then delete');
+    await this.prisma.telegramJoinRequest.delete({ where: { id: joinId } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'TELEGRAM_JOIN_DELETED', module: 'SETTINGS', recordId: joinId,
+      oldValue: { chatId: join.chatId, status: join.status, tgUsername: join.tgUsername, displayName: join.displayName },
     });
     return { ok: true };
   }

@@ -83,4 +83,9 @@ export class TelegramConfigService {
   unbindJoinChat(joinId: string, actor: { userId: string; username: string }) {
     return this.telegram.unbindJoinChat(joinId, actor);
   }
+
+  /** Permanently delete a join request (Settings → Telegram Joins → Delete). */
+  deleteJoin(joinId: string, actor: { userId: string; username: string }) {
+    return this.telegram.deleteJoin(joinId, actor);
+  }
 }
