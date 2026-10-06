@@ -70,6 +70,31 @@ const BASE = 'http://127.0.0.1:3000/api';
   const rec = await j(await fetch(BASE + '/inventory/reorder-suggestions', { headers: H(adm.accessToken) }));
   assert(!rec.some((r) => r.itemId === item.id), 'balance 47 > reorder level 20 → no suggestion');
 
+  // ---- Path C: multi-line PARTIAL — one line issuable, one short → PARTIAL,
+  // still in queue, fulfill-after-restock completes the rest
+  const item2 = await j(await fetch(BASE + '/inventory/items', { method: 'POST', headers: H(adm.accessToken), body: JSON.stringify({ name: 'E2E Partial Item', category: 'PAPER', unit: 'ream', balance: 5, minStock: 1, reorderLevel: 2 }) }));
+  assert(item2.id, 'second item created');
+  const docC = await j(await fetch(BASE + '/inventory/requests', { method: 'POST', headers: H(emp.accessToken), body: JSON.stringify({ items: [{ itemId: item.id, quantity: 1 }, { itemId: item2.id, quantity: 50 }] }) }));
+  assert(docC.id, 'multi-line request created');
+  await approve(docC.id);
+  assert((await balance(item.id)) === 46, 'first line auto-issued (47→46)');
+  assert((await balance(item2.id)) === 5, 'short second line untouched (5)');
+  let q2 = await j(await fetch(BASE + '/inventory/requests/pending', { headers: H(adm.accessToken) }));
+  assert(q2.some((d) => d.id === docC.id), 'PARTIAL request still in queue');
+  // retry before restocking is idempotent: line re-checked against locked balance,
+  // still short → shortage reported, request stays PARTIAL and queued (no 4xx)
+  const fu2 = await j(await fetch(BASE + `/inventory/requests/${docC.id}/fulfill`, { method: 'POST', headers: H(adm.accessToken) }));
+  assert(!fu2.error && fu2.newStatus === 'PARTIAL' && fu2.shortages?.length === 1, 'retry without stock reports shortage and stays PARTIAL: ' + JSON.stringify(fu2).slice(0, 150));
+  q2 = await j(await fetch(BASE + '/inventory/requests/pending', { headers: H(adm.accessToken) }));
+  assert(q2.some((d) => d.id === docC.id), 'still queued after the no-stock retry');
+  await j(await fetch(BASE + '/inventory/restock', { method: 'POST', headers: H(adm.accessToken), body: JSON.stringify({ itemId: item2.id, quantity: 50 }) }));
+  const fu3 = await j(await fetch(BASE + `/inventory/requests/${docC.id}/fulfill`, { method: 'POST', headers: H(adm.accessToken) }));
+  assert(!fu3.error && fu3.newStatus === 'FULFILLED', 'fulfill after restock completes PARTIAL: ' + JSON.stringify(fu3).slice(0, 120));
+  assert((await balance(item2.id)) === 5, '50 issued from 55 → 5');
+  q2 = await j(await fetch(BASE + '/inventory/requests/pending', { headers: H(adm.accessToken) }));
+  assert(!q2.some((d) => d.id === docC.id), 'FULFILLED request left the queue');
+  await fetch(BASE + `/inventory/items/${item2.id}`, { method: 'PATCH', headers: H(adm.accessToken), body: JSON.stringify({ isActive: false }) });
+
   // cleanup: deactivate the test item (cannot hard-delete — has ledger rows)
   await fetch(BASE + `/inventory/items/${item.id}`, { method: 'PATCH', headers: H(adm.accessToken), body: JSON.stringify({ isActive: false }) });
   console.log(`PASS — inventory full cycle OK (${item.code}: 50 → issue 3 auto-fulfilled → 47; short 999 → OUT_OF_STOCK queue → manual fulfill; spending 499,500)`);

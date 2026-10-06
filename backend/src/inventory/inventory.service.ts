@@ -294,7 +294,7 @@ export class InventoryService {
    */
   async pendingRequests() {
     return this.prisma.requestDocument.findMany({
-      where: { docType: 'OFFICE_SUPPLY_REQUEST', status: { in: ['APPROVED', 'COMPLETED'] }, supplyRequest: { status: 'PENDING' } },
+      where: { docType: 'OFFICE_SUPPLY_REQUEST', status: { in: ['APPROVED', 'COMPLETED'] }, supplyRequest: { status: { in: ['PENDING', 'PARTIAL'] } } },
       orderBy: { submittedAt: 'asc' },
       include: {
         requester: { select: { username: true, fullName: true } },
@@ -320,7 +320,9 @@ export class InventoryService {
     });
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
     const supply = doc.supplyRequest;
-    if (supply.status !== 'PENDING') throw new ConflictException(`Already ${supply.status}`);
+    // PARTIAL = a previous pass issued some lines and found others short —
+    // retry it after restocking (open lines are retried below)
+    if (!['PENDING', 'PARTIAL'].includes(supply.status)) throw new ConflictException(`Already ${supply.status}`);
     // COMPLETED here means "approved and auto-fulfilled" — a short request
     // completes with lines OUT_OF_STOCK and can be retried after restocking
     if (!['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS', 'COMPLETED'].includes(doc.status)) {
