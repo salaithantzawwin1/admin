@@ -231,9 +231,15 @@ export class CarsService {
     // below say so). assign()/reassign() flip the DB status to IN_USE at
     // assignment time, so derive the true badge from live windows instead:
     //   • a booking whose window covers now           → IN_USE (on the road)
-    //   • only future bookings (or DB IN_USE)         → BOOKED (committed, not rolling)
+    //   • only future bookings                        → BOOKED (committed, not rolling)
     //   • UNDER_MAINTENANCE / OUT_OF_SERVICE          → kept verbatim (physical)
     //   • otherwise                                   → AVAILABLE
+    // The stale-DB-IN_USE trust that used to sit here ('|| v.status === IN_USE'
+    // → BOOKED) was removed: a released assignment whose status flip back got
+    // lost anywhere between Oct 2-5 left 2P2942 flagged BOOKED with "No
+    // bookings in the next 7 days" — a contradiction the requester can see.
+    // The badge is now derived purely from live windows + running-late trips,
+    // exactly like Fleet listVehicles() does.
     // A trip the driver STARTED that runs past its window keeps covering "now"
     // through the base-status filter only until endDate — a running-late ride
     // would flash AVAILABLE and let someone else book the car. Treat the trip
@@ -266,7 +272,7 @@ export class CarsService {
           ? v.status
           : coversNow
             ? 'IN_USE'
-            : mine.length > 0 || lateEnd !== undefined || v.status === 'IN_USE'
+            : mine.length > 0 || lateEnd !== undefined
               ? 'BOOKED'
               : 'AVAILABLE';
       return {

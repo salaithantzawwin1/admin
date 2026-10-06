@@ -265,6 +265,7 @@ export class TripRemindersService {
       console.log(`[cars] auto-released ${stuck.length} expired assignment(s): ${stuck.map((a) => a.request.docNumber).join(', ')}`);
     }
     await this.freeOrphanedDrivers();
+    await this.renormalizeVehicleStatuses();
   }
 
   /**
@@ -292,6 +293,40 @@ export class TripRemindersService {
       }
     } catch (e) {
       this.logger.warn(`freeOrphanedDrivers failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Self-heal for vehicles: a car whose DB status still says IN_USE but which
+   * has no live claim on it (no active booking covering/after now, no STARTED
+   * trip) is physically back in the pool — the flag is an artifact (e.g. a
+   * release whose AVAILABLE write was lost, 2P2942 stuck BOOKED Oct 2-6).
+   * Mirrors freeOrphanedDrivers: repairs the DB column so assignment pickers
+   * and any other DB-status reader see the truth. Never throws.
+   */
+  private async renormalizeVehicleStatuses() {
+    try {
+      const now = new Date();
+      const inUse = await this.prisma.vehicle.findMany({
+        where: { status: 'IN_USE' },
+        select: {
+          id: true, vehicleNo: true,
+          carRequests: { where: { request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never } } }, select: { startDate: true, endDate: true } },
+          assignments: { where: { releasedAt: null, trip: { status: 'STARTED' } }, select: { id: true } },
+        },
+      });
+      for (const v of inUse) {
+        const hasLive = v.carRequests.some((b) => new Date(b.endDate) >= now) || v.assignments.length > 0;
+        if (!hasLive) {
+          await this.prisma.vehicle.update({ where: { id: v.id }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+          await this.prisma.auditLog.create({
+            data: { action: 'VEHICLE_AUTO_FREED', module: 'CARS', recordId: v.id, newValue: { reason: 'Status said IN_USE with no live booking/trip — renormalized by janitor cron' } },
+          }).catch(() => undefined);
+          this.logger.log(`renormalized vehicle ${v.vehicleNo} IN_USE → AVAILABLE (no live booking/trip)`);
+        }
+      }
+    } catch (e) {
+      this.logger.warn(`renormalizeVehicleStatuses failed: ${(e as Error).message}`);
     }
   }
 
