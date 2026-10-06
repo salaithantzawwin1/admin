@@ -574,6 +574,34 @@ async function main() {
     assert.strictEqual(ops.filter((o) => o[0] === 'notification.create').length, 2, 'each expired requester gets a bell notice');
   });
 
+  await test('renormalizeVehicleStatuses: stale IN_USE vehicle → AVAILABLE + audit; live claims untouched', async () => {
+    const ops: Array<[string, any]> = [];
+    const prismaRenorm: any = {
+      vehicle: {
+        findMany: async () => [
+          // artifact: released Oct 2, AVAILABLE flip lost → BOOKED with no bookings
+          { id: 'v-stale', vehicleNo: '2P2942', carRequests: [], assignments: [] },
+          // genuinely on the road: booking window still covers now
+          { id: 'v-road', vehicleNo: '5P8390', carRequests: [{ startDate: new Date(Date.now() - 3600e3), endDate: new Date(Date.now() + 3600e3) }], assignments: [] },
+          // STARTED trip past its window (running late) — keeps the flag
+          { id: 'v-late', vehicleNo: '9F1213', carRequests: [{ startDate: new Date(Date.now() - 7200e3), endDate: new Date(Date.now() - 3600e3) }], assignments: [{ id: 'a1' }] },
+        ],
+        update: async (p: any) => { ops.push(['vehicle.update', p]); return {}; },
+      },
+      auditLog: { create: async (p: any) => { ops.push(['auditLog.create', p.data]); return {}; } },
+    };
+    const svcRenorm: any = new TripRemindersService(
+      prismaRenorm,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+    await (svcRenorm as any).renormalizeVehicleStatuses();
+    const freed = ops.filter((o) => o[0] === 'vehicle.update' && o[1].data.status === 'AVAILABLE').map((o) => o[1].where.id);
+    assert.deepStrictEqual(freed, ['v-stale'], 'only the claim-less stale flag must be freed');
+    assert.ok(ops.some((o) => o[0] === 'auditLog.create' && o[1].action === 'VEHICLE_AUTO_FREED' && o[1].recordId === 'v-stale'), 'VEHICLE_AUTO_FREED audit must be written for the stale vehicle');
+  });
+
   await test('shiftHandoverDigest: sends on-road/ETA/blocked sections to cars.assign Telegram chats', async () => {
     const now = new Date();
     const sent: string[] = [];
