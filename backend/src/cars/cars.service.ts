@@ -44,9 +44,15 @@ export class CarsService {
     specialRequest?: string;
   }, actor: Actor) {
     const startDate = new Date(data.startDate);
-    // End optional: same-day 17:00 default (most requests are single-day trips)
+    // End optional: half-day slots take the Company Time Table window
+    // (AM→morningEnd, PM→eveningEnd); other slots default to same-day 17:00
+    // (most requests are single-day trips)
     const endDate = data.endDate ? new Date(data.endDate) : new Date(startDate);
-    if (!data.endDate) endDate.setHours(17, 0, 0, 0);
+    if (!data.endDate) {
+      const clock = (await this.slotEndClock(data.timeSlot)) ?? '17:00';
+      const [h, m] = clock.split(':').map(Number);
+      endDate.setHours(h, m, 0, 0);
+    }
     if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
       throw new BadRequestException('Invalid dates');
     }
@@ -174,6 +180,23 @@ export class CarsService {
       /* mock-prisma tests construct the service without TimetableService */
     }
     return 30;
+  }
+
+  /** Half-day End clock from Settings → Company Time Table:
+   *  HALF_DAY_AM → morningEnd, HALF_DAY_PM → eveningEnd; other slots → undefined.
+   *  Falls back to the car convention (12:00 / 17:00) when the settings module
+   *  is absent (unit-test mocks). Shared by createCarRequest's End default and
+   *  the Telegram /car flow — one source of truth for "when does AM end?". */
+  async slotEndClock(timeSlot?: string): Promise<string | undefined> {
+    if (timeSlot !== 'HALF_DAY_AM' && timeSlot !== 'HALF_DAY_PM') return undefined;
+    const fallback = timeSlot === 'HALF_DAY_AM' ? '12:00' : '17:00';
+    try {
+      const tt = await this.timetable.get();
+      const clock = timeSlot === 'HALF_DAY_AM' ? tt.morningEnd : tt.eveningEnd;
+      return typeof clock === 'string' && /^\d{2}:\d{2}$/.test(clock) ? clock : fallback;
+    } catch {
+      return fallback;
+    }
   }
 
   /**

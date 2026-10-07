@@ -1298,12 +1298,16 @@ export class TelegramCarActionsService {
       endIso = endRaw ? TelegramCarActionsService.parseCarDateStatic(endRaw) : null;
       if (!endIso) problems.push('❌ ပြန်ရောက်မည့်အချိန် (End) — Custom slot အတွက် လိုအပ်ပါသည်');
     } else if (startIso) {
-      // same-day 17:00 default (createCarRequest's rule) — but a late-evening
-      // start (e.g. 17:30) would make 17:00 the PAST and reject the request;
-      // never submit an End before Start: fall back to Start + 2h
+      // Half-day slots end at the Company Time Table clock (AM→morningEnd,
+      // PM→eveningEnd — same rule the web form prefills); Full day keeps the
+      // same-day 17:00 default — but a late-evening start (e.g. 17:30) would
+      // make that End the PAST and reject the request; never submit an End
+      // before Start: fall back to Start + 2h
+      const clock = (await this.halfDayEndClock(draft.slot)) ?? '17:00';
+      const [endH, endM] = clock.split(':').map(Number);
       const yangonDay = new Date(new Date(startIso).getTime() + 6.5 * 3600 * 1000);
-      const yangon1700 = Date.UTC(yangonDay.getUTCFullYear(), yangonDay.getUTCMonth(), yangonDay.getUTCDate(), 17, 0) - 6.5 * 3600 * 1000;
-      endIso = new Date(Math.max(yangon1700, new Date(startIso).getTime() + 2 * 3600 * 1000)).toISOString();
+      const yangonEnd = Date.UTC(yangonDay.getUTCFullYear(), yangonDay.getUTCMonth(), yangonDay.getUTCDate(), endH, endM) - 6.5 * 3600 * 1000;
+      endIso = new Date(Math.max(yangonEnd, new Date(startIso).getTime() + 2 * 3600 * 1000)).toISOString();
     }
     if (problems.length > 0) {
       await this.telegram.answer(callbackId, 'ဖြည့်စွက်ရန် လိုအပ်သေးသည်');
@@ -1369,6 +1373,17 @@ export class TelegramCarActionsService {
     await this.sendRawCard(chatId, '↩️ ကားတောင်းခံမှု ပယ်ဖျက်လိုက်ပါပြီ။ (Request cancelled — nothing was submitted.)');
   }
 
+  /** Half-day End clock via CarsService's Time Table lookup — the same source
+   *  the web form prefills from. Falls back to the car convention (12:00/17:00)
+   *  when unit-test mocks supply no CarsService. */
+  private async halfDayEndClock(slot: unknown): Promise<string | undefined> {
+    try {
+      return await this.cars.slotEndClock(slot as string | undefined);
+    } catch {
+      return slot === 'HALF_DAY_AM' ? '12:00' : slot === 'HALF_DAY_PM' ? '17:00' : undefined;
+    }
+  }
+
   /** The live form card — required fields up top; optional fields hidden behind
    *  [➕ ထပ်ဖြည့်မယ်] until the user opens them (9 always-on rows felt like homework). */
   private renderCarCard(chatId: string): string {
@@ -1394,6 +1409,12 @@ export class TelegramCarActionsService {
       CUSTOM_HOURS: 'Custom',
     };
     const startLabel = draft.returnTrip === 1 ? 'ကားလာခေါ်မယ့်အချိန်' : 'ထွက်မယ့်အချိန်';
+    // how the End is decided for non-custom slots: half-days follow the Company
+    // Time Table (clock computed at submit), Full day keeps the 17:00 fallback
+    const endHint =
+      draft.slot === 'HALF_DAY_AM' || draft.slot === 'HALF_DAY_PM'
+        ? ' (ပြန်ရောက်ချိန် — Company Time Table အတိုင်း ပြီးပါတယ်; ခန့်မှန်းသာ၊ Back at Office နှိပ်တာနဲ့ အမှန်ဖြစ်မည်)'
+        : ' (ပြန်ရောက်ချိန် မထည့်ရင် 17:00 — ခန့်မှန်းသာ၊ ကားသည် Back at Office နှိပ်တာနဲ့ အမှန်ဖြစ်မည်)';
     const returnEta = draft.returnTrip === 1 && draft.slot === 'CUSTOM_HOURS' && endOk
       ? `\n• ပြန်ရောက်မည့်အချိန် (ETA): ${escapeHtml(String(endRaw))} — အဲ့ဒီအချိန် ကား ပြန်အသုံးပြုနိုင်ပါမယ်`
       : '';
@@ -1402,7 +1423,7 @@ export class TelegramCarActionsService {
       '────────────────',
       draft.destination ? `✅ သွားမယ့်နေရာ: ${escapeHtml(String(draft.destination))}` : '1️⃣ သွားမယ့်နေရာ — ဒီ chat မှာ ရေးပါ (ဥပမာ မန္တလေး)',
       draft.start ? (startOk ? `✅ ${startLabel}: ${escapeHtml(startRaw)}${draft.returnTrip === 1 ? ' (ဒီနေ့)' : ''}` : bad(startLabel)) : `2️⃣ ${startLabel} — အောက်က ခလုတ်နှိပ် / ရေးပါ (ဥပမာ 5/10 09:00)`,
-      `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : ' (ပြန်ရောက်ချိန် မထည့်ရင် 17:00 — ခန့်မှန်းသာ၊ ကားသည် Back at Office နှိပ်တာနဲ့ အမှန်ဖြစ်မည်)'}`,
+      `• အချိန်အပိုင်းအခြား: ${draft.slot ? slotLabel[String(draft.slot)] : 'Full day'}${draft.slot === 'CUSTOM_HOURS' ? (endOk ? ` (✅ ပြန်ရောက်: ${escapeHtml(endRaw)})` : ' (❌ ပြန်ရောက်ချိန် လိုအပ်)') : endHint}`,
       ...(returnEta ? [returnEta] : []),
     ];
     const optional = [

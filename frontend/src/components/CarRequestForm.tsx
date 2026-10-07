@@ -15,6 +15,22 @@ function toLocal(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/** Built-in half-day End clocks — replaced on mount by the Company Time Table
+ *  (Settings) so the form and the Telegram flow share one source of truth. */
+const SLOT_END_FALLBACK: Record<string, string> = { HALF_DAY_AM: '12:00', HALF_DAY_PM: '17:00' };
+
+/** Same calendar day as a datetime-local string, at the given HH:mm. */
+function atTime(dateLocal: string, hhmm: string): string {
+  return `${dateLocal.slice(0, 10)}T${hhmm}`;
+}
+
+/** "17:30" → "5:30 PM" — the advisory text shows the Time Table clock. */
+function fmtClock12(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number);
+  if (!Number.isFinite(h)) return hhmm;
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
 /**
  * Quick car-request form shared by the Car Requests page.
  * - Start defaults to now (employee picks the time only)
@@ -38,6 +54,12 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
   // blur-tracking so "required" hints only appear once the user has been in the field
   const [touched, setTouched] = useState<{ destination?: boolean; startDate?: boolean; endDate?: boolean }>({});
   const touch = (k: 'destination' | 'startDate' | 'endDate') => setTouched((t) => ({ ...t, [k]: true }));
+  // End is currently auto-filled from the half-day slot (follows Start changes
+  // until the requester edits End manually)
+  const [endPinned, setEndPinned] = useState(false);
+  // half-day End clocks from Settings → Company Time Table (AM→morningEnd,
+  // PM→eveningEnd); the built-in 12:00/17:00 stands until the fetch lands
+  const [slotEnds, setSlotEnds] = useState<Record<string, string>>(SLOT_END_FALLBACK);
   // monotonic token for the clash-lookup effect (see effect below)
   const clashRun = useRef(0);
   const navigate = useNavigate();
@@ -45,6 +67,43 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
   // Custom hours needs an explicit end; other slots may omit it (server defaults to 17:00 same day)
   const needsEnd = form.timeSlot === 'CUSTOM_HOURS';
   const valid = form.destination && form.startDate && (!needsEnd || form.endDate);
+
+  // Slot picker: half-day slots own the End — the clock comes from the Company
+  // Time Table (e.g. AM ends at morningEnd, PM at eveningEnd).
+  // If the slot window already ended for the chosen Start (AM picked after noon),
+  // nothing is prefilled (an auto-End would sit before the Start) — the advisory
+  // hint below guides the requester instead, and submission stays possible.
+  const changeSlot = (slot: string) => {
+    const endClock = slotEnds[slot];
+    if (endClock && form.startDate) {
+      const end = atTime(form.startDate, endClock);
+      if (end > form.startDate) {
+        setEndPinned(true);
+        setForm({ ...form, timeSlot: slot, endDate: end });
+        return;
+      }
+      setEndPinned(false);
+      setForm({ ...form, timeSlot: slot, endDate: '' });
+      return;
+    }
+    setEndPinned(false);
+    setForm({ ...form, timeSlot: slot });
+  };
+
+  // Company Time Table drives the half-day auto-End (Settings → Time Table is
+  // the single source; if the fetch fails the built-in fallback clocks stand).
+  useEffect(() => {
+    api<{ morningEnd?: string; eveningEnd?: string }>('/settings/timetable')
+      .then((t) =>
+        setSlotEnds({
+          HALF_DAY_AM: t.morningEnd || SLOT_END_FALLBACK.HALF_DAY_AM,
+          HALF_DAY_PM: t.eveningEnd || SLOT_END_FALLBACK.HALF_DAY_PM,
+        }),
+      )
+      .catch(() => {
+        /* keep the built-in 12:00/17:00 fallback clocks */
+      });
+  }, []);
 
   // Custom hours: prefill End with the Start date (+1h) so the requester only
   // adjusts the hour — the date is already the same day.
@@ -56,6 +115,21 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.timeSlot, form.startDate]);
+
+  // Half-day End follows the Start while the slot owns it (moving the date to
+  // tomorrow moves the auto-End too); cleared when the slot window can't hold it.
+  // slotEnds is a dep so a timetable that lands after the pick re-derives it.
+  useEffect(() => {
+    if (!endPinned) return;
+    const endClock = slotEnds[form.timeSlot];
+    if (!endClock) return;
+    setForm((f) => {
+      if (!f.startDate) return f;
+      const end = atTime(f.startDate, endClock);
+      return end > f.startDate ? { ...f, endDate: end } : { ...f, endDate: '' };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.startDate, form.timeSlot, endPinned, slotEnds]);
 
   // warn about same-vehicle double bookings when the window is fully known.
   // A run-token guards against the classic race: an older slow response landing
@@ -125,6 +199,14 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
     undefined;
   const clashMsg = hasClash ? 'This window overlaps an existing booking — see the warning below' : undefined;
 
+  // Advisory (non-blocking): the chosen half-day window is already over TODAY —
+  // e.g. Half Day (AM) picked after noon. Past dates (deliberate backdating) and
+  // future dates never trigger it.
+  const slotEndClock = slotEnds[form.timeSlot];
+  const slotEndStr = form.startDate && slotEndClock ? atTime(form.startDate, slotEndClock) : '';
+  const isToday = !!form.startDate && form.startDate.slice(0, 10) === toLocal(new Date()).slice(0, 10);
+  const slotPassed = !!(slotEndStr && isToday && slotEndStr <= toLocal(new Date()));
+
   return (
     <div className="space-y-3">
       {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
@@ -137,7 +219,7 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
         </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">
-            End {needsEnd ? '* (date prefilled — pick the hour)' : '(optional estimate — defaults to 5:00 PM; Back at Office overrides)'}
+            End {needsEnd ? '* (date prefilled — pick the hour)' : endPinned ? '(auto from Half Day — editable)' : '(optional estimate — defaults to 5:00 PM; Back at Office overrides)'}
           </label>
           <Input
             type="datetime-local"
@@ -145,12 +227,15 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
             describe="Estimate only — the driver's Back at Office frees the car early; empty = 5:00 PM assumed"
             onBlur={() => touch('endDate')}
             value={form.endDate}
-            onChange={(e) => setForm({ ...form, endDate: e.target.value })}
+            onChange={(e) => {
+              setEndPinned(false); // manual edit — the slot no longer owns End
+              setForm({ ...form, endDate: e.target.value });
+            }}
             min={form.startDate || undefined}
             title="Estimate only — if the trip finishes early, the driver's Back at Office frees the car immediately; if you omit this, 5:00 PM is assumed"
           />
         </div>
-        <Select value={form.timeSlot} onChange={(e) => setForm({ ...form, timeSlot: e.target.value })}>
+        <Select value={form.timeSlot} onChange={(e) => changeSlot(e.target.value)}>
           <option value="FULL_DAY">Full day</option>
           <option value="HALF_DAY_AM">Half day (AM)</option>
           <option value="HALF_DAY_PM">Half day (PM)</option>
@@ -181,6 +266,16 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
         value={form.description}
         onChange={(e) => setForm({ ...form, description: e.target.value })}
       />
+
+      {slotPassed && (
+        <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          🌅 The {form.timeSlot === 'HALF_DAY_AM' ? 'AM' : 'PM'} half of{' '}
+          {new Date(form.startDate).toLocaleDateString()} already ended
+          {' '}({fmtClock12(slotEndClock)}). You can still submit
+          {' '}(e.g. for the record), but consider <strong>Half Day ({form.timeSlot === 'HALF_DAY_AM' ? 'PM' : 'AM'})</strong>
+          {' '}or <strong>Custom hours</strong> instead.
+        </div>
+      )}
 
       {blocked.length > 0 && (
         <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
