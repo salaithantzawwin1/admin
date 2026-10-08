@@ -22,6 +22,98 @@ const ROLES = [
   ['EMPLOYEE', 'Creates own requests, reads announcements'],
 ];
 
+/**
+ * Seed one approval workflow per (module, amount band) — idempotent.
+ * Since Phase 2 (design §8) a module may have several active workflows, each
+ * covering an amount band [minAmount, maxAmount] (inclusive, optional); the
+ * workflow with neither bound is the module default.
+ */
+async function seedWorkflow(module, name, bounds = {}, steps = []) {
+  let wf = await prisma.approvalWorkflow.findFirst({
+    where: { module, minAmount: bounds.minAmount ?? null, maxAmount: bounds.maxAmount ?? null },
+  });
+  if (!wf) {
+    wf = await prisma.approvalWorkflow.create({
+      data: { module, name, active: true, minAmount: bounds.minAmount, maxAmount: bounds.maxAmount },
+    });
+  }
+  const stepCount = await prisma.approvalStep.count({ where: { workflowId: wf.id } });
+  if (stepCount === 0 && steps.length > 0) {
+    await prisma.approvalStep.createMany({
+      data: steps.map(([level, roleName]) => ({ workflowId: wf.id, level, roleName, minApprovals: 1 })),
+    });
+  }
+  return wf;
+}
+
+/**
+ * Default workflows + Purchase Request amount bands (Procurement design §8).
+ * Idempotent — runs on EVERY seed in EVERY environment (production included):
+ * routing data must exist before the first PR is submitted, and the bands are
+ * EXAMPLE thresholds to adjust per company policy by editing the rows.
+ */
+async function seedWorkflows() {
+  // ----- default GENERIC_REQUEST workflow: DEPARTMENT_HEAD → MANAGEMENT -----
+  await seedWorkflow('GENERIC_REQUEST', 'General Request Approval', {}, [
+    [1, 'DEPARTMENT_HEAD'],
+    [2, 'MANAGEMENT'],
+  ]);
+  console.log('Default workflow seeded.');
+
+  // ----- Car Request workflow: single-step approval by ADMINISTRATION (Plan §6) -----
+  await seedWorkflow('CAR_REQUEST', 'Car Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
+  console.log('CAR_REQUEST workflow seeded (L1 ADMINISTRATION).');
+
+  // ----- Meeting Room Request workflow: single-step approval by ADMINISTRATION (same flow as cars) -----
+  await seedWorkflow('MEETING_ROOM_REQUEST', 'Meeting Room Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
+  console.log('MEETING_ROOM_REQUEST workflow seeded (L1 ADMINISTRATION).');
+
+  // ----- Office Supply (Inventory) workflow: single-step approval by ADMINISTRATION (Plan §12) -----
+  await seedWorkflow('OFFICE_SUPPLY_REQUEST', 'Office Supply Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
+  console.log('OFFICE_SUPPLY_REQUEST workflow seeded (L1 ADMINISTRATION).');
+
+  // ----- Purchase Request amount bands (design §8 — EXAMPLE thresholds,
+  //       adjust to company policy by editing/deleting the workflow rows) -----
+  const prBands = [
+    {
+      name: 'Purchase Request — up to 500,000 MMK',
+      bounds: { maxAmount: 500000 },
+      steps: [[1, 'DEPARTMENT_HEAD']],
+    },
+    {
+      name: 'Purchase Request — 500,001 to 2,000,000 MMK',
+      bounds: { minAmount: 500001, maxAmount: 2000000 },
+      steps: [
+        [1, 'DEPARTMENT_HEAD'],
+        [2, 'ADMINISTRATION'],
+      ],
+    },
+    {
+      name: 'Purchase Request — 2,000,001 to 10,000,000 MMK',
+      bounds: { minAmount: 2000001, maxAmount: 10000000 },
+      steps: [
+        [1, 'DEPARTMENT_HEAD'],
+        [2, 'ADMINISTRATION'],
+        [3, 'FINANCE'],
+      ],
+    },
+    {
+      name: 'Purchase Request — above 10,000,000 MMK',
+      bounds: { minAmount: 10000001 },
+      steps: [
+        [1, 'DEPARTMENT_HEAD'],
+        [2, 'ADMINISTRATION'],
+        [3, 'FINANCE'],
+        [4, 'MANAGEMENT'],
+      ],
+    },
+  ];
+  for (const band of prBands) {
+    await seedWorkflow('PURCHASE_REQUEST', band.name, band.bounds, band.steps);
+  }
+  console.log('PURCHASE_REQUEST amount-band workflows seeded (design §8 examples).');
+}
+
 async function main() {
   const seedPassword = process.env.SEED_PASSWORD || 'ChangeMe#2026';
   const hash = await bcrypt.hash(seedPassword, 10);
@@ -34,6 +126,7 @@ async function main() {
     });
   }
   console.log('Roles seeded:', ROLES.length);
+  await seedWorkflows();
   if (IS_PROD) {
     console.log('Production mode — skipping demo data seed (only sysadmin + roles + workflows).');
     await prisma.$disconnect();
@@ -111,90 +204,6 @@ async function main() {
     },
   });
   console.log('Demo org data seeded.');
-
-  /**
-   * Seed one approval workflow per (module, amount band) — idempotent.
-   * Since Phase 2 (design §8) a module may have several active workflows, each
-   * covering an amount band [minAmount, maxAmount] (inclusive, optional); the
-   * workflow with neither bound is the module default.
-   */
-  async function seedWorkflow(module, name, bounds = {}, steps = []) {
-    let wf = await prisma.approvalWorkflow.findFirst({
-      where: { module, minAmount: bounds.minAmount ?? null, maxAmount: bounds.maxAmount ?? null },
-    });
-    if (!wf) {
-      wf = await prisma.approvalWorkflow.create({
-        data: { module, name, active: true, minAmount: bounds.minAmount, maxAmount: bounds.maxAmount },
-      });
-    }
-    const stepCount = await prisma.approvalStep.count({ where: { workflowId: wf.id } });
-    if (stepCount === 0 && steps.length > 0) {
-      await prisma.approvalStep.createMany({
-        data: steps.map(([level, roleName]) => ({ workflowId: wf.id, level, roleName, minApprovals: 1 })),
-      });
-    }
-    return wf;
-  }
-
-  // ----- default GENERIC_REQUEST workflow: DEPARTMENT_HEAD → MANAGEMENT -----
-  await seedWorkflow('GENERIC_REQUEST', 'General Request Approval', {}, [
-    [1, 'DEPARTMENT_HEAD'],
-    [2, 'MANAGEMENT'],
-  ]);
-  console.log('Default workflow seeded.');
-
-  // ----- Car Request workflow: single-step approval by ADMINISTRATION (Plan §6) -----
-  await seedWorkflow('CAR_REQUEST', 'Car Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
-  console.log('CAR_REQUEST workflow seeded (L1 ADMINISTRATION).');
-
-  // ----- Meeting Room Request workflow: single-step approval by ADMINISTRATION (same flow as cars) -----
-  await seedWorkflow('MEETING_ROOM_REQUEST', 'Meeting Room Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
-  console.log('MEETING_ROOM_REQUEST workflow seeded (L1 ADMINISTRATION).');
-
-  // ----- Office Supply (Inventory) workflow: single-step approval by ADMINISTRATION (Plan §12) -----
-  await seedWorkflow('OFFICE_SUPPLY_REQUEST', 'Office Supply Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
-  console.log('OFFICE_SUPPLY_REQUEST workflow seeded (L1 ADMINISTRATION).');
-
-  // ----- Purchase Request amount bands (Procurement design §8 — EXAMPLE thresholds,
-  //       adjust to company policy by editing/deleting the workflow rows) -----
-  const prBands = [
-    {
-      name: 'Purchase Request — up to 500,000 MMK',
-      bounds: { maxAmount: 500000 },
-      steps: [[1, 'DEPARTMENT_HEAD']],
-    },
-    {
-      name: 'Purchase Request — 500,001 to 2,000,000 MMK',
-      bounds: { minAmount: 500001, maxAmount: 2000000 },
-      steps: [
-        [1, 'DEPARTMENT_HEAD'],
-        [2, 'ADMINISTRATION'],
-      ],
-    },
-    {
-      name: 'Purchase Request — 2,000,001 to 10,000,000 MMK',
-      bounds: { minAmount: 2000001, maxAmount: 10000000 },
-      steps: [
-        [1, 'DEPARTMENT_HEAD'],
-        [2, 'ADMINISTRATION'],
-        [3, 'FINANCE'],
-      ],
-    },
-    {
-      name: 'Purchase Request — above 10,000,000 MMK',
-      bounds: { minAmount: 10000001 },
-      steps: [
-        [1, 'DEPARTMENT_HEAD'],
-        [2, 'ADMINISTRATION'],
-        [3, 'FINANCE'],
-        [4, 'MANAGEMENT'],
-      ],
-    },
-  ];
-  for (const band of prBands) {
-    await seedWorkflow('PURCHASE_REQUEST', band.name, band.bounds, band.steps);
-  }
-  console.log('PURCHASE_REQUEST amount-band workflows seeded (design §8 examples).');
 
   // ----- Inventory: seed starter stationery items (idempotent by code) -----
   const inventoryDefaults = [
