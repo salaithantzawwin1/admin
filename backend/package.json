@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "ts-node src/main.ts",
-    "test": "node -r ts-node/register/transpile-only test/cars-fixes.test.ts && node -r ts-node/register/transpile-only test/fleet-vehicle-creation.test.ts && node -r ts-node/register/transpile-only test/delegations-override.test.ts && node -r ts-node/register/transpile-only test/rbac-deny-memory.test.ts && node -r ts-node/register/transpile-only test/telegram-car-request.test.ts && node -r ts-node/register/transpile-only test/telegram-joins.test.ts && node -r ts-node/register/transpile-only test/procurement-pr.test.ts"
+    "test": "node -r ts-node/register/transpile-only test/cars-fixes.test.ts && node -r ts-node/register/transpile-only test/fleet-vehicle-creation.test.ts && node -r ts-node/register/transpile-only test/delegations-override.test.ts && node -r ts-node/register/transpile-only test/rbac-deny-memory.test.ts && node -r ts-node/register/transpile-only test/telegram-car-request.test.ts && node -r ts-node/register/transpile-only test/telegram-joins.test.ts && node -r ts-node/register/transpile-only test/procurement-pr.test.ts && node -r ts-node/register/transpile-only test/workflow-amount-routing.test.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.1",

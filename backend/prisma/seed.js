@@ -112,65 +112,89 @@ async function main() {
   });
   console.log('Demo org data seeded.');
 
-  // ----- Phase 2: default GENERIC_REQUEST workflow: DEPARTMENT_HEAD → MANAGEMENT -----
-  const wf = await prisma.approvalWorkflow.upsert({
-    where: { module: 'GENERIC_REQUEST' },
-    update: {},
-    create: { module: 'GENERIC_REQUEST', name: 'General Request Approval', active: true },
-  });
-  const stepCount = await prisma.approvalStep.count({ where: { workflowId: wf.id } });
-  if (stepCount === 0) {
-    await prisma.approvalStep.createMany({
-      data: [
-        { workflowId: wf.id, level: 1, roleName: 'DEPARTMENT_HEAD', minApprovals: 1 },
-        { workflowId: wf.id, level: 2, roleName: 'MANAGEMENT', minApprovals: 1 },
-      ],
+  /**
+   * Seed one approval workflow per (module, amount band) — idempotent.
+   * Since Phase 2 (design §8) a module may have several active workflows, each
+   * covering an amount band [minAmount, maxAmount] (inclusive, optional); the
+   * workflow with neither bound is the module default.
+   */
+  async function seedWorkflow(module, name, bounds = {}, steps = []) {
+    let wf = await prisma.approvalWorkflow.findFirst({
+      where: { module, minAmount: bounds.minAmount ?? null, maxAmount: bounds.maxAmount ?? null },
     });
+    if (!wf) {
+      wf = await prisma.approvalWorkflow.create({
+        data: { module, name, active: true, minAmount: bounds.minAmount, maxAmount: bounds.maxAmount },
+      });
+    }
+    const stepCount = await prisma.approvalStep.count({ where: { workflowId: wf.id } });
+    if (stepCount === 0 && steps.length > 0) {
+      await prisma.approvalStep.createMany({
+        data: steps.map(([level, roleName]) => ({ workflowId: wf.id, level, roleName, minApprovals: 1 })),
+      });
+    }
+    return wf;
   }
+
+  // ----- default GENERIC_REQUEST workflow: DEPARTMENT_HEAD → MANAGEMENT -----
+  await seedWorkflow('GENERIC_REQUEST', 'General Request Approval', {}, [
+    [1, 'DEPARTMENT_HEAD'],
+    [2, 'MANAGEMENT'],
+  ]);
   console.log('Default workflow seeded.');
 
   // ----- Car Request workflow: single-step approval by ADMINISTRATION (Plan §6) -----
-  const carWf = await prisma.approvalWorkflow.upsert({
-    where: { module: 'CAR_REQUEST' },
-    update: {},
-    create: { module: 'CAR_REQUEST', name: 'Car Request — Administration approval', active: true },
-  });
-  const carStepCount = await prisma.approvalStep.count({ where: { workflowId: carWf.id } });
-  if (carStepCount === 0) {
-    await prisma.approvalStep.create({
-      data: { workflowId: carWf.id, level: 1, roleName: 'ADMINISTRATION', minApprovals: 1 },
-    });
-    console.log('CAR_REQUEST workflow seeded (L1 ADMINISTRATION).');
-  }
+  await seedWorkflow('CAR_REQUEST', 'Car Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
+  console.log('CAR_REQUEST workflow seeded (L1 ADMINISTRATION).');
 
   // ----- Meeting Room Request workflow: single-step approval by ADMINISTRATION (same flow as cars) -----
-  const mtgWf = await prisma.approvalWorkflow.upsert({
-    where: { module: 'MEETING_ROOM_REQUEST' },
-    update: {},
-    create: { module: 'MEETING_ROOM_REQUEST', name: 'Meeting Room Request — Administration approval', active: true },
-  });
-  const mtgStepCount = await prisma.approvalStep.count({ where: { workflowId: mtgWf.id } });
-  if (mtgStepCount === 0) {
-    await prisma.approvalStep.create({
-      data: { workflowId: mtgWf.id, level: 1, roleName: 'ADMINISTRATION', minApprovals: 1 },
-    });
-    console.log('MEETING_ROOM_REQUEST workflow seeded (L1 ADMINISTRATION).');
-  }
-
+  await seedWorkflow('MEETING_ROOM_REQUEST', 'Meeting Room Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
+  console.log('MEETING_ROOM_REQUEST workflow seeded (L1 ADMINISTRATION).');
 
   // ----- Office Supply (Inventory) workflow: single-step approval by ADMINISTRATION (Plan §12) -----
-  const osrWf = await prisma.approvalWorkflow.upsert({
-    where: { module: 'OFFICE_SUPPLY_REQUEST' },
-    update: {},
-    create: { module: 'OFFICE_SUPPLY_REQUEST', name: 'Office Supply Request — Administration approval', active: true },
-  });
-  const osrStepCount = await prisma.approvalStep.count({ where: { workflowId: osrWf.id } });
-  if (osrStepCount === 0) {
-    await prisma.approvalStep.create({
-      data: { workflowId: osrWf.id, level: 1, roleName: 'ADMINISTRATION', minApprovals: 1 },
-    });
-    console.log('OFFICE_SUPPLY_REQUEST workflow seeded (L1 ADMINISTRATION).');
+  await seedWorkflow('OFFICE_SUPPLY_REQUEST', 'Office Supply Request — Administration approval', {}, [[1, 'ADMINISTRATION']]);
+  console.log('OFFICE_SUPPLY_REQUEST workflow seeded (L1 ADMINISTRATION).');
+
+  // ----- Purchase Request amount bands (Procurement design §8 — EXAMPLE thresholds,
+  //       adjust to company policy by editing/deleting the workflow rows) -----
+  const prBands = [
+    {
+      name: 'Purchase Request — up to 500,000 MMK',
+      bounds: { maxAmount: 500000 },
+      steps: [[1, 'DEPARTMENT_HEAD']],
+    },
+    {
+      name: 'Purchase Request — 500,001 to 2,000,000 MMK',
+      bounds: { minAmount: 500001, maxAmount: 2000000 },
+      steps: [
+        [1, 'DEPARTMENT_HEAD'],
+        [2, 'ADMINISTRATION'],
+      ],
+    },
+    {
+      name: 'Purchase Request — 2,000,001 to 10,000,000 MMK',
+      bounds: { minAmount: 2000001, maxAmount: 10000000 },
+      steps: [
+        [1, 'DEPARTMENT_HEAD'],
+        [2, 'ADMINISTRATION'],
+        [3, 'FINANCE'],
+      ],
+    },
+    {
+      name: 'Purchase Request — above 10,000,000 MMK',
+      bounds: { minAmount: 10000001 },
+      steps: [
+        [1, 'DEPARTMENT_HEAD'],
+        [2, 'ADMINISTRATION'],
+        [3, 'FINANCE'],
+        [4, 'MANAGEMENT'],
+      ],
+    },
+  ];
+  for (const band of prBands) {
+    await seedWorkflow('PURCHASE_REQUEST', band.name, band.bounds, band.steps);
   }
+  console.log('PURCHASE_REQUEST amount-band workflows seeded (design §8 examples).');
 
   // ----- Inventory: seed starter stationery items (idempotent by code) -----
   const inventoryDefaults = [

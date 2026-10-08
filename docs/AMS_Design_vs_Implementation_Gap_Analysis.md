@@ -1,16 +1,38 @@
 # AMS — Design vs. Implementation Gap Analysis
 
-> **Scope:** `AMS_DEVELOPMENT_SPEC_v1.2.md` + `AMS_Procurement_Management_Complete_Design.md` compared against the actual AMS codebase (backend `main` @ `398aa37`, 2026-10-08).
+> **Scope:** `AMS_DEVELOPMENT_SPEC_v1.2.md` + `AMS_Procurement_Management_Complete_Design.md` compared against the actual AMS codebase (backend `main` @ `eba87c4`, 2026-10-08).
 > **Purpose:** Identify what is implemented, what is missing, and recommend an achievable path to close the gaps.
-> **Verified against:** `backend/src/*` (20 modules), `backend/prisma/schema.prisma` (43 models), `frontend/src/pages/*`, `.github/workflows/ci.yml`.
+> **Verified against:** `backend/src/*` (21 modules), `backend/prisma/schema.prisma` (50 models), `frontend/src/pages/*`, `.github/workflows/ci.yml`.
 
 ---
 
 ## 0. Executive Summary (အကျဉ်းချုပ်)
 
-- **ဒီဇိုင်းစာတမ်းနှစ်ခုစလုံးသည် လက်ရှိ codebase နှင့် များစွာ ကွာဟနေပါသည်** — စာတမ်းများက Asset / Account / Invoice / Petty Cash / Procurement အပြည့်အစုံကို ဖော်ပြထားသော်လည်း လက်ရှိတွင် **မည်သည့် model မှ မရှိသေးပါ** (schema.prisma တွင် 43 model ရှိသည့်အနက် ဝန်ဆောင်မှု workflow များသာ အဓိက)။
+- **ဒီဇိုင်းစာတမ်းနှစ်ခုစလုံးသည် လက်ရှိ codebase နှင့် များစွာ ကွာဟနေပါသည်** — စာတမ်းများက Asset / Account / Invoice / Petty Cash / Procurement အပြည့်အစုံကို ဖော်ပြထားသော်လည်း လက်ရှိတွင် **မည်သည့် model မှ မရှိသေးပါ** (schema.prisma တွင် 43 model ရှိသည့်အနက် ဝန်ဆောင်မှု workflow များသာ အဓိက)။ *(နောက်ဆုံးရအခြေအနေ — 2026-10-08: P1 Purchase Request နှင့် Account/Asset foundation models များ ထည့်သွင်းပြီးဖြစ်သဖြင့် အောက်ရှိ Implementation Progress Log ကို ကြည့်ပါ။)*
 - **အားသာချက်**: Approval framework (Procurement §31 တောင်းဆိုချက်)၊ Audit trail (§32)၊ Vendor master၊ Stock ledger၊ Document numbering — အားလုံး **ရှိပြီးသား** ဖြစ်သဖြင့် Procurement phases P3–P10 သည် အခြေခံကောင်းပေါ်တွင် တည်ဆောက်နိုင်သည်။
-- **အကြံပြုချက်**: Procurement §44 ရဲ့ P1 (Purchase Request) ကို ပထမဦးစွာ first-class entity အဖြစ် တည်ဆောက်ပါ။ လက်ရှိ `SupplierPurchaseDraft → PURCHASE_REQUEST` စနစ်သည် ယာယီ bridge သာဖြစ်ပါသည်။
+- **အကြံပြုချက်**: Procurement §44 ရဲ့ P1 (Purchase Request) ကို ပထမဦးစွာ first-class entity အဖြစ် တည်ဆောက်ပါ — ✅ **2026-10-08 တွင် အကောင်အထည်ဖော်ပြီး** (testing stack တွင် deploy + live e2e စစ်ဆေးပြီး၊ production deploy သည် ခွင့်ပြုချက်စောင့်နေဆဲ)။ `SupplierPurchaseDraft → PURCHASE_REQUEST` ယာယီ bridge ကိုလည်း real PR entity ဖြင့် အစားထိုးပြီး ဖြစ်ပါသည်။
+
+---
+
+## 0.1 Implementation Progress Log (ပြင်ဆင်မှု မှတ်တမ်း)
+
+### 2026-10-08
+
+| # | Fix / Feature | Commit | Deployed | Doc status affected |
+|---|---|---|---|---|
+| 1 | **Meeting request modal UI fix** — added the missing field labels (`Number of attendees *`, `External company / person *`) with proper `htmlFor`/`id` associations, and clamped cleared/NaN attendee counts back to 1. | `e8fdb77` | ✅ Production (:80), live-verified | — |
+| 2 | **Car request form UI fix** — clarified the End-time label variants (`End (optional estimate)` / `End * (pick the hour)` / `End (auto from Half Day)`) and added Time slot + Passengers labels. | `398aa37` | ✅ Production (:80), live-verified | — |
+| 3 | **Design docs committed with housekeeping** — spec header Version 1.0 → 1.2, OS row corrected to Ubuntu 22.04 LTS (actual VM: 22.04.5), `Decimal(12,2)` convention stated explicitly, Procurement doc Basis/status notes updated (Inventory is live, Vendor = `Supplier`, §10 stock check targets the existing ledger). This gap analysis itself was created and committed in the same commit. | `0dee23b` | n/a (docs only) | §4 items 1–6 closed; R1 done |
+| 4 | **Procurement Phase 1 — Purchase Request as a first-class entity (R2 + R4)** — 7 new Prisma models (`PurchaseRequest`, `PurchaseRequestItem`, `Account`, `AccountCategory`, `Asset`, `AssetCategory`, `Location`) + `PurchasePriority` enum (migration `…44_procurement_foundation`); new `backend/src/procurement/` module (create / list mine-vs-all / detail / draft-update guard / account CRUD / supplier-draft bridge, `PR-…` numbering via `DocumentSequence`, approvals via the generic workflow engine); `suppliers.service.ts` now builds a real PR instead of a text description; RBAC `procurement.read` / `procurement.manage` (catalog + DEFAULT_GRANTS + matrix labels); frontend `/procurement` page (cart-style line items, estimated total, Save as Draft / Submit) + `PurchaseRequestPanel` in RequestDetail; 11-case test suite `procurement-pr.test.ts`. | `eba87c4` | ✅ Testing (:8030) + live e2e (`PR-202610-0001` created & submitted to level-1 approval); ⏳ **Production deploy pending user approval** (migration 44 not yet applied to prod DB) | §3 P1 ⚠️→✅; §1.1/§1.2; §2 §14 & §62–64; R2 done, R4 foundation done |
+
+**Next up:** Phase 2 — amount-based approval rules (R3).
+
+### 2026-10-08 (later same day)
+
+| # | Fix / Feature | Commit | Deployed | Doc status affected |
+|---|---|---|---|---|
+| 5 | **Phase 1 → Production** — deploy-prod.sh ran clean; backend health `ok`, **migration 44 applied to the prod DB** (all 7 procurement tables verified via psql), `/api/procurement/requests` live (401 unauthenticated), UI 200. | `eba87c4` (already on origin) | ✅ **Production (:80)** | §3 P1 → ✅ fully deployed |
+| 6 | **Procurement Phase 2 — amount-based approval routing (R3, design §8)** — `ApprovalWorkflow` gained `minAmount`/`maxAmount` bands (migration 45 drops the one-workflow-per-module unique constraint, adds a module+active index); `WorkflowService.workflowFor(docType, amount)` now selects the active workflow whose band contains the PR's estimated total (inclusive bounds), falling back to the module's unbounded default then to GENERIC_REQUEST; submit/approve/reject/return/detail/inbox/cancel/escalation/notifications all resolve the workflow through the same amount-aware path; seed creates the four §8 example PURCHASE_REQUEST bands (≤500K: DH / ≤2M: +Administration / ≤10M: +Finance / >10M: +Management — examples, adjustable per company policy); 8-case test suite `workflow-amount-routing.test.ts` (band boundaries, multi-item totals, non-amount doc types never look up an amount, fallback behaviour). | _uncommitted_ | ⏳ local verification only (tests 8/8, all 8 suites pass, backend+frontend tsc clean) — **testing/prod deploy pending** | §3 P2 amount rules → ✅ implemented; R3 → ✅ done |
 
 ---
 
@@ -25,7 +47,8 @@
 | `users` | User accounts, passwords, status |
 | `workflow` | **Generic approval engine** — `ApprovalWorkflow`/`ApprovalStep`/`RequestDocument`/`ApprovalAction`, multi-level, delegations, escalation, return, cancel-approved |
 | `inventory` | Items, stock ledger (`StockTransaction`), supply requests (cart → fulfill/reject/admin-cancel), restock, low-stock alerts, reorder suggestions, spending/purchase-totals/ledger CSV, movement summary, item images |
-| `suppliers` | Vendor master, contact logs, **PO drafts** (`SupplierPurchaseDraft` + lines) → submit creates a `PURCHASE_REQUEST` document |
+| `suppliers` | Vendor master, contact logs, **PO drafts** (`SupplierPurchaseDraft` + lines) → submit now creates a **real PR entity** via the procurement module (2026-10-08) |
+| `procurement` | **NEW 2026-10-08 (Phase 1)** — PR create / list / detail / draft-update guard, account & asset lookups, account CRUD, supplier-draft → PR bridge |
 | `cars`, `fleet` | Full vehicle request lifecycle + Telegram bot approvals |
 | `meeting-rooms` | Rooms, facility master, availability, assignment queue |
 | `announcements` | Rich text, targeting, read/ack |
@@ -37,11 +60,11 @@
 | `telegram` | Join requests, bot bindings |
 | `events`, `health`, `prisma`, `util` | Infrastructure |
 
-### 1.2 Prisma schema (43 models)
+### 1.2 Prisma schema (50 models)
 
-Present: User/Role/Permission/RolePermission(+Denied), Branch/Department/Employee, AuditLog, ApprovalWorkflow/Step/Action/Delegation, RequestDocument, Notification, Announcement(+Target/Read), DocumentSequence, Attachment, MeetingRoom(+Request), Vehicle/Driver/CarRequest/CarAssignment/CarTrip/CarExpense, VehicleTypeMaster, FacilityMaster, InventoryItem, StockTransaction, Supplier(+ContactLog, PurchaseDraft+Lines), OfficeSupplyRequest, SupplyRequestLine, TelegramJoinRequest, SystemSetting.
+Present: User/Role/Permission/RolePermission(+Denied), Branch/Department/Employee, AuditLog, ApprovalWorkflow/Step/Action/Delegation, RequestDocument, Notification, Announcement(+Target/Read), DocumentSequence, Attachment, MeetingRoom(+Request), Vehicle/Driver/CarRequest/CarAssignment/CarTrip/CarExpense, VehicleTypeMaster, FacilityMaster, InventoryItem, StockTransaction, Supplier(+ContactLog, PurchaseDraft+Lines), OfficeSupplyRequest, SupplyRequestLine, TelegramJoinRequest, SystemSetting, Account/AccountCategory, Asset/AssetCategory, Location, PurchaseRequest/PurchaseRequestItem *(2026-10-08: Procurement Phase 1)*.
 
-**Absent (from both design docs):** `Asset`, `AssetCategory`, `Location`, `Account`, `Invoice`, `InvoiceItem`, `PettyCashTransaction`, `MaintenanceRecord`, `PurchaseRequest` (entity), `RFQ`, `Quotation`, `QuotationComparison`, `PurchaseOrder` (entity), `GoodsReceipt`, `Payment`, `Budget`.
+**Absent (from both design docs):** `Invoice`, `InvoiceItem`, `PettyCashTransaction`, `MaintenanceRecord`, `RFQ`, `Quotation`, `QuotationComparison`, `PurchaseOrder` (entity), `GoodsReceipt`, `Payment`, `Budget`. *(2026-10-08: `PurchaseRequest` + `PurchaseRequestItem`, `Account` + `AccountCategory`, `Asset` + `AssetCategory`, `Location` now exist — Procurement Phase 1, migration 44.)*
 
 Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasing, assets, maintenance...)"* — the deferral is deliberate, and the `RequestDocType` enum already reserves `PURCHASE_REQUEST`, `TRAVEL_REQUEST`, `MAINTENANCE_REQUEST`.
 
@@ -55,7 +78,7 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 | §5 | Repository structure | ✅ | Matches (backend/, frontend/, docs/, scripts/). |
 | §6 | Dev / Staging / Production | ⚠️ Partial | Dev + Testing + Production share **one VM** (documented, deliberate). No separate staging. |
 | §9–12 | NestJS, REST standards, validation | ✅ | Followed (NestJS + class-validator DTOs). |
-| §14 | Core entities: Asset, Account, Invoice, PettyCash, Maintenance | ❌ Missing | None exist; only User/Role/Permission/Attachment/AuditLog + Vendor-equivalent (Supplier). |
+| §14 | Core entities: Asset, Account, Invoice, PettyCash, Maintenance | ⚠️ Partial | `Account`/`AccountCategory` and `Asset`/`AssetCategory`/`Location` foundation tables now exist (Procurement Phase 1, 2026-10-08); Invoice, PettyCash, Maintenance still missing. |
 | §15–16, §22, §34, §39–40 | Asset model, categories, history, UI, lifecycle, transfer | ❌ Missing | Greenfield. Vehicles exist as their own domain (CarRequest/Fleet) — decide whether vehicles join the Asset model or stay separate. |
 | §17–19, §30 | Accounting concept (account_id + optional asset_id), transaction status | ❌ Missing | No accounting transaction at all. |
 | §20, §35 | Invoice design + UI | ❌ Missing | — |
@@ -74,7 +97,7 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 | §52 | HTTPS | ❌ Not implemented | Production UI serves plain HTTP on :80 (internal LAN). Acceptable short-term; plan TLS termination on Nginx before any external exposure. |
 | §53–59 | CI/CD, versioning, tagging, rollback, health | ✅ / ⚠️ | GitHub Actions CI (typecheck + suites) exists; deploy scripts with health checks exist. Image tagging/registry per §57 not used (local builds) — acceptable for single-VM. |
 | §60–61 | Logging, error handling | ✅ | Structured backend logging; ApiError pattern on frontend. |
-| §62–64 | Testing strategy, critical business tests | ⚠️ Partial | 6 backend test suites + 1 e2e script (RBAC deny-memory, delegations, cars/telegram, fleet). No coverage for procurement/invoice logic — add with P1+. |
+| §62–64 | Testing strategy, critical business tests | ⚠️ Partial | 7 backend test suites + 1 e2e script — procurement PR logic now covered (`procurement-pr.test.ts`, 11 cases, 2026-10-08); invoice/matching logic still untested. |
 | §65–66 | Data integrity, soft delete | ⚠️ Partial | Integrity rules followed; **soft delete not used** — entities use status flags (UserStatus, ItemCategory) or hard deletes (e.g. suppliers DELETE endpoint). Decide per spec §66 which entities need `deletedAt`. |
 | §67 | Security checklist | ✅ / ⚠️ | JWT, RBAC, upload auth-token; secrets out of git. Password hashing policy worth auditing once. |
 | §83–85 | Long-term architecture | — | The "design data model first" principle was followed for each shipped module. |
@@ -85,8 +108,8 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 
 | Phase | Design § | Requirement | Status | What exists / what's missing |
 |---|---|---|---|---|
-| **P1** Purchase Request | §5–7 | PR as first-class document: numbered PR, department, requester, required date, priority, justification, **line items** (qty, unit, est. price, account, optional asset), budget code, attachments; statuses DRAFT→SUBMITTED→UNDER_REVIEW→APPROVED→PROCUREMENT | ⚠️ **Partial (bridge only)** | Today a PR is a plain `RequestDocument` with `docType=PURCHASE_REQUEST` whose lines live inside a **text description** built from a Supplier PO draft (`suppliers.service.ts::submitPurchaseDraft`). No PR entity, no per-item prices/accounts, no priority/required-date, no employee-facing PR form. **This is the single biggest gap.** |
-| **P2** Approval | §8, §31 | Reusable approval framework, amount-based thresholds | ✅ **Implemented** | The generic workflow engine (multi-level steps, delegations, escalation, return/cancel) satisfies §31's "reusable framework" better than the design's sketch. **Amount-based approval rules are not yet supported** — workflows are per-module static step lists. |
+| **P1** Purchase Request | §5–7 | PR as first-class document: numbered PR, department, requester, required date, priority, justification, **line items** (qty, unit, est. price, account, optional asset), budget code, attachments; statuses DRAFT→SUBMITTED→UNDER_REVIEW→APPROVED→PROCUREMENT | ✅ **Implemented (2026-10-08, on testing)** | `PurchaseRequest`/`PurchaseRequestItem` entities (migration 44) with per-item qty/unit/est. price/account/asset refs, budget code, priority, required date, justification; `PR-…` numbering via `DocumentSequence`; approvals run through the existing workflow engine (DRAFT→PENDING_APPROVAL→…); employee-facing `/procurement` form (cart-style line items, estimated total, Save as Draft / Submit); supplier draft→PR bridge builds a real entity. **Live-verified on testing (`PR-202610-0001` created + submitted to level-1 approval); production deploy pending approval.** |
+| **P2** Approval | §8, §31 | Reusable approval framework, amount-based thresholds | ✅ **Implemented** | The generic workflow engine (multi-level steps, delegations, escalation, return/cancel) satisfies §31's "reusable framework" better than the design's sketch. **Amount-based approval rules (design §8) added 2026-10-08** — workflows carry `minAmount`/`maxAmount` bands and PR submissions are routed by estimated total (seeded with the §8 example bands; thresholds are configurable data, not code). |
 | **P3** RFQ / Quotation | §11–12 | RFQ with multiple vendors, per-vendor quotations | ❌ Missing | — |
 | **P4** Comparison / Vendor selection | §13–14 | Quotation comparison, selection with justification | ❌ Missing | Supplier master + contact logs exist; nothing links a decision to quotations. |
 | **P5** Purchase Order | §15–16 | PO entity with tax/discount totals, statuses DRAFT→…→SENT_TO_VENDOR→PARTIALLY_RECEIVED→FULLY_RECEIVED→CLOSED | ⚠️ Partial | "PO" today = text inside an approval request. No PO entity, no status machine, no PO ↔ PR link, no totals. |
@@ -97,7 +120,7 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 | **P10** Advanced controls | §35 | Control 1 no-approval-no-PO; Control 2 PO-required receiving; Control 3 invoice-without-GRN hold; Control 4 invoice ≤ PO amount; Control 5 duplicate invoice (vendor + invoice no.) | ❌ Missing | Depends on P5–P7 entities. Control 5 is a one-line unique constraint — cheap once Invoice exists. |
 | — | §36 | Emergency / direct / petty-cash purchase types | ❌ Missing | — |
 | — | §37–39 | Petty cash integration; fixed-asset purchase → asset registration | ❌ Missing | No Asset model yet — asset registration end-point of the flow cannot exist. |
-| — | §41 | Permission design (procurement codes) | ⚠️ Partial | `inventory.read/manage`, `suppliers.read/manage` exist. Procurement codes (`procurement.read/manage` etc.) need adding per docs/DEPLOYMENT.md §3b checklist (catalog + DEFAULT_GRANTS + matrix labels + verify script). |
+| — | §41 | Permission design (procurement codes) | ✅ Implemented | `procurement.read` / `procurement.manage` added to the catalog + DEFAULT_GRANTS (ADMINISTRATION & PURCHASING: read+manage; FINANCE: read) + RbacMatrix labels (2026-10-08), per the docs/DEPLOYMENT.md §3b checklist. |
 | — | §32 | Audit trail | ✅ Implemented | AuditLog used consistently (suppliers/inventory/workflow all log). |
 | — | §10 | Stock check before purchase | ✅ **Already real** | The office-supply flow (request → store fulfill from stock) implements the "stock available → issue" branch. The design doc calls Inventory a "future module" — that premise is now stale; the procurement stock-check integration point should target the **existing** `InventoryItem`/`StockTransaction`. |
 
@@ -105,32 +128,32 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 
 ## 4. Doc-vs-Doc Inconsistencies (housekeeping)
 
-1. **`AMS_DEVELOPMENT_SPEC_v1.2.md` header says "Version: 1.0"** while the filename says v1.2 — align the header.
-2. **Procurement doc §2 basis** says *"AMS Development Guide v1.0, 2026-09-24"* and lists Inventory/Consumable Stock/Budget as *future* modules — Inventory (office supplies) is **implemented and live** today; update §2, §9 (Budget), §10 (Stock check) to reflect reality.
-3. **Spec §2 OS** says Ubuntu 24.04; production VM is 22.04.5.
-4. **Decimal convention**: spec illustrates `Decimal(18,2)`; codebase uses `Decimal(12,2)`. Pick one (12,2 is sufficient for MMK; state it explicitly).
-5. **Vendor vs Supplier naming**: spec/procurement docs say *Vendor*; the codebase models `Supplier`. Either alias in docs or accept `Supplier` as the canonical name — the Procurement `Vendor` entity is already satisfied by `Supplier`.
-6. **Both documents are untracked in git** — commit them (after the housekeeping fixes) so deploys and reviews have a fixed reference.
+1. ✅ **Fixed 2026-10-08** — spec header now says Version 1.2, matching the filename.
+2. ✅ **Fixed 2026-10-08** — Procurement doc Basis updated to v1.2 with a status note (Inventory live, Vendor = `Supplier`, §10 stock check targets the existing ledger).
+3. ✅ **Fixed 2026-10-08** — spec §2 OS row corrected to Ubuntu 22.04 LTS (actual VM: 22.04.5).
+4. ✅ **Resolved 2026-10-08** — `Decimal(12,2)` is the stated convention (sufficient for MMK); noted in both docs.
+5. ✅ **Resolved 2026-10-08** — `Supplier` accepted as the canonical name for the design docs' *Vendor*.
+6. ✅ **Done 2026-10-08** — both design docs (with housekeeping fixes) + this gap analysis committed in `0dee23b`.
 
 ---
 
 ## 5. Recommendations (prioritized)
 
-### R1 — Commit the design docs + apply housekeeping (effort: hours)
+### R1 — Commit the design docs + apply housekeeping (effort: hours) — ✅ **DONE 2026-10-08** (`0dee23b`)
 Fix §4 items 1–5, then `git add docs/AMS_*.md` and commit. This freezes the contract that later phases build against.
 
-### R2 — Build P1 Purchase Request as a first-class entity (effort: 1–2 weeks) — **highest value**
+### R2 — Build P1 Purchase Request as a first-class entity (effort: 1–2 weeks) — **highest value** — ✅ **DONE 2026-10-08** (`eba87c4`, deployed to testing + live e2e verified; prod deploy pending approval)
 - New Prisma models: `PurchaseRequest` + `PurchaseRequestItem` (qty, unit, est. unit price `Decimal(12,2)`, optional `accountId`, optional `assetId` — nullable until those modules exist, budget code as free text initially).
 - Replace the "text description" bridge in `suppliers.service.ts::submitPurchaseDraft` with a real PR (keep the draft → PR conversion as a convenience entry).
 - Employee-facing PR form (frontend) reusing the cart pattern from Inventory.
 - Statuses already exist on `RequestDocument` (DRAFT/PENDING_APPROVAL/APPROVED/…); map design statuses onto them instead of inventing a parallel state machine.
 
-### R3 — Do NOT build a second approval framework (saves weeks)
+### R3 — Do NOT build a second approval framework (saves weeks) — ✅ **DONE 2026-10-08** — amount-based rule support (design §8) added to the existing engine via workflow amount bands; PR/PO/Invoice remain `docType`s on `RequestDocument`
 Procurement §31's entity (`entityType`/`entityId`/step/approver/status) is already covered by `ApprovalWorkflow`/`ApprovalStep`/`ApprovalAction`. Extend it:
 - add **amount-based rule support** (e.g. workflow selection by total amount threshold) to satisfy §8;
 - PR/PO/Invoice all become `docType`s on `RequestDocument`, as CAR_REQUEST and MEETING_ROOM_REQUEST already are.
 
-### R4 — Foundation entities before invoice matching (effort: 1–2 weeks)
+### R4 — Foundation entities before invoice matching (effort: 1–2 weeks) — ⚠️ **Foundation tables DONE 2026-10-08** (`Account`/`AccountCategory`/`Asset`/`AssetCategory`/`Location` created with Phase 1, minimal fields, PR items already reference them optionally; seeding from the spec's category lists still open)
 Introduce `Account` (+ `AccountCategory`) and `Asset` (+ category/location) per spec §15–17 with minimal fields, seeded from the spec's category lists. PR items may reference them optionally from day one (R2), and Invoice items require them (spec §18's core principle: *"accounting asks what was spent on; asset asks which asset"*). Vehicles: keep the existing Fleet domain separate initially; consider an `assetId` back-reference later.
 
 ### R5 — PO + GRN on the existing stock ledger (effort: 2–3 weeks)
@@ -157,9 +180,9 @@ Only after P1–P7 entities exist: procurement dashboard tiles (mirror the Inven
 ## 6. Suggested Roadmap (re-sequenced from Procurement §44)
 
 ```text
-Phase 0  Doc housekeeping + commit (R1)                       — 1 day
-Phase 1  Account/Asset foundation + PR entity (R2, R4)        — 2–3 weeks
-Phase 2  Amount-based approval rules (R3)                     — 1 week
+Phase 0  Doc housekeeping + commit (R1)                       — ✅ done 2026-10-08
+Phase 1  Account/Asset foundation + PR entity (R2, R4)        — ✅ done 2026-10-08 (testing; prod deploy pending)
+Phase 2  Amount-based approval rules (R3)                     — ✅ done 2026-10-08 (awaiting deploy)
 Phase 3  PO + GRN on existing stock ledger (R5)               — 2–3 weeks
 Phase 4  Invoice + 3-way match + controls (R6)                — 2–3 weeks
 Phase 5  RFQ/Quotation/Comparison (P3/P4)                     — 2 weeks

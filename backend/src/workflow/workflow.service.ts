@@ -19,6 +19,12 @@ const DOC_PREFIX: Record<string, string> = {
 
 const OPEN_STATUSES: WorkflowStatus[] = ['SUBMITTED', 'PENDING_APPROVAL', 'ON_HOLD', 'IN_PROGRESS'];
 
+/**
+ * Doc types whose workflow depends on the request's estimated amount
+ * (Procurement design §8 — amount-based approval routing).
+ */
+const AMOUNT_ROUTED_DOC_TYPES = new Set<string>(['PURCHASE_REQUEST']);
+
 @Injectable()
 export class WorkflowService {
   private logger = new Logger('Workflow');
@@ -95,30 +101,65 @@ export class WorkflowService {
     return rows.map((r) => r.role.name as string);
   }
 
-  /** Resolve the workflow for a docType: module-specific if defined, else GENERIC_REQUEST fallback. */
-  private async workflowFor(docType: string) {
-    let workflow = await this.prisma.approvalWorkflow.findUnique({
-      where: { module: docType },
+  /**
+   * Estimated amount of a request, if its doc type carries one (design §8).
+   * Only amount-routed doc types are considered — everything else routes by
+   * docType alone (null amount → default workflow).
+   */
+  private async amountFor(requestId: string, docType?: string): Promise<number | null> {
+    if (docType && !AMOUNT_ROUTED_DOC_TYPES.has(docType)) return null;
+    const pr = await this.prisma.purchaseRequest.findUnique({
+      where: { requestId },
+      include: { items: true },
+    });
+    if (!pr) return null;
+    const total = pr.items.reduce((sum, it) => sum + Number(it.estimatedUnitPrice ?? 0) * it.quantity, 0);
+    return Number.isFinite(total) ? total : null;
+  }
+
+  /**
+   * Resolve the workflow for a docType (design §8, Phase 2):
+   *  1. if an estimated amount is known — the active workflow whose amount band
+   *     [minAmount, maxAmount] contains it (both bounds inclusive, optional);
+   *  2. else the module's unbounded (default) workflow;
+   *  3. else the GENERIC_REQUEST fallback.
+   */
+  private async workflowFor(docType: string, amount?: number | null) {
+    const candidates = await this.prisma.approvalWorkflow.findMany({
+      where: { module: docType, active: true },
       include: { steps: { orderBy: { level: 'asc' } } },
     });
-    if (!workflow || !workflow.active || workflow.steps.length === 0) {
-      workflow = await this.prisma.approvalWorkflow.findUnique({
-        where: { module: 'GENERIC_REQUEST' },
-        include: { steps: { orderBy: { level: 'asc' } } },
+    const withSteps = candidates.filter((w) => w.steps.length > 0);
+
+    if (amount !== undefined && amount !== null) {
+      const band = withSteps.find((w) => {
+        const min = w.minAmount === null ? null : Number(w.minAmount);
+        const max = w.maxAmount === null ? null : Number(w.maxAmount);
+        if (min === null && max === null) return false; // default workflow handled below
+        return (min === null || amount >= min) && (max === null || amount <= max);
       });
+      if (band) return band;
     }
-    return workflow;
+
+    const unbounded = withSteps.find((w) => w.minAmount === null && w.maxAmount === null);
+    if (unbounded) return unbounded;
+
+    const generic = await this.prisma.approvalWorkflow.findFirst({
+      where: { module: 'GENERIC_REQUEST', active: true },
+      include: { steps: { orderBy: { level: 'asc' } } },
+    });
+    return generic && generic.steps.length > 0 ? generic : null;
   }
 
   private async notifyApprovers(requestId: string, level: number, type: Parameters<NotificationsService['notifyMany']>[1]['type'], title: string, body: string) {
     const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { docType: true } });
-    const module = await this.prisma.approvalWorkflow.findFirst({
-      where: { OR: [{ module: request?.docType as string }, { module: 'GENERIC_REQUEST' }], active: true },
-      orderBy: { module: 'desc' }, // prefer module-specific workflow
-    });
-    const step = await this.prisma.approvalStep.findFirstOrThrow({
-      where: { workflowId: module!.id, level },
-    });
+    // resolve the workflow the same way approve/submit does — amount bands included
+    const workflow = await this.workflowFor(request?.docType as string, await this.amountFor(requestId, request?.docType as string));
+    const step = workflow?.steps.find((s) => s.level === level);
+    if (!step) {
+      this.logger.warn(`notifyApprovers: no step at level ${level} for ${request?.docType} ${requestId}`);
+      return;
+    }
     const usersWithRole = await this.prisma.userRole.findMany({
       where: { role: { name: step.roleName }, user: { status: 'ACTIVE' } },
       select: { userId: true },
@@ -222,7 +263,7 @@ export class WorkflowService {
     const roles = await this.userRoleNames(actor.userId);
     const isOwner = request.requesterId === actor.userId;
     // approver = any role appearing in the resolved workflow's steps (workflow-specific)
-    const wf = await this.workflowFor(request.docType as string);
+    const wf = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
     const stepRoles = (wf?.steps ?? []).map((s) => s.roleName as string);
     const isApprover = roles.includes('SYSTEM_ADMIN') || stepRoles.some((r) => roles.includes(r));
 
@@ -240,7 +281,7 @@ export class WorkflowService {
     // current step info for approvers
     let currentStep: Awaited<ReturnType<typeof this.prisma.approvalStep.findFirst>> = null;
     if (request.status === 'PENDING_APPROVAL' || request.status === 'SUBMITTED') {
-      const wf = await this.workflowFor(request.docType as string);
+      const wf = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
       if (wf) {
         currentStep = await this.prisma.approvalStep.findFirst({
           where: { workflowId: wf.id, level: request.currentLevel },
@@ -258,7 +299,7 @@ export class WorkflowService {
     if (request.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can submit');
     if (request.status !== 'DRAFT') throw new BadRequestException(`Cannot submit from status ${request.status}`);
 
-    const workflow = await this.workflowFor(request.docType as string);
+    const workflow = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
     if (!workflow || !workflow.active || workflow.steps.length === 0) {
       throw new BadRequestException('No active workflow configured');
     }
@@ -305,7 +346,7 @@ export class WorkflowService {
       throw new ForbiddenException('You cannot act on your own request');
     }
 
-    const workflow = await this.workflowFor(request.docType as string);
+    const workflow = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
     if (!workflow) throw new BadRequestException('No active workflow configured');
     const step = await this.prisma.approvalStep.findFirstOrThrow({
       where: { workflowId: workflow.id, level: request.currentLevel },
@@ -385,12 +426,12 @@ export class WorkflowService {
    * current workflow step's role (or act via an active delegation). Used by the
    * reject/return paths which the controller-level guards cannot scope per-request.
    */
-  private async assertApproverForStep(request: { docType: string; currentLevel: number; requesterId?: string }, actor: Actor) {
+  private async assertApproverForStep(request: { id: string; docType: string; currentLevel: number; requesterId?: string }, actor: Actor) {
     // separation of duties: a requester can never act on their own request
     if (request.requesterId === actor.userId) {
       throw new ForbiddenException('You cannot act on your own request');
     }
-    const workflow = await this.workflowFor(request.docType as string);
+    const workflow = await this.workflowFor(request.docType as string, await this.amountFor(request.id, request.docType));
     if (!workflow) throw new BadRequestException('No active workflow configured');
     const step = await this.prisma.approvalStep.findFirstOrThrow({
       where: { workflowId: workflow.id, level: request.currentLevel },
@@ -502,13 +543,8 @@ export class WorkflowService {
     });
     // the current-level approvers may still have it in their inbox — clear the stale entry
     try {
-      const module = await this.prisma.approvalWorkflow.findFirst({
-        where: { OR: [{ module: request.docType as string }, { module: 'GENERIC_REQUEST' }], active: true },
-        orderBy: { module: 'desc' },
-      });
-      const step = module
-        ? await this.prisma.approvalStep.findFirst({ where: { workflowId: module.id, level: request.currentLevel } })
-        : null;
+      const workflow = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
+      const step = workflow?.steps.find((s) => s.level === request.currentLevel) ?? null;
       if (step) {
         const holders = await this.prisma.userRole.findMany({
           where: { role: { name: step.roleName }, user: { status: 'ACTIVE' } },
@@ -577,12 +613,29 @@ export class WorkflowService {
 
     const or: Prisma.RequestDocumentWhereInput[] = [];
     for (const { docType } of pendingDocTypes) {
+      if (AMOUNT_ROUTED_DOC_TYPES.has(docType as string)) continue; // handled per-request below
       const wf = await this.workflowFor(docType as string);
       if (!wf || !wf.active) continue;
       for (const step of wf.steps) {
         if (allRoles.includes(step.roleName as string)) {
           or.push({ docType: docType as RequestDocType, currentLevel: step.level });
         }
+      }
+    }
+
+    // amount-routed doc types (design §8): the workflow — and therefore the
+    // approving role at the current level — depends on each request's total,
+    // so resolve per request instead of per docType
+    const amountRoutedTypes = [...AMOUNT_ROUTED_DOC_TYPES];
+    if (amountRoutedTypes.length > 0) {
+      const amountRoutedPending = await this.prisma.requestDocument.findMany({
+        where: { status: 'PENDING_APPROVAL', docType: { in: amountRoutedTypes as RequestDocType[] } },
+        select: { id: true, docType: true, currentLevel: true },
+      });
+      for (const doc of amountRoutedPending) {
+        const wf = await this.workflowFor(doc.docType as string, await this.amountFor(doc.id, doc.docType as string));
+        const step = wf?.steps.find((s) => s.level === doc.currentLevel);
+        if (step && allRoles.includes(step.roleName as string)) or.push({ id: doc.id });
       }
     }
 
@@ -638,7 +691,7 @@ export class WorkflowService {
 
     for (const request of stale) {
       // only escalate when the resolved workflow actually has a next level
-      const wf = await this.workflowFor(request.docType as string);
+      const wf = await this.workflowFor(request.docType as string, await this.amountFor(request.id, request.docType as string));
       const next = (wf?.steps ?? []).find((s) => s.level > request.currentLevel);
       if (!next) continue; // single-level workflow — nothing to escalate to
       await this.prisma.requestDocument.update({

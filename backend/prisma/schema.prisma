@@ -320,14 +320,20 @@ enum RequestDocType {
 
 model ApprovalWorkflow {
   id        String   @id @default(uuid()) @db.Uuid
-  module    String   @unique
+  module    String
   name      String
   active    Boolean  @default(true)
+  // Amount-based routing band (Procurement design §8): a workflow applies to
+  // requests whose estimated total is within [minAmount, maxAmount] (inclusive,
+  // both bounds optional). The workflow with no bounds is the module default.
+  minAmount Decimal? @db.Decimal(12, 2)
+  maxAmount Decimal? @db.Decimal(12, 2)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   steps ApprovalStep[]
 
+  @@index([module, active])
   @@map("approval_workflows")
 }
 
