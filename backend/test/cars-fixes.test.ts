@@ -682,6 +682,61 @@ async function main() {
     assert.ok(n.body.includes('Kyaw Thiha Maw') && n.body.includes('Back at Office'), 'body must name the driver and the missed tap');
   });
 
+  await test('releaseExpired: assignment whose driver DID tap Back at Office → released + finalised, NO "Auto-closed" notice (CAR-202610-0022 regression)', async () => {
+    const adminNotifs: any[] = [];
+    const requesterNotifs: any[] = [];
+    const ops: Array<[string, any]> = [];
+    const endPast = new Date(Date.now() - 3600e3);
+    const prismaBack: any = {
+      carAssignment: {
+        findMany: async () => [
+          {
+            id: 'a-back', requestId: 'r-back', vehicleId: 'v1', driverId: 'd1',
+            driverNotedAt: new Date(), driverArrivedAt: null,
+            driverBackAtOfficeAt: new Date(Date.now() - 3 * 3600e3), // tapped hours before the window end
+            vehicle: { vehicleNo: '4E2241' },
+            driver: { name: 'Lay Win' },
+            request: { docNumber: 'CAR-202610-0022', requesterId: 'u-req', carRequest: { endDate: endPast } },
+            trip: null,
+          },
+        ],
+        update: async (p: any) => { ops.push(['carAssignment.update', p.data]); return {}; },
+      },
+      $transaction: async (list: any[]) => { for (const op of list) await op; },
+      vehicle: { update: async (p: any) => { ops.push(['vehicle.update', p.data]); return {}; } },
+      driver: { update: async (p: any) => { ops.push(['driver.update', p.data]); return {}; }, findMany: async () => [] },
+      carRequest: { update: async (p: any) => { ops.push(['carRequest.update', p.data]); return {}; } },
+      requestDocument: { update: async (p: any) => { ops.push(['requestDocument.update', p.data]); return {}; } },
+      auditLog: { create: async (p: any) => { ops.push(['auditLog.create', p.data]); return {}; } },
+      notification: { create: async (p: any) => { requesterNotifs.push(p.data); return {}; } },
+    };
+    const svcBack: any = new TripRemindersService(
+      prismaBack,
+      {
+        notify: async (n: any) => requesterNotifs.push(n),
+        notifyMany: async (ids: string[], n: any) => { for (const id of ids) adminNotifs.push({ ...n, userId: id }); },
+      } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => ['admin-1'] } as any,
+    );
+    await svcBack.releaseExpired();
+
+    // bookkeeping: the assignment row is finally closed
+    const release = ops.find((o) => o[0] === 'carAssignment.update' && o[1].releasedAt instanceof Date);
+    assert.ok(release, 'janitor must set releasedAt on the back-at-office assignment');
+    assert.ok(ops.some((o) => o[0] === 'carRequest.update' && o[1].status === 'COMPLETED'), 'request stays COMPLETED');
+    assert.ok(ops.some((o) => o[0] === 'requestDocument.update' && o[1].status === 'COMPLETED'), 'document stays COMPLETED');
+
+    // the contradictory notice must never be sent again
+    assert.strictEqual(adminNotifs.length, 0, 'Administration must NOT get a "never tapped Back at Office" notice for a tapped ride');
+    assert.strictEqual(requesterNotifs.length, 0, 'no duplicate requester notice — Back at Office already sent it');
+
+    // audit trail records the finalisation, without claiming the driver never tapped
+    const audit = ops.find((o) => o[0] === 'auditLog.create' && o[1].action === 'REQUEST_AUTO_COMPLETED');
+    assert.ok(audit, 'an audit entry must record the janitor finalisation');
+    assert.ok(String(audit![1].newValue.reason).includes('Back at Office tapped'), 'audit reason must say the driver DID tap');
+  });
+
   await test('shiftHandoverDigest: sends on-road/ETA/blocked sections to cars.assign Telegram chats', async () => {
     const now = new Date();
     const sent: string[] = [];

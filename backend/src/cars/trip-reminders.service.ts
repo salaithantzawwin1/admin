@@ -178,15 +178,19 @@ export class TripRemindersService {
 
   /**
    * Auto-close: assignments whose request window ended with no recorded trip
-   * activity keep the vehicle IN_USE forever. Two outcomes, chosen by whether
-   * the driver ever acknowledged the ride:
-   *  • Noted/Ready tapped → the trip HAPPENED — close it COMPLETED (the old
-   *    code flipped these back to APPROVED, so finished rides reappeared in
-   *    the "waiting for vehicle" list a day later and stayed there).
+   * activity keep the vehicle IN_USE forever. Three outcomes:
+   *  • driver tapped "🏁 Back at Office" → the ride ended properly — the janitor
+   *    only finalises the bookkeeping (releasedAt was deliberately left open so
+   *    the Back-at-Office exemption queries in cars.service keep working until
+   *    this sweep) and sends NO "never tapped" notice (the Back-at-Office path
+   *    already notified requester + Administration).
+   *  • Noted/Ready tapped (but not Back at Office) → the trip HAPPENED — close
+   *    it COMPLETED (the old code flipped these back to APPROVED, so finished
+   *    rides reappeared in the "waiting for vehicle" list a day later).
    *  • never acknowledged → the ride plausibly never happened — release the
    *    vehicle back to the pool and re-await assignment (APPROVED).
-   * Both paths free the DRIVER too (the old path left them ON_TRIP forever).
-   * Trips genuinely on the road past the window (trip STARTED) are left alone.
+   * All paths free the DRIVER. Trips genuinely on the road (trip STARTED) are
+   * left alone.
    */
   @Cron('0 */30 * * * *')
   async releaseExpired() {
@@ -218,6 +222,29 @@ export class TripRemindersService {
       const freedDriver = a.driverId
         ? [this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } })]
         : [];
+      if (a.driverBackAtOfficeAt) {
+        // Driver DID tap "🏁 Back at Office" — the car was freed and the request
+        // completed at that moment; this sweep only closes the assignment row.
+        // Sending the "never tapped Back at Office" notice here produced the
+        // contradictory 🏁-then-🤖 message pair (CAR-202610-0022).
+        await this.prisma.$transaction([
+          this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
+          this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+          ...freedDriver,
+          this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
+          this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
+        ]);
+        await this.prisma.auditLog
+          .create({
+            data: {
+              action: 'REQUEST_AUTO_COMPLETED', module: 'CARS', recordId: a.requestId,
+              newValue: { reason: 'Back at Office tapped — janitor finalised the assignment', auto: true },
+            },
+          })
+          .catch(() => undefined);
+        console.log(`[cars] finalised back-at-office assignment ${a.request.docNumber} (no notice — driver did tap)`);
+        continue;
+      }
       if (a.driverNotedAt || a.driverArrivedAt) {
         // driver confirmed the ride → complete it, do NOT re-await a car
         await this.prisma.$transaction([
