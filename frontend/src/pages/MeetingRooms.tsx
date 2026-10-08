@@ -453,10 +453,20 @@ export default function MeetingRooms() {
                 </div>
                 {/* (vii) Participants companies / Person if external */}
                 {form.meetingType === 'EXTERNAL' && (
-                  <Input placeholder="External company / person (required for external)" value={form.externalCompanies} onChange={(e) => setForm({ ...form, externalCompanies: e.target.value })} />
+                  <div>
+                    <label htmlFor="meeting-rooms-external-companies" className="text-xs text-gray-500 block mb-1">External company / person * (required for external)</label>
+                    <Input id="meeting-rooms-external-companies" value={form.externalCompanies} onChange={(e) => setForm({ ...form, externalCompanies: e.target.value })} />
+                  </div>
                 )}
                 {/* (viii) Number of attendees */}
-                <Input type="number" min={1} placeholder="Number of attendees" value={form.attendees} onChange={(e) => setForm({ ...form, attendees: Number(e.target.value) })} />
+                <div>
+                  <label htmlFor="meeting-rooms-attendees" className="text-xs text-gray-500 block mb-1">Number of attendees *</label>
+                  <Input id="meeting-rooms-attendees" type="number" min={1} value={form.attendees} onChange={(e) => {
+                    // cleared / NaN input must not poison the room-size hint → fall back to 1
+                    const n = Number(e.target.value);
+                    setForm({ ...form, attendees: Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 });
+                  }} />
+                </div>
                 {/* (ix) Name of attendees (optional) */}
                 <Input placeholder="Attendee names (optional)" value={form.attendeeNames} onChange={(e) => setForm({ ...form, attendeeNames: e.target.value })} />
                 {/* (x) IT assist */}
