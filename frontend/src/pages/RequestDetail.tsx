@@ -4,6 +4,7 @@ import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui';
 import { CarPanel } from '../components/CarPanel';
 import { MeetingRoomPanel } from '../components/MeetingRoomPanel';
+import { PurchaseRequestPanel } from '../components/PurchaseRequestPanel';
 import { fmtDateTime } from '../util/yangonTime';
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
@@ -153,6 +154,8 @@ export default function RequestDetail() {
       {detail.docType === 'MEETING_ROOM_REQUEST' && (
         <MeetingRoomPanel requestId={detail.id} status={detail.status} />
       )}
+
+      {detail.docType === 'PURCHASE_REQUEST' && <PurchaseRequestPanel requestId={detail.id} />}
 
       <Card className="p-5 mb-5">
         <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Actions</h2>

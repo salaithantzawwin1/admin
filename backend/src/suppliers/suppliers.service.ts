@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
-import { WorkflowService } from '../workflow/workflow.service';
+import { ProcurementService } from '../procurement/procurement.service';
 import { Actor } from '../org/org.service';
 
 /**
@@ -16,7 +16,7 @@ export class SuppliersService {
     private prisma: PrismaService,
     private audit: AuditService,
     private numbering: NumberingService,
-    private workflow: WorkflowService,
+    private procurement: ProcurementService,
   ) {}
 
   list(includeInactive = false) {
@@ -286,12 +286,20 @@ export class SuppliersService {
     if (draft.status !== 'DRAFT') throw new ConflictException('Draft already submitted');
     if (draft.lines.length === 0) throw new BadRequestException('Draft has no lines');
 
-    const title = `PO — ${draft.supplier.name}`;
-    const description =
-      `Vendor: ${draft.supplier.name}\n` +
-      draft.lines.map((l) => `${l.item.code} ${l.item.name} ×${l.quantity} ${l.item.unit}${l.unitPrice !== null ? ` @ ${Number(l.unitPrice)}` : ''}`).join('\n') +
-      (draft.note ? `\nNote: ${draft.note}` : '');
-    const doc = await this.workflow.create({ title, description, docType: 'PURCHASE_REQUEST' }, actor);
+    // P1 bridge: a real PurchaseRequest entity now carries the draft lines
+    // (previously they were flattened into the request's description text).
+    const doc = await this.procurement.createFromSupplierDraft(
+      {
+        supplier: { name: draft.supplier.name },
+        lines: draft.lines.map((l) => ({
+          item: { code: l.item.code, name: l.item.name, unit: l.item.unit },
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+        })),
+        note: draft.note ?? undefined,
+      },
+      actor,
+    );
 
     await this.prisma.supplierPurchaseDraft.update({
       where: { id: draftId },

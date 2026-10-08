@@ -372,6 +372,7 @@ model RequestDocument {
   supplyRequest  OfficeSupplyRequest? @relation("SupplyRequest")
   supplierDrafts SupplierPurchaseDraft[] @relation("SupplierDraftRequest")
   stockTxns      StockTransaction[]   @relation("StockTxRequest")
+  purchaseRequest PurchaseRequest?
 
   @@index([status])
   @@index([requesterId])
@@ -1076,4 +1077,125 @@ model CarExpense {
   createdBy User    @relation("CarExpenseCreator", fields: [createdById], references: [id])
 
   @@map("car_expenses")
+}
+
+// ============================================================================
+// Procurement foundation (Design: AMS Procurement Management — §28/§15–17)
+// Account = "what was the money spent on", Asset = "which asset is it related
+// to" (Development Spec §17). PR items reference them optionally until the
+// Finance/Asset modules fully land.
+// ============================================================================
+
+enum PurchasePriority {
+  NORMAL
+  URGENT
+}
+
+model AccountCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  accounts Account[]
+
+  @@map("account_categories")
+}
+
+model Account {
+  id         String   @id @default(uuid()) @db.Uuid
+  code       String?  @unique // e.g. ACC-COP-CON (human-readable)
+  name       String
+  categoryId String?  @db.Uuid
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  category AccountCategory?      @relation(fields: [categoryId], references: [id])
+  prItems  PurchaseRequestItem[]
+
+  @@index([categoryId])
+  @@map("accounts")
+}
+
+model AssetCategory {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  assets Asset[]
+
+  @@map("asset_categories")
+}
+
+model Location {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  assets Asset[]
+
+  @@map("locations")
+}
+
+model Asset {
+  id           String          @id @default(uuid()) @db.Uuid
+  assetCode    String          @unique // e.g. AST-COP-001
+  name         String
+  categoryId   String?         @db.Uuid
+  brand        String?
+  model        String?
+  serialNumber String?
+  locationId   String?         @db.Uuid
+  purchaseDate DateTime?
+  purchaseCost Decimal?        @db.Decimal(12, 2)
+  status       String          @default("ACTIVE") // ACTIVE / DISPOSED / IN_STORAGE
+  description  String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  category AssetCategory? @relation(fields: [categoryId], references: [id])
+  location Location?      @relation(fields: [locationId], references: [id])
+  prItems  PurchaseRequestItem[]
+
+  @@index([categoryId])
+  @@index([locationId])
+  @@map("assets")
+}
+
+// PR as a first-class document: the workflow side lives on RequestDocument
+// (docType = PURCHASE_REQUEST, PR-… doc number); this carries the procurement
+// fields the design §5 requires. Lines reference Account (required conceptually,
+// nullable until Finance lands) and Asset (optional) per spec §18.
+model PurchaseRequest {
+  id            String            @id @default(uuid()) @db.Uuid
+  requestId     String            @unique @db.Uuid // link to RequestDocument
+  requiredDate  DateTime?
+  priority      PurchasePriority  @default(NORMAL)
+  justification String?
+  budgetCode    String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  request RequestDocument       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  items   PurchaseRequestItem[]
+
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestItem {
+  id                String   @id @default(uuid()) @db.Uuid
+  purchaseRequestId String   @db.Uuid
+  description       String
+  quantity          Int
+  unit              String?
+  estimatedUnitPrice Decimal? @db.Decimal(12, 2)
+  accountId         String?  @db.Uuid
+  assetId           String?  @db.Uuid
+
+  purchaseRequest PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+  account         Account?        @relation(fields: [accountId], references: [id])
+  asset           Asset?          @relation(fields: [assetId], references: [id])
+
+  @@index([purchaseRequestId])
+  @@map("purchase_request_items")
 }

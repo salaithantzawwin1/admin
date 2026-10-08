@@ -24,6 +24,8 @@ export const PERMISSIONS = {
   INVENTORY_MANAGE: 'inventory.manage',
   SUPPLIERS_READ: 'suppliers.read',
   SUPPLIERS_MANAGE: 'suppliers.manage',
+  PROCUREMENT_READ: 'procurement.read',
+  PROCUREMENT_MANAGE: 'procurement.manage',
   ANNOUNCEMENTS_READ: 'announcements.read',
   ANNOUNCEMENTS_MANAGE: 'announcements.manage',
   AUDIT_READ: 'audit.read',

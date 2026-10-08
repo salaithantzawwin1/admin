@@ -22,6 +22,7 @@ import { MeetingRoomsModule } from './meeting-rooms/meeting-rooms.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
+import { ProcurementModule } from './procurement/procurement.module';
 import { SettingsModule } from './settings/settings.module';
 import { HealthController } from './health/health.controller';
 
@@ -48,6 +49,7 @@ import { HealthController } from './health/health.controller';
     InventoryModule,
     AnnouncementsModule,
     SuppliersModule,
+    ProcurementModule,
     TelegramModule,
   ],
   controllers: [HealthController],
