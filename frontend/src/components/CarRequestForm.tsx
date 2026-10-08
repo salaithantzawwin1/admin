@@ -218,10 +218,11 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           <Input id="car-request-form-start-defaults-to-today-pick-the" type="datetime-local" error={startError ?? clashMsg} onBlur={() => touch('startDate')} value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">
-            End {needsEnd ? '* (date prefilled — pick the hour)' : endPinned ? '(auto from Half Day — editable)' : '(optional estimate — defaults to 5:00 PM; Back at Office overrides)'}
+          <label htmlFor="car-request-form-end" className="block text-xs text-gray-500 mb-1">
+            End {needsEnd ? '* (pick the hour)' : endPinned ? '(auto from Half Day)' : '(optional estimate)'}
           </label>
           <Input
+            id="car-request-form-end"
             type="datetime-local"
             error={endError ?? clashMsg}
             describe="Estimate only — the driver's Back at Office frees the car early; empty = 5:00 PM assumed"
@@ -235,23 +236,29 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
             title="Estimate only — if the trip finishes early, the driver's Back at Office frees the car immediately; if you omit this, 5:00 PM is assumed"
           />
         </div>
-        <Select value={form.timeSlot} onChange={(e) => changeSlot(e.target.value)}>
-          <option value="FULL_DAY">Full day</option>
-          <option value="HALF_DAY_AM">Half day (AM)</option>
-          <option value="HALF_DAY_PM">Half day (PM)</option>
-          <option value="CUSTOM_HOURS">Custom hours</option>
-        </Select>
-        <Input
-          type="number"
-          min={1}
-          placeholder="Passengers"
-          value={form.passengers}
-          onChange={(e) => {
-            // '' / NaN (cleared input) must not poison the JSON body → fall back to 1
-            const n = Number(e.target.value);
-            setForm({ ...form, passengers: Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 });
-          }}
-        />
+        <div>
+          <label htmlFor="car-request-form-time-slot" className="block text-xs text-gray-500 mb-1">Time slot</label>
+          <Select id="car-request-form-time-slot" value={form.timeSlot} onChange={(e) => changeSlot(e.target.value)}>
+            <option value="FULL_DAY">Full day</option>
+            <option value="HALF_DAY_AM">Half day (AM)</option>
+            <option value="HALF_DAY_PM">Half day (PM)</option>
+            <option value="CUSTOM_HOURS">Custom hours</option>
+          </Select>
+        </div>
+        <div>
+          <label htmlFor="car-request-form-passengers" className="block text-xs text-gray-500 mb-1">Passengers</label>
+          <Input
+            id="car-request-form-passengers"
+            type="number"
+            min={1}
+            value={form.passengers}
+            onChange={(e) => {
+              // '' / NaN (cleared input) must not poison the JSON body → fall back to 1
+              const n = Number(e.target.value);
+              setForm({ ...form, passengers: Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 });
+            }}
+          />
+        </div>
         <Input placeholder="Purpose (optional)" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
         <Input
           placeholder="Special request (optional)"
