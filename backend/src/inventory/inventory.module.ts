@@ -13,6 +13,7 @@ import { InventoryService } from './inventory.service';
   imports: [AuthModule, WorkflowModule, MulterModule.register({ storage: memoryStorage() }), SuppliersModule],
   controllers: [InventoryController],
   providers: [InventoryService],
+  exports: [InventoryService], // GRN receiving (procurement P3) posts stock via the shared engine
 })
 export class InventoryModule implements OnModuleInit {
   constructor(

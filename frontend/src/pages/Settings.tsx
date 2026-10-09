@@ -92,7 +92,7 @@ function relTime(iso: string): string {
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
 
-type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet';
+type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows';
 
 /** Company Time Table — office hours the leave windows are derived from. */
 interface Timetable {
@@ -110,7 +110,7 @@ export default function Settings() {
   // active tab lives in the URL (?tab=holidays) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as SettingsTab | null;
-  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' ? tabParam : 'ad';
+  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' ? tabParam : 'ad';
   const setTab = (t: SettingsTab) => setSearchParams(t === 'ad' ? {} : { tab: t }, { replace: false });
   const [cfg, setCfg] = useState<AdConfig | null>(null);
   const [msg, setMsg] = useState('');
@@ -128,6 +128,23 @@ export default function Settings() {
   const [fleetBuffer, setFleetBuffer] = useState<number | null>(null);
   const [fleetMsg, setFleetMsg] = useState('');
   const [fleetError, setFleetError] = useState('');
+
+  // ---------- Approval Workflows (amount bands, design §8) state ----------
+  interface WfStep { id?: string; level: number; roleName: string; minApprovals?: number }
+  interface Wf { id: string; module: string; name: string; active: boolean; minAmount: string | null; maxAmount: string | null; steps: WfStep[] }
+  const [workflows, setWorkflows] = useState<Wf[]>([]);
+  const [wfModules, setWfModules] = useState<string[]>([]);
+  const [wfLoading, setWfLoading] = useState(false);
+  const [wfEdit, setWfEdit] = useState<Wf | null>(null);        // editing an existing workflow
+  const [wfCreate, setWfCreate] = useState(false);              // create modal open
+  const [wfName, setWfName] = useState('');
+  const [wfModule, setWfModule] = useState('');
+  const [wfMin, setWfMin] = useState('');
+  const [wfMax, setWfMax] = useState('');
+  const [wfSteps, setWfSteps] = useState<WfStep[]>([{ level: 1, roleName: 'DEPARTMENT_HEAD', minApprovals: 1 }]);
+  const [wfBusy, setWfBusy] = useState(false);
+  const [wfMsg, setWfMsg] = useState('');
+  const [wfError, setWfError] = useState('');
 
   // ---------- Public Holidays editor state ----------
   const now = new Date();
@@ -211,6 +228,73 @@ export default function Settings() {
       setFleetMsg(`Hand-back buffer saved — the fleet card now shows "likely free from ~end + ${saved.minutes} min".`);
     } catch (e) {
       setFleetError(e instanceof Error ? e.message : 'Failed to save the buffer');
+    }
+  };
+
+  // ---------- Approval Workflows (amount bands, design §8) ----------
+  const loadWorkflows = useCallback(() => {
+    setWfLoading(true); setWfError('');
+    Promise.all([
+      api<Wf[]>('/workflows'),
+      api<string[]>('/workflows/modules'),
+    ])
+      .then(([wfs, mods]) => { setWorkflows(wfs); setWfModules(mods); })
+      .catch((e) => setWfError(e instanceof Error ? e.message : 'Failed to load workflows'))
+      .finally(() => setWfLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (tab !== 'workflows') return;
+    loadWorkflows();
+  }, [tab, loadWorkflows]);
+
+  const openWfCreate = () => {
+    setWfName(''); setWfModule(wfModules[0] ?? 'PURCHASE_REQUEST');
+    setWfMin(''); setWfMax('');
+    setWfSteps([{ level: 1, roleName: 'DEPARTMENT_HEAD', minApprovals: 1 }]);
+    setWfCreate(true);
+  };
+
+  const openWfEdit = (wf: Wf) => {
+    setWfEdit(wf); setWfName(wf.name); setWfModule(wf.module);
+    setWfMin(wf.minAmount != null ? String(Number(wf.minAmount)) : '');
+    setWfMax(wf.maxAmount != null ? String(Number(wf.maxAmount)) : '');
+    setWfSteps(wf.steps.map((s) => ({ level: s.level, roleName: s.roleName, minApprovals: s.minApprovals })));
+  };
+
+  const saveWf = async () => {
+    setWfBusy(true); setWfMsg(''); setWfError('');
+    const body = {
+      name: wfName.trim(),
+      minAmount: wfMin === '' ? null : Number(wfMin),
+      maxAmount: wfMax === '' ? null : Number(wfMax),
+      steps: wfSteps.map((s, i) => ({ level: i + 1, roleName: s.roleName, minApprovals: s.minApprovals ?? 1 })),
+    };
+    try {
+      if (wfCreate) {
+        await api('/workflows', { method: 'POST', body: { module: wfModule, ...body } });
+        setWfMsg(`Workflow "${wfName}" created and active.`);
+      } else if (wfEdit) {
+        await api(`/workflows/${wfEdit.id}`, { method: 'PATCH', body });
+        setWfMsg(`Workflow "${wfName}" saved. New PR submissions route through it immediately.`);
+      }
+      setWfCreate(false);
+      setWfEdit(null);
+      loadWorkflows();
+    } catch (e) {
+      setWfError(e instanceof Error ? e.message : 'Failed to save the workflow');
+    } finally {
+      setWfBusy(false);
+    }
+  };
+
+  const toggleWfActive = async (wf: Wf) => {
+    setWfError('');
+    try {
+      await api(`/workflows/${wf.id}`, { method: 'PATCH', body: { active: !wf.active } });
+      loadWorkflows();
+    } catch (e) {
+      setWfError(e instanceof Error ? e.message : 'Failed to change the workflow');
     }
   };
 
@@ -395,6 +479,7 @@ export default function Settings() {
           { key: 'timetable' as SettingsTab, label: 'Company Time Table' },
           { key: 'holidays' as SettingsTab, label: 'Public Holidays' },
           { key: 'fleet' as SettingsTab, label: 'Fleet' },
+          { key: 'workflows' as SettingsTab, label: 'Approval Workflows' },
           { key: 'telegram' as SettingsTab, label: 'Telegram' },
           { key: 'joins' as SettingsTab, label: 'Telegram Joins' },
         ]).map((t) => (
@@ -586,6 +671,129 @@ export default function Settings() {
         </div>
         )}
       </div>
+      )}
+
+      {/* ---------- Tab: Approval Workflows (amount bands, design §8) ---------- */}
+      {tab === 'workflows' && (
+      <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-gray-800">Approval Workflows</h2>
+          <Button onClick={openWfCreate}>+ New workflow</Button>
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Routing rules per document type. A request is routed by its <b>estimated total</b>:
+          the first workflow whose amount band contains the total wins (bounds inclusive).
+          Leave both bounds empty for the module <b>default</b> workflow (used when no amount is known).
+          Create exactly the bands you need — the §8 example bands are ≤500K / ≤2M / ≤10M / &gt;10M.
+          Editing takes effect for new submissions immediately; in-flight approvals keep the workflow they started on.
+        </p>
+
+        {wfError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{wfError}</div>}
+        {wfMsg && <div className="mb-3 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{wfMsg}</div>}
+
+        {wfLoading ? (
+          <Empty label="Loading…" />
+        ) : workflows.length === 0 ? (
+          <Empty label="No workflows configured — submissions fall back to the generic workflow" />
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500 border-b">
+                <th className="py-2 pr-2">Module</th>
+                <th className="py-2 pr-2">Name</th>
+                <th className="py-2 pr-2">Amount band</th>
+                <th className="py-2 pr-2">Steps</th>
+                <th className="py-2 pr-2">State</th>
+                <th className="py-2 pr-2 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {workflows.map((wf) => (
+                <tr key={wf.id} className="border-b last:border-0">
+                  <td className="py-2 pr-2 font-mono text-xs">{wf.module}</td>
+                  <td className="py-2 pr-2 font-medium">{wf.name}</td>
+                  <td className="py-2 pr-2">
+                    {wf.minAmount == null && wf.maxAmount == null ? (
+                      <Badge color="blue">default (all amounts)</Badge>
+                    ) : (
+                      <span>
+                        {wf.minAmount != null ? `${Number(wf.minAmount).toLocaleString()} Ks` : '0'} ≤ total{wf.maxAmount != null ? ` ≤ ${Number(wf.maxAmount).toLocaleString()} Ks` : ' and above'}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-2">
+                    {wf.steps.map((s) => `L${s.level}: ${s.roleName}${(s.minApprovals ?? 1) > 1 ? ` (×${s.minApprovals})` : ''}`).join(' → ')}
+                  </td>
+                  <td className="py-2 pr-2"><Badge color={wf.active ? 'green' : 'gray'}>{wf.active ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
+                  <td className="py-2 pr-2 text-right space-x-2 whitespace-nowrap">
+                    <Button variant="ghost" onClick={() => openWfEdit(wf)}>Edit</Button>
+                    <Button variant="ghost" onClick={() => toggleWfActive(wf)}>{wf.active ? 'Deactivate' : 'Activate'}</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      )}
+
+      {/* Workflow create/edit modal */}
+      {(wfCreate || wfEdit) && (
+        <Modal onClose={() => { setWfCreate(false); setWfEdit(null); }} title={wfCreate ? 'New approval workflow' : `Edit workflow — ${wfEdit?.name}`} wide>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm">
+                <span className="text-gray-600">Module (document type) *</span>
+                <Select value={wfModule} disabled={!wfCreate} onChange={(e) => setWfModule(e.target.value)}>
+                  {wfModules.map((m) => <option key={m} value={m}>{m}</option>)}
+                </Select>
+              </label>
+              <label className="block text-sm">
+                <span className="text-gray-600">Name *</span>
+                <Input value={wfName} onChange={(e) => setWfName(e.target.value)} placeholder="e.g. Small purchases ≤ 500K" />
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block text-sm">
+                <span className="text-gray-600">Min amount (Ks, optional)</span>
+                <Input type="number" min="0" value={wfMin} onChange={(e) => setWfMin(e.target.value)} />
+              </label>
+              <label className="block text-sm">
+                <span className="text-gray-600">Max amount (Ks, optional)</span>
+                <Input type="number" min="0" value={wfMax} onChange={(e) => setWfMax(e.target.value)} />
+              </label>
+            </div>
+            <div className="text-sm text-gray-500">Leave both empty for the module default workflow. A band needs at least one bound, and bands must not overlap.</div>
+
+            <div className="border rounded p-3 space-y-2">
+              <div className="text-sm font-medium text-gray-600">Approval steps (level 1 first)</div>
+              {wfSteps.map((s, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+                  <div className="col-span-2 text-sm text-gray-500 text-center">L{idx + 1}</div>
+                  <label className="col-span-7 block text-sm">
+                    <span className="text-gray-600">Approver role</span>
+                    <Select value={s.roleName} onChange={(e) => setWfSteps((ss) => ss.map((x, i) => i === idx ? { ...x, roleName: e.target.value } : x))}>
+                      {ROLES.filter((r) => r !== 'SYSTEM_ADMIN').map((r) => <option key={r} value={r}>{r}</option>)}
+                    </Select>
+                  </label>
+                  <label className="col-span-2 block text-sm">
+                    <span className="text-gray-600">Approvals</span>
+                    <Input type="number" min="1" value={s.minApprovals ?? 1} onChange={(e) => setWfSteps((ss) => ss.map((x, i) => i === idx ? { ...x, minApprovals: Math.max(1, Number(e.target.value) || 1) } : x))} />
+                  </label>
+                  <div className="col-span-1">
+                    <Button variant="ghost" onClick={() => setWfSteps((ss) => ss.filter((_, i) => i !== idx))} disabled={wfSteps.length <= 1}>✕</Button>
+                  </div>
+                </div>
+              ))}
+              <Button variant="ghost" onClick={() => setWfSteps((ss) => [...ss, { level: ss.length + 1, roleName: 'ADMINISTRATION', minApprovals: 1 }])}>+ Add step</Button>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => { setWfCreate(false); setWfEdit(null); }}>Cancel</Button>
+              <Button disabled={wfBusy || !wfName.trim()} onClick={saveWf}>{wfCreate ? 'Create workflow' : 'Save changes'}</Button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* ---------- Tab: Public Holidays editor ---------- */}

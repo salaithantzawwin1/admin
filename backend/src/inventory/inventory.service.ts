@@ -180,6 +180,34 @@ export class InventoryService {
   // ---------- core stock engine (transactional) ----------
 
   /**
+   * Public entry to the stock engine for OTHER modules: GRN receiving (procurement
+   * P3) posts accepted consumable quantity as PURCHASE stock IN through this
+   * engine — one ledger, no parallel stock system (spec §23).
+   */
+  async postStockIn(params: {
+    itemId: string;
+    quantity: number;
+    reference?: string;
+    actor: Actor;
+    client?: Prisma.TransactionClient;
+    unitPrice?: number;
+    supplierId?: string;
+  }) {
+    return this.applyTransaction(
+      params.itemId,
+      'PURCHASE',
+      params.quantity,
+      params.reference,
+      undefined,
+      params.actor,
+      params.client,
+      params.unitPrice,
+      undefined,
+      params.supplierId,
+    );
+  }
+
+  /**
    * Apply a stock movement inside a transaction: locks the item row, applies the
    * delta, prevents negative balance, writes the immutable ledger entry.
    * quantity > 0 = IN (PURCHASE/RETURN), quantity < 0 = OUT (ISSUE).

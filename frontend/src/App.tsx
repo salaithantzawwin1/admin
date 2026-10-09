@@ -25,6 +25,7 @@ const Announcements = lazy(() => import('./pages/Announcements'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const Suppliers = lazy(() => import('./pages/Suppliers'));
 const Procurement = lazy(() => import('./pages/Procurement'));
+const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders'));
 const RbacMatrix = lazy(() => import('./pages/RbacMatrix'));
 const Settings = lazy(() => import('./pages/Settings'));
 
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="notifications" element={<Notifications />} />
           <Route path="suppliers" element={<Suppliers />} />
           <Route path="procurement" element={<Procurement />} />
+          <Route path="purchase-orders" element={<PurchaseOrders />} />
           <Route path="users" element={<Users />} />
           <Route path="departments" element={<Departments />} />
           <Route path="employees" element={<Employees />} />

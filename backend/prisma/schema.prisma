@@ -72,6 +72,8 @@ model User {
   announcementReads AnnouncementRead[] @relation("AnnouncementReads")
   carExpenses     CarExpense[]         @relation("CarExpenseCreator")
   stockTxns       StockTransaction[]   @relation("StockTransactions")
+  purchaseOrdersCreated PurchaseOrder[] @relation("PoCreatedBy")
+  goodsReceiptsReceived  GoodsReceipt[]  @relation("GrnReceivedBy")
   telegramChatId    String? @unique // linked Telegram chat (bind via /start USR-<code>)
   telegramBindCode  String? @unique
   telegramUsername  String?
@@ -753,6 +755,7 @@ model InventoryItem {
   transactions StockTransaction[]
   requestLines SupplyRequestLine[]
   supplierDraftLines SupplierPurchaseDraftLine[] @relation("SupplierDraftLines")
+  poItems PurchaseOrderItem[] @relation("PoItems")
 
   @@index([category])
   @@index([isActive])
@@ -773,6 +776,7 @@ model Supplier {
   stockTransactions StockTransaction[] @relation("StockTxSupplier")
   contactLogs SupplierContactLog[]
   purchaseDrafts SupplierPurchaseDraft[]
+  purchaseOrders PurchaseOrder[] @relation("PoSupplier")
 
   @@map("suppliers")
 }
@@ -1139,6 +1143,7 @@ model Location {
   createdAt DateTime @default(now())
 
   assets Asset[]
+  goodsReceipts GoodsReceipt[]
 
   @@map("locations")
 }
@@ -1184,6 +1189,7 @@ model PurchaseRequest {
 
   request RequestDocument       @relation(fields: [requestId], references: [id], onDelete: Cascade)
   items   PurchaseRequestItem[]
+  purchaseOrders PurchaseOrder[]
 
   @@map("purchase_requests")
 }
@@ -1204,4 +1210,95 @@ model PurchaseRequestItem {
 
   @@index([purchaseRequestId])
   @@map("purchase_request_items")
+}
+
+// ---------- Procurement Phase 3 (design §15–20): Purchase Order + GRN ----------
+// PO is a procurement entity (NOT a workflow document — approvals already ran
+// on the PR): "no approval, no PO" Control 1 checks the PR's REQUEST status.
+model PurchaseOrder {
+  id            String    @id @default(uuid()) @db.Uuid
+  poNumber      String    @unique // PO-… via DocumentSequence
+  purchaseRequestId String? @db.Uuid // nullable: PO may be created without a PR (direct/ad-hoc purchases)
+  supplierId    String    @db.Uuid
+  status        String    @default("DRAFT") // §16: DRAFT→APPROVED→SENT_TO_VENDOR→PARTIALLY_RECEIVED→FULLY_RECEIVED→CLOSED (+ CANCELLED)
+  orderDate     DateTime  @default(now())
+  expectedDelivery DateTime?
+  deliveryAddress String?
+  paymentTerms  String?
+  deliveryTerms String?
+  note          String?
+  sentToVendorAt DateTime?
+  closedAt      DateTime?
+  cancelledAt   DateTime?
+  createdById   String    @db.Uuid
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  purchaseRequest PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
+  supplier      Supplier             @relation("PoSupplier", fields: [supplierId], references: [id])
+  createdBy     User                 @relation("PoCreatedBy", fields: [createdById], references: [id])
+  items         PurchaseOrderItem[]
+  goodsReceipts GoodsReceipt[]
+
+  @@index([status])
+  @@index([purchaseRequestId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String   @id @default(uuid()) @db.Uuid
+  purchaseOrderId String   @db.Uuid
+  description     String
+  inventoryItemId String?  @db.Uuid // set = consumable → GRN posts stock; null = asset/service (no stock)
+  quantity        Int
+  unit            String?
+  unitPrice       Decimal  @db.Decimal(12, 2)
+
+  purchaseOrder PurchaseOrder   @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem?  @relation("PoItems", fields: [inventoryItemId], references: [id])
+  grnItems      GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@map("purchase_order_items")
+}
+
+// GRN — Goods Received Note (design §18–19): ordered/received/accepted/rejected
+// per line, multiple GRNs per PO line = partial deliveries. Accepted consumable
+// quantity posts stock IN into the EXISTING StockTransaction ledger (spec §23 —
+// never a parallel stock system).
+model GoodsReceipt {
+  id            String   @id @default(uuid()) @db.Uuid
+  grnNumber     String   @unique // GRN-… via DocumentSequence
+  purchaseOrderId String @db.Uuid
+  receivedById  String   @db.Uuid
+  receivedAt    DateTime @default(now())
+  locationId    String?  @db.Uuid
+  deliveryNoteNo String?
+  remarks       String?
+
+  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id])
+  receivedBy    User                @relation("GrnReceivedBy", fields: [receivedById], references: [id])
+  location      Location?           @relation(fields: [locationId], references: [id])
+  items         GoodsReceiptItem[]
+
+  @@index([purchaseOrderId])
+  @@map("goods_receipts")
+}
+
+model GoodsReceiptItem {
+  id            String  @id @default(uuid()) @db.Uuid
+  goodsReceiptId String @db.Uuid
+  poItemId      String  @db.Uuid
+  orderedQty    Int
+  receivedQty   Int
+  acceptedQty   Int
+  rejectedQty   Int
+  condition     String? // damage notes for rejected units
+
+  goodsReceipt GoodsReceipt       @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  poItem       PurchaseOrderItem  @relation(fields: [poItemId], references: [id])
+
+  @@index([goodsReceiptId])
+  @@index([poItemId])
+  @@map("goods_receipt_items")
 }

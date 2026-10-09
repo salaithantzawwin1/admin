@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { WorkflowController } from './workflow.controller';
 import { WorkflowService } from './workflow.service';
+import { WorkflowAdminService } from './workflow-admin.service';
 import { DelegationsService } from './delegations.service';
 
 export { WorkflowService } from './workflow.service';
@@ -10,7 +11,7 @@ export { WorkflowService } from './workflow.service';
   // AuthModule exports PermissionsService — the /requests list scope guard injects it
   imports: [AuthModule],
   controllers: [WorkflowController],
-  providers: [WorkflowService, DelegationsService],
+  providers: [WorkflowService, WorkflowAdminService, DelegationsService],
   exports: [WorkflowService],
 })
 export class WorkflowModule {}

@@ -1,11 +1,14 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsIn, IsISO8601, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
-import { IsNotEmpty } from 'class-validator';
+import { ArrayMinSize, IsArray, IsIn, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, MinLength, Min, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsNotEmpty, IsBoolean } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RequirePermissions } from '../auth/permissions.guard';
 import { PermissionsService } from '../auth/permissions.service';
 import { PERMISSIONS } from '../auth/permissions';
 import { WorkflowService } from './workflow.service';
+import { WorkflowAdminService } from './workflow-admin.service';
 import { DelegationsService } from './delegations.service';
 import { CreateDelegationDto } from './dto/delegation.dto';
 import { Actor } from '../org/org.service';
@@ -28,6 +31,33 @@ export class ApprovalCommentDto {
   @IsOptional() @IsString() @MaxLength(2000) comment?: string;
 }
 
+// ---------- workflow admin (design §8 band routing) ----------
+
+export class WorkflowStepDto {
+  @IsInt() @Min(1) level!: number;
+  @IsString() @MinLength(2) roleName!: string;
+  @IsOptional() @IsInt() @Min(1) minApprovals?: number;
+}
+
+export class CreateWorkflowDto {
+  @IsString() @MinLength(3) @MaxLength(64) module!: string;
+  @IsString() @MinLength(3) @MaxLength(120) name!: string;
+  @IsOptional() @IsNumber() @Min(0) minAmount?: number;
+  @IsOptional() @IsNumber() @Min(0) maxAmount?: number;
+  @IsArray() @ValidateNested({ each: true }) @Type(() => WorkflowStepDto)
+  steps!: WorkflowStepDto[];
+}
+
+export class UpdateWorkflowDto {
+  @IsOptional() @IsString() @MinLength(3) @MaxLength(120) name?: string;
+  @IsOptional() @IsBoolean() active?: boolean;
+  /** explicit null clears a band side — isNumber allows the DTO to carry null via any. */
+  @IsOptional() minAmount?: number | null;
+  @IsOptional() maxAmount?: number | null;
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => WorkflowStepDto)
+  steps?: WorkflowStepDto[];
+}
+
 @ApiTags('workflow')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -37,6 +67,7 @@ export class WorkflowController {
     private workflow: WorkflowService,
     private delegations: DelegationsService,
     private permissions: PermissionsService,
+    private workflowAdmin: WorkflowAdminService,
   ) {}
 
   private actor(req): Actor {
@@ -139,5 +170,30 @@ export class WorkflowController {
   @Patch('delegations/:id/end')
   endDelegation(@Req() req, @Param('id') id: string) {
     return this.delegations.end(id, this.actor(req));
+  }
+
+  // ---------- workflow admin (users.manage) ----------
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Get('workflows')
+  listWorkflows() {
+    return this.workflowAdmin.list();
+  }
+
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Get('workflows/modules')
+  availableModules() {
+    return this.workflowAdmin.availableModules();
+  }
+
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Post('workflows')
+  createWorkflow(@Req() req, @Body() dto: CreateWorkflowDto) {
+    return this.workflowAdmin.create(dto as never, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.USERS_MANAGE)
+  @Patch('workflows/:id')
+  updateWorkflow(@Req() req, @Param('id') id: string, @Body() dto: UpdateWorkflowDto) {
+    return this.workflowAdmin.update(id, dto as never, this.actor(req));
   }
 }
