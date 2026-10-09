@@ -470,7 +470,7 @@ export default function Settings() {
   if (!cfg) return <div>{error || 'Loading…'}</div>;
 
   return (
-    <div className="max-w-3xl">
+    <div className="max-w-5xl">
       <PageHeader title="Settings" subtitle="System modules — AD/LDAP directory login (Plan: LDAP-ready auth)" />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
