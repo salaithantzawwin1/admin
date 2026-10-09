@@ -252,6 +252,8 @@ export default function Settings() {
     setWfName(''); setWfModule(wfModules[0] ?? 'PURCHASE_REQUEST');
     setWfMin(''); setWfMax('');
     setWfSteps([{ level: 1, roleName: 'DEPARTMENT_HEAD', minApprovals: 1 }]);
+    // stale banners from a previous attempt would mislead — clear on every open
+    setWfMsg(''); setWfError('');
     setWfCreate(true);
   };
 
@@ -260,6 +262,7 @@ export default function Settings() {
     setWfMin(wf.minAmount != null ? String(Number(wf.minAmount)) : '');
     setWfMax(wf.maxAmount != null ? String(Number(wf.maxAmount)) : '');
     setWfSteps(wf.steps.map((s) => ({ level: s.level, roleName: s.roleName, minApprovals: s.minApprovals })));
+    setWfMsg(''); setWfError('');
   };
 
   const saveWf = async () => {
@@ -280,6 +283,7 @@ export default function Settings() {
       }
       setWfCreate(false);
       setWfEdit(null);
+      setWfError('');
       loadWorkflows();
     } catch (e) {
       setWfError(e instanceof Error ? e.message : 'Failed to save the workflow');
@@ -289,7 +293,7 @@ export default function Settings() {
   };
 
   const toggleWfActive = async (wf: Wf) => {
-    setWfError('');
+    setWfError(''); setWfMsg('');
     try {
       await api(`/workflows/${wf.id}`, { method: 'PATCH', body: { active: !wf.active } });
       loadWorkflows();
