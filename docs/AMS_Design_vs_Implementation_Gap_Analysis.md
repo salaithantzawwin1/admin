@@ -49,6 +49,7 @@
 | # | Fix / Feature | Deployed | Doc status affected |
 |---|---|---|---|
 | 12 | **R4 final step — procurement master data seeding** — `seedProcurementMasterData()` in `seed.js` (runs idempotently on EVERY boot, outside the demo-data guard, like the workflow bands): 8 **Asset categories** (spec §16 list), 1 **Location** (Head Office — Yangon, spec §47), 5 **Account categories** (spec §17 concept list), and the **example Chart of Accounts** — 13 accounts with `ACC-…` codes linked to their category, created only while the accounts table is empty so company edits are never resurrected. Verified via psql on BOTH DBs after deploy: `account_categories=5 / asset_categories=8 / accounts=13 / locations=1` (previously all 0). The PR form's Account/Asset drop-downs now carry real rows. No assets are invented — asset registration stays a later phase. | `07f49e7` — ✅ testing + production | §3 R4 → ✅ done (foundation + master data); P7's account references now resolvable |
+| 13 | **R6 — Invoice + 3-way match + Controls 3/4/5 (design §22–25, §35)** — `Invoice`/`InvoiceItem` entities (migration 47): `INV-…` numbering, PO + optional GRN references, subtotal/tax/total `Decimal(12,2)`, persisted `matchStatus`/`matchDetail`, lifecycle DRAFT→SUBMITTED→APPROVED→POSTED (+ REJECTED→redraft) per §25. `invoices` module: create (draft / create-and-submit), list/detail with PO+GRN context, transition guards — **Control 3** submit requires a linked PO with ≥1 GRN (no invoices on phantom deliveries), **Control 4** invoice total > PO total held, **Control 5** `UNIQUE(supplierId, supplierInvoiceNumber)` duplicate-vendor-bill guard. **§23 three-way match** persisted per line: billed > GRN-accepted / price ≠ PO / over-PO-amount → MISMATCH; billed = GRN-accepted while deliveries continue → PARTIAL_MATCH; complete + equal → MATCHED; no PO ref → NO_MATCH. §25 gate: only MATCHED/PARTIAL_MATCH approve. 16-case `invoices.test.ts`; frontend `/invoices` page (list, detail with per-line match table, create from PO pre-fill); e2e verified on testing: INV-202610-0001 created→submitted(MATCHED)→approved→POSTED, duplicate rejected. | `74889c8` (backend) + `9f1ba8a` (frontend) — ✅ testing + production; migration 47 verified in BOTH DBs | §3 P7 ❌→✅ implemented; P10 Controls 3/4/5 ❌→✅; R6 → ✅ done |
 
 ---
 
@@ -177,7 +178,7 @@ Procurement §31's entity (`entityType`/`entityId`/step/approver/status) is alre
 - `GoodsReceipt`/`GoodsReceiptItem` (ordered/received/accepted/rejected qty, partial deliveries via multiple GRNs) that **posts stock IN into the existing `StockTransaction` ledger** — never a parallel stock system (spec §23 principle).
 - PO-required receiving (Control 2) with an emergency-purchase bypass type (§36).
 
-### R6 — Invoice + 3-way matching + duplicate control (effort: 2–3 weeks) — **NEXT UP**
+### R6 — Invoice + 3-way matching + duplicate control (effort: 2–3 weeks) — ✅ **DONE 2026-10-12** (`74889c8` backend + `9f1ba8a` frontend; migration 47 verified in both DBs; e2e INV-202610-0001 submitted(MATCHED)→APPROVED→POSTED on testing)
 - `Invoice`/`InvoiceItem` per spec §20 with PO/GRN references; statuses DRAFT→SUBMITTED→APPROVED→POSTED via the existing workflow engine.
 - Three-way match service returning MATCHED / PARTIAL_MATCH / MISMATCH (§23); mismatches route to review (Return action already exists in the workflow engine).
 - `@@unique([supplierId, invoiceNumber])` for Control 5.
@@ -201,8 +202,8 @@ Phase 1  Account/Asset foundation + PR entity (R2, R4)        — ✅ done 2026-
 Phase 2  Amount-based approval rules (R3)                     — ✅ done 2026-10-08 (testing + prod)
 Phase 3  PO + GRN on existing stock ledger (R5)               — ✅ done 2026-10-09 (testing + prod, migration 46 verified both DBs)
 Phase 3b Procurement master-data seeding (R4 final step)      — ✅ done 2026-10-12 (testing + prod, verified both DBs)
-Phase 4  Invoice + 3-way match + controls (R6)                — NEXT — 2–3 weeks
-Phase 5  RFQ/Quotation/Comparison (P3/P4)                     — 2 weeks
+Phase 4  Invoice + 3-way match + controls (R6)                — ✅ done 2026-10-12 (testing + prod, migration 47 verified both DBs)
+Phase 5  RFQ/Quotation/Comparison (P3/P4)                     — NEXT — 2 weeks
 Phase 6  Budget integration + reports/dashboard (R7)          — ongoing
 Phase 7  Payment integration (P8 — with Finance)              — future
 ```
