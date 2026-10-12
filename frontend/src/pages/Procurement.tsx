@@ -227,12 +227,25 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New purchase request" error={error} wide onClose={onClose}>
       <div className="space-y-4">
-        {/* line items */}
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
+        {/* line items — bordered editor with desktop column headers; on small
+            screens the grid stacks and placeholders label each field */}
+        <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
+            <span className="text-xs text-gray-400">{items.length} line{items.length === 1 ? '' : 's'}</span>
+          </div>
+          <div className="hidden sm:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
+            <div className="col-span-4">Description</div>
+            <div className="col-span-1">Qty</div>
+            <div className="col-span-1">Unit</div>
+            <div className="col-span-2">Unit price (Ks)</div>
+            <div className="col-span-2">Account</div>
+            <div className="col-span-1">Asset</div>
+            <div className="col-span-1 text-right" aria-hidden="true" />
+          </div>
           {items.map((it, idx) => (
             <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-12 sm:col-span-5">
+              <div className="col-span-12 sm:col-span-4">
                 <Input placeholder={`Item ${idx + 1} description *`} value={it.description} onChange={(e) => setItem(idx, { description: e.target.value })} />
               </div>
               <div className="col-span-3 sm:col-span-1">
@@ -266,18 +279,18 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
                 </Select>
               </div>
               <div className="col-span-2 sm:col-span-1 flex justify-end">
-                <Button variant="danger" onClick={() => setItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev))}>
+                <Button variant="danger" title={`Remove item ${idx + 1}`} onClick={() => setItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev))}>
                   ×
                 </Button>
               </div>
             </div>
           ))}
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" onClick={() => setItems((prev) => [...prev, emptyItem()])}>
               + Add item
             </Button>
             <div className="text-sm text-gray-600">
-              Estimated total: <b>{fmtMoney(total)}</b>
+              Estimated total: <b>{fmtMoney(total)} Ks</b>
             </div>
           </div>
         </div>
@@ -306,7 +319,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
         </div>
       </div>
 
-      <div className="mt-4 flex gap-2">
+      <div className="sticky bottom-0 -mx-5 px-5 py-3 mt-4 flex flex-wrap gap-2 justify-end bg-white border-t border-gray-100 rounded-b-xl">
         <Button disabled={!valid || busy} onClick={() => submit(true)}>
           {busy ? 'Submitting…' : 'Submit for Approval'}
         </Button>

@@ -364,70 +364,77 @@ export default function PurchaseOrders() {
       {createOpen && (
         <Modal onClose={() => setCreateOpen(false)} title="New purchase order" wide>
           <div className="space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="block text-sm">
-                <span className="text-gray-600">Supplier *</span>
-                <Select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <label htmlFor="po-supplier" className="text-xs text-gray-500 block mb-1">Supplier *</label>
+                <Select id="po-supplier" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
                   <option value="">— pick a supplier —</option>
                   {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </Select>
-              </label>
-              <label className="block text-sm">
-                <span className="text-gray-600">From approved PR (optional)</span>
-                <Select value={prId} onChange={(e) => setPrId(e.target.value)}>
+              </div>
+              <div>
+                <label htmlFor="po-expected" className="text-xs text-gray-500 block mb-1">Expected delivery</label>
+                <Input id="po-expected" type="date" value={expectedDelivery} onChange={(e) => setExpectedDelivery(e.target.value)} />
+              </div>
+              <div className="sm:col-span-3">
+                <label htmlFor="po-pr" className="text-xs text-gray-500 block mb-1">From approved PR (optional)</label>
+                <Select id="po-pr" value={prId} onChange={(e) => setPrId(e.target.value)}>
                   <option value="">— ad-hoc / direct purchase —</option>
                   {approvedPrs.map((p) => <option key={p.id} value={p.id}>{p.docNumber}{p.title ? ` — ${p.title}` : ''}</option>)}
                 </Select>
-              </label>
+              </div>
             </div>
-            <label className="block text-sm">
-              <span className="text-gray-600">Expected delivery</span>
-              <Input type="date" value={expectedDelivery} onChange={(e) => setExpectedDelivery(e.target.value)} />
-            </label>
 
-            <div className="border rounded p-2 space-y-2">
-              <div className="text-sm font-medium text-gray-600">Items — pick an inventory item only for stock (consumable) goods</div>
+        {/* line items — pick an inventory item only for stock (consumable) goods */}
+            <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
+                <span className="text-xs text-gray-400">Stock-posting applies only to 📦 inventory lines</span>
+              </div>
+              <div className="hidden sm:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
+                <div className="col-span-3">Inventory item (optional)</div>
+                <div className="col-span-3">Description *</div>
+                <div className="col-span-1">Qty *</div>
+                <div className="col-span-1">Unit</div>
+                <div className="col-span-3">Unit price (Ks) *</div>
+                <div className="col-span-1 text-right" aria-hidden="true" />
+              </div>
               {lines.map((l, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
-                  <label className="col-span-4 block text-sm">
-                    <span className="text-gray-600">Inventory item (optional)</span>
+                <div key={idx} className="grid grid-cols-12 gap-2 items-start">
+                  <div className="col-span-12 sm:col-span-3">
                     <Select value={l.inventoryItemId} onChange={(e) => pickItem(idx, e.target.value)}>
                       <option value="">— asset / service (no stock) —</option>
                       {inventoryItems.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name} ({i.balance} {i.unit})</option>)}
                     </Select>
-                  </label>
-                  <label className="col-span-3 block text-sm">
-                    <span className="text-gray-600">Description *</span>
-                    <Input value={l.description} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} />
-                  </label>
-                  <label className="col-span-1 block text-sm">
-                    <span className="text-gray-600">Qty *</span>
-                    <Input type="number" min={1} value={l.quantity} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, quantity: e.target.value } : x))} />
-                  </label>
-                  <label className="col-span-1 block text-sm">
-                    <span className="text-gray-600">Unit</span>
-                    <Input value={l.unit} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unit: e.target.value } : x))} />
-                  </label>
-                  <label className="col-span-2 block text-sm">
-                    <span className="text-gray-600">Unit price (Ks) *</span>
-                    <Input type="number" min={0} value={l.unitPrice} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} />
-                  </label>
-                  <div className="col-span-1">
-                    <Button variant="danger" onClick={() => setLines((ls) => ls.filter((_, i) => i !== idx))} disabled={lines.length <= 1}>✕</Button>
+                  </div>
+                  <div className="col-span-6 sm:col-span-3">
+                    <Input placeholder={`Line ${idx + 1} description *`} value={l.description} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} />
+                  </div>
+                  <div className="col-span-3 sm:col-span-1">
+                    <Input type="number" min={1} placeholder="Qty" value={l.quantity} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, quantity: e.target.value } : x))} />
+                  </div>
+                  <div className="col-span-3 sm:col-span-1">
+                    <Input placeholder="Unit" value={l.unit} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unit: e.target.value } : x))} />
+                  </div>
+                  <div className="col-span-6 sm:col-span-3">
+                    <Input type="number" min={0} placeholder="Unit price (Ks)" value={l.unitPrice} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} />
+                  </div>
+                  <div className="col-span-6 sm:col-span-1 flex justify-end">
+                    <Button variant="danger" title={`Remove line ${idx + 1}`} onClick={() => setLines((ls) => ls.filter((_, i) => i !== idx))} disabled={lines.length <= 1}>✕</Button>
                   </div>
                 </div>
               ))}
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between pt-1">
                 <Button variant="ghost" onClick={() => setLines((ls) => [...ls, emptyLine()])}>+ Add line</Button>
                 <div className="text-sm text-gray-600">Estimated total: <b>{money(estimatedTotal())}</b></div>
               </div>
             </div>
 
-            <label className="block text-sm">
-              <span className="text-gray-600">Note</span>
-              <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
-            </label>
-            <div className="flex justify-end gap-2">
+            <div>
+              <label htmlFor="po-note" className="text-xs text-gray-500 block mb-1">Note</label>
+              <Textarea id="po-note" rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2 sticky bottom-0 -mx-5 px-5 py-3 bg-white border-t border-gray-100 rounded-b-xl">
               <Button variant="ghost" onClick={() => setCreateOpen(false)}>Cancel</Button>
               <Button disabled={busy} onClick={createPo}>Create PO (DRAFT)</Button>
             </div>
@@ -502,17 +509,23 @@ export default function PurchaseOrders() {
 
       {/* ---------------- GRN entry ---------------- */}
       {grnOpen && detail && (
-        <Modal onClose={() => setGrnOpen(false)} title={`Record GRN — ${detail.poNumber}`}>
+        <Modal onClose={() => setGrnOpen(false)} title={`Record GRN — ${detail.poNumber}`} wide>
           <div className="space-y-3">
             <div className="text-sm text-gray-600">
               Accepted stock quantities post straight into the inventory ledger. 📦 lines are stock items; plain lines are assets/services (no stock).
             </div>
+            <div className="hidden sm:grid grid-cols-4 gap-2 text-xs text-gray-500 px-3">
+              <div>Received *</div>
+              <div>Accepted *</div>
+              <div>Rejected *</div>
+              <div>Condition notes</div>
+            </div>
             {detail.items.map((it) => {
               const g = grnLines[it.id] ?? { received: '0', accepted: '0', rejected: '0', condition: '' };
               return (
-                <div key={it.id} className="border rounded p-2">
-                  <div className="flex justify-between text-sm mb-1">
-                    <span>{it.description}</span>
+                <div key={it.id} className="border border-gray-200 rounded-lg p-2">
+                  <div className="flex justify-between text-sm mb-2">
+                    <span className="font-medium">{it.description}</span>
                     <span className="text-gray-500">{receivedFor(it)}/{it.quantity} accepted so far</span>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -536,11 +549,11 @@ export default function PurchaseOrders() {
                 </div>
               );
             })}
-            <label className="block text-sm">
-              <span className="text-gray-600">Remarks</span>
-              <Textarea rows={2} value={grnRemarks} onChange={(e) => setGrnRemarks(e.target.value)} />
-            </label>
-            <div className="flex justify-end gap-2">
+            <div>
+              <label htmlFor="grn-remarks" className="text-xs text-gray-500 block mb-1">Remarks (optional)</label>
+              <Textarea id="grn-remarks" rows={2} value={grnRemarks} onChange={(e) => setGrnRemarks(e.target.value)} />
+            </div>
+            <div className="flex justify-end gap-2 sticky bottom-0 -mx-5 px-5 py-3 bg-white border-t border-gray-100 rounded-b-xl">
               <Button variant="ghost" onClick={() => setGrnOpen(false)}>Cancel</Button>
               <Button disabled={busy} onClick={submitGrn}>Record GRN & post stock</Button>
             </div>

@@ -23,12 +23,15 @@ export function Button({
   variant = 'primary',
   disabled,
   type = 'button',
+  title,
 }: {
   children: ReactNode;
   onClick?: () => void;
   variant?: 'primary' | 'ghost' | 'danger';
   disabled?: boolean;
   type?: 'button' | 'submit';
+  /** native tooltip (hover hint, e.g. on icon-only buttons) */
+  title?: string;
 }) {
   const styles = {
     primary: 'bg-gold text-gray-900 hover:bg-gold-light shadow-sm',
@@ -42,6 +45,7 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${styles}`}
     >
       {children}
