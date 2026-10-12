@@ -44,6 +44,12 @@
 | 10 | **Cars fix — janitor no longer re-closes Back-at-Office rides (CAR-202610-0022)** — the `releaseExpired` sweep matched rows whose driver had already tapped "🏁 Back at Office" (`releasedAt` deliberately stays null for the Back-at-Office queries), re-completed the request and sent Administration a contradictory "never tapped Back at Office" auto-close notice minutes after the correct "🏁 Car available" message. The janitor now has a dedicated back-at-office branch that only finalises the bookkeeping and sends no duplicate/contradicting notice. Regression test in `cars-fixes.test.ts`. | `24b9f29` | ✅ **testing + production** |
 | 11 | **Procurement Phase 3 — PO + GRN (R5, design §15–20)** — `PurchaseOrder`/`PurchaseOrderItem`/`GoodsReceipt`/`GoodsReceiptItem` entities (migration 46) with the §16 status machine (DRAFT→APPROVED→SENT_TO_VENDOR→PARTIALLY/FULLY_RECEIVED→CLOSED, CANCELLED); new `purchase-orders` module: numbered `PO-…`/`GRN-…` via `DocumentSequence`, Control 1 no-approval-no-PO (linked PR must be APPROVED), Control 2 PO-required receiving, over-receiving guard (accepted ≤ ordered per line, partial deliveries via multiple GRNs), close-only-when-fully-received; GRN accepted consumable lines post straight into the EXISTING `StockTransaction` ledger (spec §23 — no parallel stock system); frontend `/purchase-orders` page (PO create from approved PR, line-item editor, detail with acceptance progress, GRN entry with received/accepted/rejected/condition, status actions); 11-case test suite `purchase-orders.test.ts`. | ✅ testing (`:8030`) AND production (`:80`) — `0d1258a`; migration 46 verified in BOTH DBs (4 tables); `/purchase-orders` + `/workflows` API live on both (401 unauth), fresh bundles served | §3 P5/P6 ⚠️Partial/❌→✅ implemented; R5 → ✅ done |
 
+### 2026-10-12
+
+| # | Fix / Feature | Deployed | Doc status affected |
+|---|---|---|---|
+| 12 | **R4 final step — procurement master data seeding** — `seedProcurementMasterData()` in `seed.js` (runs idempotently on EVERY boot, outside the demo-data guard, like the workflow bands): 8 **Asset categories** (spec §16 list), 1 **Location** (Head Office — Yangon, spec §47), 5 **Account categories** (spec §17 concept list), and the **example Chart of Accounts** — 13 accounts with `ACC-…` codes linked to their category, created only while the accounts table is empty so company edits are never resurrected. Verified via psql on BOTH DBs after deploy: `account_categories=5 / asset_categories=8 / accounts=13 / locations=1` (previously all 0). The PR form's Account/Asset drop-downs now carry real rows. No assets are invented — asset registration stays a later phase. | `07f49e7` — ✅ testing + production | §3 R4 → ✅ done (foundation + master data); P7's account references now resolvable |
+
 ---
 
 ## 1. What Exists Today (verified)
@@ -163,15 +169,15 @@ Procurement §31's entity (`entityType`/`entityId`/step/approver/status) is alre
 - add **amount-based rule support** (e.g. workflow selection by total amount threshold) to satisfy §8;
 - PR/PO/Invoice all become `docType`s on `RequestDocument`, as CAR_REQUEST and MEETING_ROOM_REQUEST already are.
 
-### R4 — Foundation entities before invoice matching (effort: 1–2 weeks) — ⚠️ **Foundation tables DONE 2026-10-08** (`Account`/`AccountCategory`/`Asset`/`AssetCategory`/`Location` created with Phase 1, minimal fields, PR items already reference them optionally; seeding from the spec's category lists still open)
-Introduce `Account` (+ `AccountCategory`) and `Asset` (+ category/location) per spec §15–17 with minimal fields, seeded from the spec's category lists. PR items may reference them optionally from day one (R2), and Invoice items require them (spec §18's core principle: *"accounting asks what was spent on; asset asks which asset"*). Vehicles: keep the existing Fleet domain separate initially; consider an `assetId` back-reference later.
+### R4 — Foundation entities before invoice matching (effort: 1–2 weeks) — ✅ **DONE — tables 2026-10-08 (migration 44), master-data seeding 2026-10-12 (`07f49e7`)**
+`Account`/`AccountCategory`/`Asset`/`AssetCategory`/`Location` created with Phase 1 (minimal fields; PR items reference them optionally). Seeding closed the last gap on 2026-10-12: the spec §16 asset categories, §17 account categories, a Head Office location and the §17 example Chart of Accounts (13 accounts) now seed idempotently on every boot and are **verified in both testing and prod DBs (5 / 8 / 13 / 1 rows)**. Vehicles: keep the existing Fleet domain separate initially; consider an `assetId` back-reference later. Asset registration UI/master rows remain a later phase (no assets invented by seed).
 
 ### R5 — PO + GRN on the existing stock ledger (effort: 2–3 weeks) — ✅ **DONE 2026-10-09** (`0d1258a`; migration 46 applied and verified in BOTH testing (:8030) and production (:80) DBs, `/api/purchase-orders` + `/api/workflows` live on both stacks, 11-case test suite green)
 - `PurchaseOrder`/`PurchaseOrderItem` with the §16 status machine; "no approval, no PO" (Control 1) is a service-level check on the PR status.
 - `GoodsReceipt`/`GoodsReceiptItem` (ordered/received/accepted/rejected qty, partial deliveries via multiple GRNs) that **posts stock IN into the existing `StockTransaction` ledger** — never a parallel stock system (spec §23 principle).
 - PO-required receiving (Control 2) with an emergency-purchase bypass type (§36).
 
-### R6 — Invoice + 3-way matching + duplicate control (effort: 2–3 weeks)
+### R6 — Invoice + 3-way matching + duplicate control (effort: 2–3 weeks) — **NEXT UP**
 - `Invoice`/`InvoiceItem` per spec §20 with PO/GRN references; statuses DRAFT→SUBMITTED→APPROVED→POSTED via the existing workflow engine.
 - Three-way match service returning MATCHED / PARTIAL_MATCH / MISMATCH (§23); mismatches route to review (Return action already exists in the workflow engine).
 - `@@unique([supplierId, invoiceNumber])` for Control 5.
@@ -191,10 +197,11 @@ Only after P1–P7 entities exist: procurement dashboard tiles (mirror the Inven
 
 ```text
 Phase 0  Doc housekeeping + commit (R1)                       — ✅ done 2026-10-08
-Phase 1  Account/Asset foundation + PR entity (R2, R4)        — ✅ done 2026-10-08 (testing; prod deploy pending)
+Phase 1  Account/Asset foundation + PR entity (R2, R4)        — ✅ done 2026-10-08 (testing + prod)
 Phase 2  Amount-based approval rules (R3)                     — ✅ done 2026-10-08 (testing + prod)
 Phase 3  PO + GRN on existing stock ledger (R5)               — ✅ done 2026-10-09 (testing + prod, migration 46 verified both DBs)
-Phase 4  Invoice + 3-way match + controls (R6)                — 2–3 weeks
+Phase 3b Procurement master-data seeding (R4 final step)      — ✅ done 2026-10-12 (testing + prod, verified both DBs)
+Phase 4  Invoice + 3-way match + controls (R6)                — NEXT — 2–3 weeks
 Phase 5  RFQ/Quotation/Comparison (P3/P4)                     — 2 weeks
 Phase 6  Budget integration + reports/dashboard (R7)          — ongoing
 Phase 7  Payment integration (P8 — with Finance)              — future
