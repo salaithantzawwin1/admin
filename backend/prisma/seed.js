@@ -114,6 +114,68 @@ async function seedWorkflows() {
   console.log('PURCHASE_REQUEST amount-band workflows seeded (design §8 examples).');
 }
 
+/**
+ * Account/Asset foundation master data (R4 final step — design doc §15–17).
+ * Idempotent routing/master data — runs on EVERY seed in EVERY environment:
+ * the PR form links items to accounts/assets, so the drop-downs must carry
+ * real rows, not render empty. Categories come straight from the spec's
+ * example lists; accounts reference their category; no assets are invented
+ * (asset registration is a later phase — admins add real ones via the UI).
+ */
+async function seedProcurementMasterData() {
+  // ----- Asset categories (Development Spec §16 example list) -----
+  const assetCategories = ['Office Equipment', 'IT Equipment', 'Furniture', 'Vehicle', 'Electrical Equipment', 'Air Conditioning', 'Printer / Copier', 'Other'];
+  for (const name of assetCategories) {
+    await prisma.assetCategory.upsert({ where: { name }, update: {}, create: { name } });
+  }
+  // ----- Locations (spec §47 seed list mentions Locations; start with HQ) -----
+  const locations = ['Head Office — Yangon'];
+  for (const name of locations) {
+    await prisma.location.upsert({ where: { name }, update: {}, create: { name } });
+  }
+  // ----- Account categories (Development Spec §17: Asset/Expense/Consumable/...) -----
+  const accountCategoryNames = [
+    'Expense',
+    'Consumable',
+    'Asset',
+    'Liability',
+    'Income',
+  ];
+  for (const name of accountCategoryNames) {
+    await prisma.accountCategory.upsert({ where: { name }, update: {}, create: { name } });
+  }
+  // ----- Chart of Accounts (spec §17 example list, categorised) -----
+  const catByName = Object.fromEntries(accountCategoryNames.map((n) => [n, null]));
+  for (const n of accountCategoryNames) {
+    catByName[n] = (await prisma.accountCategory.findUnique({ where: { name: n } })).id;
+  }
+  const accounts = [
+    ['ACC-OS-001', 'Office Supplies', 'Expense'],
+    ['ACC-COP-CON', 'Copier Consumables', 'Consumable'],
+    ['ACC-RM-001', 'Repair & Maintenance', 'Expense'],
+    ['ACC-AC-001', 'Aircon Maintenance', 'Expense'],
+    ['ACC-IT-001', 'IT Maintenance', 'Expense'],
+    ['ACC-OE-001', 'Office Equipment', 'Asset'],
+    ['ACC-FUR-001', 'Furniture', 'Asset'],
+    ['ACC-UTL-001', 'Utilities', 'Expense'],
+    ['ACC-TRV-001', 'Travel', 'Expense'],
+    ['ACC-TEL-001', 'Telephone & Internet', 'Expense'],
+    ['ACC-PC-001', 'Petty Cash', 'Asset'],
+    ['ACC-BANK-001', 'Bank', 'Asset'],
+    ['ACC-AP-001', 'Accounts Payable', 'Liability'],
+  ];
+  const existingAccounts = await prisma.account.count();
+  if (existingAccounts === 0) {
+    // Seed the example chart of accounts only when the table is empty —
+    // after the company starts editing, never resurrect deleted rows.
+    await prisma.account.createMany({
+      data: accounts.map(([code, name, categoryName]) => ({ code, name, categoryId: catByName[categoryName] })),
+    });
+    console.log(`Chart of Accounts seeded (${accounts.length} example accounts).`);
+  }
+  console.log(`Procurement master data: ${assetCategories.length} asset categories, ${accountCategoryNames.length} account categories, ${locations.length} locations.`);
+}
+
 async function main() {
   const seedPassword = process.env.SEED_PASSWORD || 'ChangeMe#2026';
   const hash = await bcrypt.hash(seedPassword, 10);
@@ -127,6 +189,7 @@ async function main() {
   }
   console.log('Roles seeded:', ROLES.length);
   await seedWorkflows();
+  await seedProcurementMasterData();
   if (IS_PROD) {
     console.log('Production mode — skipping demo data seed (only sysadmin + roles + workflows).');
     await prisma.$disconnect();
