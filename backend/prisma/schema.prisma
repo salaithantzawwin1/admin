@@ -2,7 +2,7 @@
 // (later phases extend this file: purchasing, assets, maintenance...)
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
   // runtime = node:20-bookworm (Debian, OpenSSL 3) → native debian engines
   binaryTargets = ["native"]
 }
@@ -56,27 +56,28 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  userRoles       UserRole[]
-  auditLogs       AuditLog[]
-  employee        Employee?
-  actions         ApprovalAction[]     @relation("ApprovalActions")
-  delegationsFrom ApprovalDelegation[] @relation("DelegationsFrom")
-  delegationsTo   ApprovalDelegation[] @relation("DelegationsTo")
-  notifications   Notification[]       @relation("Notifications")
-  supplierContactLogs SupplierContactLog[] @relation("SupplierContactLogs")
+  userRoles              UserRole[]
+  auditLogs              AuditLog[]
+  employee               Employee?
+  actions                ApprovalAction[]        @relation("ApprovalActions")
+  delegationsFrom        ApprovalDelegation[]    @relation("DelegationsFrom")
+  delegationsTo          ApprovalDelegation[]    @relation("DelegationsTo")
+  notifications          Notification[]          @relation("Notifications")
+  supplierContactLogs    SupplierContactLog[]    @relation("SupplierContactLogs")
   supplierPurchaseDrafts SupplierPurchaseDraft[] @relation("SupplierPurchaseDrafts")
-  attachments     Attachment[]         @relation("Attachments")
-  requestDocs     RequestDocument[]    @relation("RequestDocuments")
-  carManagerAcks  CarRequest[]         @relation("CarManagerAcks")
-  announcements   Announcement[]       @relation("Announcements")
-  announcementReads AnnouncementRead[] @relation("AnnouncementReads")
-  carExpenses     CarExpense[]         @relation("CarExpenseCreator")
-  stockTxns       StockTransaction[]   @relation("StockTransactions")
-  purchaseOrdersCreated PurchaseOrder[] @relation("PoCreatedBy")
-  goodsReceiptsReceived  GoodsReceipt[]  @relation("GrnReceivedBy")
-  telegramChatId    String? @unique // linked Telegram chat (bind via /start USR-<code>)
-  telegramBindCode  String? @unique
-  telegramUsername  String?
+  attachments            Attachment[]            @relation("Attachments")
+  requestDocs            RequestDocument[]       @relation("RequestDocuments")
+  carManagerAcks         CarRequest[]            @relation("CarManagerAcks")
+  announcements          Announcement[]          @relation("Announcements")
+  announcementReads      AnnouncementRead[]      @relation("AnnouncementReads")
+  carExpenses            CarExpense[]            @relation("CarExpenseCreator")
+  stockTxns              StockTransaction[]      @relation("StockTransactions")
+  purchaseOrdersCreated  PurchaseOrder[]         @relation("PoCreatedBy")
+  goodsReceiptsReceived  GoodsReceipt[]          @relation("GrnReceivedBy")
+  invoicesCreated        Invoice[]               @relation("InvoiceCreatedBy")
+  telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
+  telegramBindCode       String?                 @unique
+  telegramUsername       String?
 
   @@map("users")
 }
@@ -88,7 +89,7 @@ model Role {
 
   userRoles UserRole[]
 
-  permissions RolePermission[]
+  permissions       RolePermission[]
   deniedPermissions RolePermissionDenied[]
 
   @@map("roles")
@@ -109,11 +110,11 @@ model UserRole {
 // ---------------- RBAC: fine-grained permissions (Plan §4/§5) ----------------
 
 model Permission {
-  id          String @id @default(uuid()) @db.Uuid
-  code        String @unique
+  id          String  @id @default(uuid()) @db.Uuid
+  code        String  @unique
   description String?
 
-  rolePerms RolePermission[]
+  rolePerms   RolePermission[]
   deniedPerms RolePermissionDenied[]
 
   @@map("permissions")
@@ -148,12 +149,12 @@ model RolePermissionDenied {
 // ---------------- Organization ----------------
 
 model Branch {
-  id        String  @id @default(uuid()) @db.Uuid
-  code      String  @unique
+  id        String   @id @default(uuid()) @db.Uuid
+  code      String   @unique
   name      String
   address   String?
   phone     String?
-  isActive  Boolean @default(true)
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -164,12 +165,12 @@ model Branch {
 }
 
 model Department {
-  id             String  @id @default(uuid()) @db.Uuid
-  code           String  @unique
+  id             String   @id @default(uuid()) @db.Uuid
+  code           String   @unique
   name           String
-  branchId       String? @db.Uuid
-  headEmployeeId String? @db.Uuid
-  isActive       Boolean @default(true)
+  branchId       String?  @db.Uuid
+  headEmployeeId String?  @db.Uuid
+  isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -192,15 +193,15 @@ model Employee {
   hiredAt      DateTime?
   departmentId String?        @db.Uuid
   branchId     String?        @db.Uuid
-  userId       String?        @db.Uuid @unique
+  userId       String?        @unique @db.Uuid
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
-  department        Department?  @relation("DeptEmployees", fields: [departmentId], references: [id])
-  branch            Branch?      @relation(fields: [branchId], references: [id])
-  user              User?        @relation(fields: [userId], references: [id])
-  headedDepartments Department[] @relation("DeptHead")
-  drivers           Driver[]     @relation("DriverEmployee")
+  department        Department?        @relation("DeptEmployees", fields: [departmentId], references: [id])
+  branch            Branch?            @relation(fields: [branchId], references: [id])
+  user              User?              @relation(fields: [userId], references: [id])
+  headedDepartments Department[]       @relation("DeptHead")
+  drivers           Driver[]           @relation("DriverEmployee")
   issuedStockTx     StockTransaction[] @relation("StockTxIssuedTo")
 
   @@map("employees")
@@ -220,17 +221,17 @@ model SystemSetting {
 // Telegram users who started the bot but are not yet approved —
 // Administration approves and picks the AMS user/driver to bind (Plan: join → draft → approve).
 model TelegramJoinRequest {
-  id          String    @id @default(uuid()) @db.Uuid
-  chatId      String    @unique
-  tgUsername  String?
-  displayName String?
-  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
-  boundUserId   String? @db.Uuid
-  boundDriverId String? @db.Uuid
-  decidedById String?   @db.Uuid
-  decidedAt   DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id            String    @id @default(uuid()) @db.Uuid
+  chatId        String    @unique
+  tgUsername    String?
+  displayName   String?
+  status        String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  boundUserId   String?   @db.Uuid
+  boundDriverId String?   @db.Uuid
+  decidedById   String?   @db.Uuid
+  decidedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@map("telegram_join_requests")
 }
@@ -366,20 +367,20 @@ model RequestDocument {
   totalLevels  Int            @default(0)
   escalated    Boolean        @default(false)
   submittedAt  DateTime?
-  archivedAt   DateTime?      // soft archive — cancelled >30d are hidden from default lists
+  archivedAt   DateTime? // soft archive — cancelled >30d are hidden from default lists
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
 
-  requester      User              @relation("RequestDocuments", fields: [requesterId], references: [id])
-  department     Department?       @relation(fields: [departmentId], references: [id])
-  actions        ApprovalAction[]
-  attachments    Attachment[]
-  carRequest     CarRequest?
-  carAssignment  CarAssignment?
-  meetingRequest MeetingRoomRequest?
-  supplyRequest  OfficeSupplyRequest? @relation("SupplyRequest")
-  supplierDrafts SupplierPurchaseDraft[] @relation("SupplierDraftRequest")
-  stockTxns      StockTransaction[]   @relation("StockTxRequest")
+  requester       User                    @relation("RequestDocuments", fields: [requesterId], references: [id])
+  department      Department?             @relation(fields: [departmentId], references: [id])
+  actions         ApprovalAction[]
+  attachments     Attachment[]
+  carRequest      CarRequest?
+  carAssignment   CarAssignment?
+  meetingRequest  MeetingRoomRequest?
+  supplyRequest   OfficeSupplyRequest?    @relation("SupplyRequest")
+  supplierDrafts  SupplierPurchaseDraft[] @relation("SupplierDraftRequest")
+  stockTxns       StockTransaction[]      @relation("StockTxRequest")
   purchaseRequest PurchaseRequest?
 
   @@index([status])
@@ -504,25 +505,25 @@ enum AnnouncementTargetType {
 }
 
 model Announcement {
-  id           String               @id @default(uuid()) @db.Uuid
-  code         String               @unique // ANN-2026-0001 (NumberingService)
-  title        String
-  content      String @db.Text
-  category     AnnouncementCategory @default(GENERAL)
-  priority     AnnouncementPriority @default(NORMAL)
-  status       AnnouncementStatus   @default(DRAFT)
-  publishAt    DateTime?            // when it becomes visible (SCHEDULED) / was published
-  startAt      DateTime?            // optional visible window start (defaults to publishAt)
-  endAt        DateTime?            // when it expires (auto EXPIRED after this)
-  requiresAck  Boolean              @default(false) // IMPORTANT+ → admin sees target/read/unread
-  pinnedAt     DateTime?            // admin pin → sorted first on every list
-  createdById  String               @db.Uuid
-  createdAt    DateTime             @default(now())
-  updatedAt    DateTime             @updatedAt
+  id          String               @id @default(uuid()) @db.Uuid
+  code        String               @unique // ANN-2026-0001 (NumberingService)
+  title       String
+  content     String               @db.Text
+  category    AnnouncementCategory @default(GENERAL)
+  priority    AnnouncementPriority @default(NORMAL)
+  status      AnnouncementStatus   @default(DRAFT)
+  publishAt   DateTime? // when it becomes visible (SCHEDULED) / was published
+  startAt     DateTime? // optional visible window start (defaults to publishAt)
+  endAt       DateTime? // when it expires (auto EXPIRED after this)
+  requiresAck Boolean              @default(false) // IMPORTANT+ → admin sees target/read/unread
+  pinnedAt    DateTime? // admin pin → sorted first on every list
+  createdById String               @db.Uuid
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
 
-  createdBy User                  @relation("Announcements", fields: [createdById], references: [id])
-  targets   AnnouncementTarget[]
-  reads     AnnouncementRead[]
+  createdBy   User                 @relation("Announcements", fields: [createdById], references: [id])
+  targets     AnnouncementTarget[]
+  reads       AnnouncementRead[]
   attachments Attachment[]
 
   @@index([status, publishAt])
@@ -532,14 +533,14 @@ model Announcement {
 }
 
 model AnnouncementTarget {
-  id            String                @id @default(uuid()) @db.Uuid
-  announcementId String               @db.Uuid
-  targetType    AnnouncementTargetType
+  id             String                 @id @default(uuid()) @db.Uuid
+  announcementId String                 @db.Uuid
+  targetType     AnnouncementTargetType
   // targetId semantics per type: DEPARTMENT→departments.id, ROLE→RoleName,
   // EMPLOYEE→users.id, BRANCH→branches.id; ALL → null
-  targetId      String?
-  targetLabel   String // snapshot for display (dept/role/branch/employee name, "Everyone")
-  createdAt     DateTime              @default(now())
+  targetId       String?
+  targetLabel    String // snapshot for display (dept/role/branch/employee name, "Everyone")
+  createdAt      DateTime               @default(now())
 
   announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
 
@@ -548,11 +549,11 @@ model AnnouncementTarget {
 }
 
 model AnnouncementRead {
-  id            String   @id @default(uuid()) @db.Uuid
-  announcementId String  @db.Uuid
-  userId        String   @db.Uuid
-  readAt        DateTime @default(now())
-  ackAt         DateTime? // explicit "I acknowledge" (requiresAnnouncements only)
+  id             String    @id @default(uuid()) @db.Uuid
+  announcementId String    @db.Uuid
+  userId         String    @db.Uuid
+  readAt         DateTime  @default(now())
+  ackAt          DateTime? // explicit "I acknowledge" (requiresAnnouncements only)
 
   announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
   user         User         @relation("AnnouncementReads", fields: [userId], references: [id], onDelete: Cascade)
@@ -680,24 +681,24 @@ model MeetingRoom {
 }
 
 model MeetingRoomRequest {
-  id             String             @id @default(uuid()) @db.Uuid
-  requestId      String             @unique @db.Uuid // link to RequestDocument
-  title          String
-  attendees      Int                @default(1)
-  roomId         String?            @db.Uuid
-  status         WorkflowStatus     @default(DRAFT)
-  startTime      DateTime
-  endTime        DateTime
+  id                String         @id @default(uuid()) @db.Uuid
+  requestId         String         @unique @db.Uuid // link to RequestDocument
+  title             String
+  attendees         Int            @default(1)
+  roomId            String?        @db.Uuid
+  status            WorkflowStatus @default(DRAFT)
+  startTime         DateTime
+  endTime           DateTime
   // requirement fields (Plan §7)
-  meetingType    MeetingType        @default(INTERNAL)
+  meetingType       MeetingType    @default(INTERNAL)
   externalCompanies String?
-  attendeeNames  String?
-  itAssist       Boolean            @default(false)
-  reservedDriver Boolean            @default(false)
-  services       String?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @updatedAt
-  completedAt    DateTime?
+  attendeeNames     String?
+  itAssist          Boolean        @default(false)
+  reservedDriver    Boolean        @default(false)
+  services          String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  completedAt       DateTime?
 
   request RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
   room    MeetingRoom?    @relation(fields: [roomId], references: [id])
@@ -737,25 +738,25 @@ enum SupplyLineStatus {
 }
 
 model InventoryItem {
-  id          String       @id @default(uuid()) @db.Uuid
-  code        String       @unique // e.g. ITM-0001 (human-readable)
-  name        String
-  category    ItemCategory @default(STATIONERY)
-  unit        String       @default("pcs") // pcs, box, ream, bottle…
-  balance     Int          @default(0) // current stock quantity (never edited directly — only via transactions)
-  minStock    Int          @default(0) // low-stock alert threshold
-  reorderLevel Int?        // auto-reorder target (suggested restock tops up to this)
-  description String?
-  isActive    Boolean      @default(true) // soft-disable instead of delete when history exists
-  imageStoredName String?  // item photo (stored in the shared uploads volume, served publicly)
-  lastUnitPrice   Decimal? @db.Decimal(12, 2) // most recent PURCHASE unit price (spending estimate fallback)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id              String       @id @default(uuid()) @db.Uuid
+  code            String       @unique // e.g. ITM-0001 (human-readable)
+  name            String
+  category        ItemCategory @default(STATIONERY)
+  unit            String       @default("pcs") // pcs, box, ream, bottle…
+  balance         Int          @default(0) // current stock quantity (never edited directly — only via transactions)
+  minStock        Int          @default(0) // low-stock alert threshold
+  reorderLevel    Int? // auto-reorder target (suggested restock tops up to this)
+  description     String?
+  isActive        Boolean      @default(true) // soft-disable instead of delete when history exists
+  imageStoredName String? // item photo (stored in the shared uploads volume, served publicly)
+  lastUnitPrice   Decimal?     @db.Decimal(12, 2) // most recent PURCHASE unit price (spending estimate fallback)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
 
-  transactions StockTransaction[]
-  requestLines SupplyRequestLine[]
+  transactions       StockTransaction[]
+  requestLines       SupplyRequestLine[]
   supplierDraftLines SupplierPurchaseDraftLine[] @relation("SupplierDraftLines")
-  poItems PurchaseOrderItem[] @relation("PoItems")
+  poItems            PurchaseOrderItem[]         @relation("PoItems")
 
   @@index([category])
   @@index([isActive])
@@ -773,10 +774,11 @@ model Supplier {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  stockTransactions StockTransaction[] @relation("StockTxSupplier")
-  contactLogs SupplierContactLog[]
-  purchaseDrafts SupplierPurchaseDraft[]
-  purchaseOrders PurchaseOrder[] @relation("PoSupplier")
+  stockTransactions StockTransaction[]      @relation("StockTxSupplier")
+  contactLogs       SupplierContactLog[]
+  purchaseDrafts    SupplierPurchaseDraft[]
+  purchaseOrders    PurchaseOrder[]         @relation("PoSupplier")
+  invoices          Invoice[]               @relation("InvoiceSupplier")
 
   @@map("suppliers")
 }
@@ -784,15 +786,15 @@ model Supplier {
 // ---------- vendor management (Purchasing) ----------
 
 model SupplierContactLog {
-  id          String   @id @default(uuid()) @db.Uuid
-  supplierId  String   @db.Uuid
-  contactedAt DateTime @default(now())
+  id          String    @id @default(uuid()) @db.Uuid
+  supplierId  String    @db.Uuid
+  contactedAt DateTime  @default(now())
   person      String? // who at the vendor was spoken to
-  channel     String   @default("CALL") // CALL / EMAIL / VISIT / TELEGRAM / OTHER
+  channel     String    @default("CALL") // CALL / EMAIL / VISIT / TELEGRAM / OTHER
   summary     String
   followUpAt  DateTime? // optional reminder
-  createdById String   @db.Uuid
-  createdAt   DateTime @default(now())
+  createdById String    @db.Uuid
+  createdAt   DateTime  @default(now())
 
   supplier  Supplier @relation(fields: [supplierId], references: [id])
   createdBy User     @relation("SupplierContactLogs", fields: [createdById], references: [id])
@@ -835,25 +837,25 @@ model SupplierPurchaseDraftLine {
 }
 
 model StockTransaction {
-  id        String        @id @default(uuid()) @db.Uuid
-  itemId    String        @db.Uuid
-  type      StockTxType
-  quantity  Int // positive for IN (PURCHASE/RETURN/ADJUSTMENT up), negative for OUT (ISSUE)
-  balanceAfter Int // balance after this transaction (immutable audit trail)
-  reference String? // OSR doc number, purchase reference, remark
-  supplier  String? // legacy free-text purchase source (kept for old entries)
-  supplierId String? @db.Uuid // link to the Supplier master (new purchases)
-  unitPrice Decimal? @db.Decimal(12, 2) // price per unit for PURCHASE entries (spending report)
-  requestId  String?      @db.Uuid // link to the supply request that caused an ISSUE
-  issuedToEmployeeId String? @db.Uuid // employee who physically received an ISSUE (ledger)
-  createdById String       @db.Uuid
-  createdAt DateTime      @default(now())
+  id                 String      @id @default(uuid()) @db.Uuid
+  itemId             String      @db.Uuid
+  type               StockTxType
+  quantity           Int // positive for IN (PURCHASE/RETURN/ADJUSTMENT up), negative for OUT (ISSUE)
+  balanceAfter       Int // balance after this transaction (immutable audit trail)
+  reference          String? // OSR doc number, purchase reference, remark
+  supplier           String? // legacy free-text purchase source (kept for old entries)
+  supplierId         String?     @db.Uuid // link to the Supplier master (new purchases)
+  unitPrice          Decimal?    @db.Decimal(12, 2) // price per unit for PURCHASE entries (spending report)
+  requestId          String?     @db.Uuid // link to the supply request that caused an ISSUE
+  issuedToEmployeeId String?     @db.Uuid // employee who physically received an ISSUE (ledger)
+  createdById        String      @db.Uuid
+  createdAt          DateTime    @default(now())
 
-  item      InventoryItem  @relation(fields: [itemId], references: [id])
-  supplierRef Supplier?    @relation("StockTxSupplier", fields: [supplierId], references: [id])
-  createdBy User            @relation("StockTransactions", fields: [createdById], references: [id])
-  request   RequestDocument? @relation("StockTxRequest", fields: [requestId], references: [id])
-  issuedToEmployee Employee? @relation("StockTxIssuedTo", fields: [issuedToEmployeeId], references: [id])
+  item             InventoryItem    @relation(fields: [itemId], references: [id])
+  supplierRef      Supplier?        @relation("StockTxSupplier", fields: [supplierId], references: [id])
+  createdBy        User             @relation("StockTransactions", fields: [createdById], references: [id])
+  request          RequestDocument? @relation("StockTxRequest", fields: [requestId], references: [id])
+  issuedToEmployee Employee?        @relation("StockTxIssuedTo", fields: [issuedToEmployeeId], references: [id])
 
   @@index([itemId, createdAt])
   @@index([requestId])
@@ -862,28 +864,28 @@ model StockTransaction {
 }
 
 model OfficeSupplyRequest {
-  id          String   @id @default(uuid()) @db.Uuid
-  requestId   String   @unique @db.Uuid // link to RequestDocument (workflow engine)
+  id          String    @id @default(uuid()) @db.Uuid
+  requestId   String    @unique @db.Uuid // link to RequestDocument (workflow engine)
   note        String?
-  status      String   @default("PENDING") // PENDING / FULFILLED / REJECTED (mirror of doc status + fulfillment)
+  status      String    @default("PENDING") // PENDING / FULFILLED / REJECTED (mirror of doc status + fulfillment)
   fulfilledAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
-  request RequestDocument      @relation("SupplyRequest", fields: [requestId], references: [id], onDelete: Cascade)
+  request RequestDocument     @relation("SupplyRequest", fields: [requestId], references: [id], onDelete: Cascade)
   lines   SupplyRequestLine[]
 
   @@map("office_supply_requests")
 }
 
 model SupplyRequestLine {
-  id             String          @id @default(uuid()) @db.Uuid
-  supplyRequestId String         @db.Uuid
-  itemId         String          @db.Uuid
-  quantity       Int
-  status         SupplyLineStatus @default(PENDING)
-  fulfilledQty   Int             @default(0)
-  createdAt      DateTime        @default(now())
+  id              String           @id @default(uuid()) @db.Uuid
+  supplyRequestId String           @db.Uuid
+  itemId          String           @db.Uuid
+  quantity        Int
+  status          SupplyLineStatus @default(PENDING)
+  fulfilledQty    Int              @default(0)
+  createdAt       DateTime         @default(now())
 
   supplyRequest OfficeSupplyRequest @relation(fields: [supplyRequestId], references: [id], onDelete: Cascade)
   item          InventoryItem       @relation(fields: [itemId], references: [id])
@@ -894,56 +896,56 @@ model SupplyRequestLine {
 }
 
 model Vehicle {
-  id               String        @id @default(uuid()) @db.Uuid
-  vehicleNo        String        @unique
-  vehicleType      VehicleType   @default(SEDAN)
-  brandModel       String
-  capacity         Int           @default(4)
-  driverId         String?       @db.Uuid
-  currentMileage   Int           @default(0)
-  status           VehicleStatus @default(AVAILABLE)
+  id                 String        @id @default(uuid()) @db.Uuid
+  vehicleNo          String        @unique
+  vehicleType        VehicleType   @default(SEDAN)
+  brandModel         String
+  capacity           Int           @default(4)
+  driverId           String?       @db.Uuid
+  currentMileage     Int           @default(0)
+  status             VehicleStatus @default(AVAILABLE)
   registrationExpiry DateTime?
-  insuranceExpiry  DateTime?
-  notes            String?
+  insuranceExpiry    DateTime?
+  notes              String?
   // ---- Tier 1 identification & specification data (optional — legacy rows may stay blank)
-  vin              String?       @unique // 17-char manufacturer serial
-  fuelType         String?       // PETROL | DIESEL | HYBRID | EV
-  engineNo         String?       // stamped engine serial
-  chassisNo        String?       // stamped chassis serial (may equal VIN on modern cars)
-  make             String?       // e.g. Toyota
-  model            String?       // e.g. Probox
-  year             Int?          // manufacture year
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  vin                String?       @unique // 17-char manufacturer serial
+  fuelType           String? // PETROL | DIESEL | HYBRID | EV
+  engineNo           String? // stamped engine serial
+  chassisNo          String? // stamped chassis serial (may equal VIN on modern cars)
+  make               String? // e.g. Toyota
+  model              String? // e.g. Probox
+  year               Int? // manufacture year
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
-  driver        Driver?        @relation(fields: [driverId], references: [id])
-  assignments   CarAssignment[]
-  expenses      CarExpense[]
-  carRequests   CarRequest[]
+  driver           Driver?                 @relation(fields: [driverId], references: [id])
+  assignments      CarAssignment[]
+  expenses         CarExpense[]
+  carRequests      CarRequest[]
   unavailabilities VehicleUnavailability[]
 
   @@map("vehicles")
 }
 
 model Driver {
-  id        String       @id @default(uuid()) @db.Uuid
-  name      String
-  phone     String?
-  licenseNo String?
-  licenseExpiry DateTime?
-  status    DriverStatus @default(AVAILABLE)
-  notes     String?
+  id               String       @id @default(uuid()) @db.Uuid
+  name             String
+  phone            String?
+  licenseNo        String?
+  licenseExpiry    DateTime?
+  status           DriverStatus @default(AVAILABLE)
+  notes            String?
   telegramChatId   String?
-  telegramBindCode String?   @unique
+  telegramBindCode String?      @unique
   telegramUsername String?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
   vehicles       Vehicle[]
   carRequests    CarRequest[]
   carAssignments CarAssignment[]
-  employee       Employee?  @relation("DriverEmployee", fields: [employeeId], references: [id])
-  employeeId     String?    @db.Uuid
+  employee       Employee?       @relation("DriverEmployee", fields: [employeeId], references: [id])
+  employeeId     String?         @db.Uuid
   absences       DriverAbsence[]
 
   @@map("drivers")
@@ -971,51 +973,51 @@ model VehicleUnavailability {
 /// Assign flows must skip drivers with an absence overlapping the trip window;
 /// a cron flips status to ON_LEAVE/AVAILABLE automatically at the boundaries.
 model DriverAbsence {
-  id        String   @id @default(uuid()) @db.Uuid
-  driverId  String   @db.Uuid
-  driver    Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
-  startsAt  DateTime
-  endsAt    DateTime // exclusive end (e.g. leave ends 25th 00:00 → last full day is the 24th)
+  id          String   @id @default(uuid()) @db.Uuid
+  driverId    String   @db.Uuid
+  driver      Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  startsAt    DateTime
+  endsAt      DateTime // exclusive end (e.g. leave ends 25th 00:00 → last full day is the 24th)
   /// Leave model against the Company Time Table (Settings → Company Time
   /// Table): FULL day or HALF day. The clock window is derived from the
   /// timetable at write time; startsAt/endsAt stay the operational truth.
-  dayType   String   @default("FULL")    // FULL | HALF
-  period    String   @default("FULL_DAY") // FULL_DAY | MORNING | EVENING
-  reason    String?
-  status    String   @default("ACTIVE") // ACTIVE | CANCELLED
-  createdById String @db.Uuid
-  createdAt DateTime @default(now())
+  dayType     String   @default("FULL") // FULL | HALF
+  period      String   @default("FULL_DAY") // FULL_DAY | MORNING | EVENING
+  reason      String?
+  status      String   @default("ACTIVE") // ACTIVE | CANCELLED
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
 
   @@index([driverId, startsAt, endsAt])
   @@map("driver_absences")
 }
 
 model CarRequest {
-  id          String             @id @default(uuid()) @db.Uuid
-  requestId   String             @unique @db.Uuid // link to RequestDocument
+  id                  String             @id @default(uuid()) @db.Uuid
+  requestId           String             @unique @db.Uuid // link to RequestDocument
   vehicleTypeRequired VehicleType?
-  passengers  Int                @default(1)
-  destination String
-  purpose     String?
-  startDate   DateTime
-  endDate     DateTime
-  timeSlot    CarRequestTimeSlot @default(FULL_DAY)
-  pickupLocation String?
-  specialRequest String? // free-text special instruction (e.g. "wait and call me", "carry goods — plan a load-capable car") shown to Administration and the driver
-  status      WorkflowStatus     @default(DRAFT)
-  managerAckAt   DateTime? // optional Dept-Head acknowledgement (never blocks)
-  managerAckById String?   @db.Uuid
-  vehicleId   String?            @db.Uuid
-  driverId    String?            @db.Uuid
-  sharedTripId String?           @db.Uuid // shared-trip group id — set when Administration assigns the same car+driver as another overlapping request
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
+  passengers          Int                @default(1)
+  destination         String
+  purpose             String?
+  startDate           DateTime
+  endDate             DateTime
+  timeSlot            CarRequestTimeSlot @default(FULL_DAY)
+  pickupLocation      String?
+  specialRequest      String? // free-text special instruction (e.g. "wait and call me", "carry goods — plan a load-capable car") shown to Administration and the driver
+  status              WorkflowStatus     @default(DRAFT)
+  managerAckAt        DateTime? // optional Dept-Head acknowledgement (never blocks)
+  managerAckById      String?            @db.Uuid
+  vehicleId           String?            @db.Uuid
+  driverId            String?            @db.Uuid
+  sharedTripId        String?            @db.Uuid // shared-trip group id — set when Administration assigns the same car+driver as another overlapping request
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
 
-  request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  vehicle    Vehicle?        @relation(fields: [vehicleId], references: [id])
-  driver     Driver?         @relation(fields: [driverId], references: [id])
-  managerAckBy User?         @relation("CarManagerAcks", fields: [managerAckById], references: [id])
-  assignment CarAssignment?
+  request      RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  vehicle      Vehicle?        @relation(fields: [vehicleId], references: [id])
+  driver       Driver?         @relation(fields: [driverId], references: [id])
+  managerAckBy User?           @relation("CarManagerAcks", fields: [managerAckById], references: [id])
+  assignment   CarAssignment?
 
   @@index([startDate, endDate])
   @@index([vehicleId])
@@ -1025,23 +1027,23 @@ model CarRequest {
 }
 
 model CarAssignment {
-  id           String    @id @default(uuid()) @db.Uuid
-  requestId    String    @unique @db.Uuid
-  carRequestId String?   @unique @db.Uuid
-  vehicleId    String    @db.Uuid
-  driverId     String?   @db.Uuid
-  assignedById String    @db.Uuid
-  assignedAt   DateTime  @default(now())
-  releasedAt   DateTime?
-  driverNotedAt       DateTime? // driver acknowledged the assignment (Telegram "Noted")
-  driverArrivedAt     DateTime? // driver signalled car is ready for the requester
+  id                   String    @id @default(uuid()) @db.Uuid
+  requestId            String    @unique @db.Uuid
+  carRequestId         String?   @unique @db.Uuid
+  vehicleId            String    @db.Uuid
+  driverId             String?   @db.Uuid
+  assignedById         String    @db.Uuid
+  assignedAt           DateTime  @default(now())
+  releasedAt           DateTime?
+  driverNotedAt        DateTime? // driver acknowledged the assignment (Telegram "Noted")
+  driverArrivedAt      DateTime? // driver signalled car is ready for the requester
   driverBackAtOfficeAt DateTime? // driver back at office — vehicle free again
   /// Driver-reported Delay (Telegram ⏰): when the car is actually expected
   /// back. ETA lives here (assignment-level, cleared on Back at Office / release)
   /// and extends the booking's effective end = max(endDate, estimatedReturnAt)
   /// for the fleet card, conflict pre-warning and availability checks.
-  estimatedReturnAt   DateTime?
-  telegramMessageId    String?   // Telegram message carrying the ack buttons (for stage edits)
+  estimatedReturnAt    DateTime?
+  telegramMessageId    String? // Telegram message carrying the ack buttons (for stage edits)
 
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)
   carRequest CarRequest?     @relation(fields: [carRequestId], references: [id])
@@ -1054,16 +1056,16 @@ model CarAssignment {
 }
 
 model CarTrip {
-  id            String      @id @default(uuid()) @db.Uuid
-  assignmentId  String      @unique @db.Uuid
-  status        TripStatus  @default(NOT_STARTED)
-  startMileage  Int?
-  endMileage    Int?
-  startedAt     DateTime?
-  completedAt   DateTime?
-  remarks       String?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  id           String     @id @default(uuid()) @db.Uuid
+  assignmentId String     @unique @db.Uuid
+  status       TripStatus @default(NOT_STARTED)
+  startMileage Int?
+  endMileage   Int?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  remarks      String?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
 
   assignment CarAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   expenses   CarExpense[]
@@ -1072,18 +1074,18 @@ model CarTrip {
 }
 
 model CarExpense {
-  id         String          @id @default(uuid()) @db.Uuid
-  tripId     String          @db.Uuid
-  vehicleId  String          @db.Uuid
-  type       CarExpenseType
+  id          String         @id @default(uuid()) @db.Uuid
+  tripId      String         @db.Uuid
+  vehicleId   String         @db.Uuid
+  type        CarExpenseType
   description String?
-  amount     Decimal         @db.Decimal(12, 2)
+  amount      Decimal        @db.Decimal(12, 2)
   expenseDate DateTime       @default(now())
   createdById String         @db.Uuid
-  createdAt  DateTime        @default(now())
+  createdAt   DateTime       @default(now())
 
-  trip    CarTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  vehicle Vehicle  @relation(fields: [vehicleId], references: [id])
+  trip      CarTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  vehicle   Vehicle @relation(fields: [vehicleId], references: [id])
   createdBy User    @relation("CarExpenseCreator", fields: [createdById], references: [id])
 
   @@map("car_expenses")
@@ -1120,8 +1122,9 @@ model Account {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  category AccountCategory?      @relation(fields: [categoryId], references: [id])
-  prItems  PurchaseRequestItem[]
+  category     AccountCategory?      @relation(fields: [categoryId], references: [id])
+  prItems      PurchaseRequestItem[]
+  invoiceItems InvoiceItem[]         @relation("InvoiceItems")
 
   @@index([categoryId])
   @@map("accounts")
@@ -1142,31 +1145,32 @@ model Location {
   name      String   @unique
   createdAt DateTime @default(now())
 
-  assets Asset[]
+  assets        Asset[]
   goodsReceipts GoodsReceipt[]
 
   @@map("locations")
 }
 
 model Asset {
-  id           String          @id @default(uuid()) @db.Uuid
-  assetCode    String          @unique // e.g. AST-COP-001
+  id           String    @id @default(uuid()) @db.Uuid
+  assetCode    String    @unique // e.g. AST-COP-001
   name         String
-  categoryId   String?         @db.Uuid
+  categoryId   String?   @db.Uuid
   brand        String?
   model        String?
   serialNumber String?
-  locationId   String?         @db.Uuid
+  locationId   String?   @db.Uuid
   purchaseDate DateTime?
-  purchaseCost Decimal?        @db.Decimal(12, 2)
-  status       String          @default("ACTIVE") // ACTIVE / DISPOSED / IN_STORAGE
+  purchaseCost Decimal?  @db.Decimal(12, 2)
+  status       String    @default("ACTIVE") // ACTIVE / DISPOSED / IN_STORAGE
   description  String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
-  category AssetCategory? @relation(fields: [categoryId], references: [id])
-  location Location?      @relation(fields: [locationId], references: [id])
-  prItems  PurchaseRequestItem[]
+  category     AssetCategory?        @relation(fields: [categoryId], references: [id])
+  location     Location?             @relation(fields: [locationId], references: [id])
+  prItems      PurchaseRequestItem[]
+  invoiceItems InvoiceItem[]         @relation("InvoiceItems")
 
   @@index([categoryId])
   @@index([locationId])
@@ -1178,31 +1182,31 @@ model Asset {
 // fields the design §5 requires. Lines reference Account (required conceptually,
 // nullable until Finance lands) and Asset (optional) per spec §18.
 model PurchaseRequest {
-  id            String            @id @default(uuid()) @db.Uuid
-  requestId     String            @unique @db.Uuid // link to RequestDocument
+  id            String           @id @default(uuid()) @db.Uuid
+  requestId     String           @unique @db.Uuid // link to RequestDocument
   requiredDate  DateTime?
-  priority      PurchasePriority  @default(NORMAL)
+  priority      PurchasePriority @default(NORMAL)
   justification String?
   budgetCode    String?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
-  request RequestDocument       @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  items   PurchaseRequestItem[]
+  request        RequestDocument       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  items          PurchaseRequestItem[]
   purchaseOrders PurchaseOrder[]
 
   @@map("purchase_requests")
 }
 
 model PurchaseRequestItem {
-  id                String   @id @default(uuid()) @db.Uuid
-  purchaseRequestId String   @db.Uuid
-  description       String
-  quantity          Int
-  unit              String?
+  id                 String   @id @default(uuid()) @db.Uuid
+  purchaseRequestId  String   @db.Uuid
+  description        String
+  quantity           Int
+  unit               String?
   estimatedUnitPrice Decimal? @db.Decimal(12, 2)
-  accountId         String?  @db.Uuid
-  assetId           String?  @db.Uuid
+  accountId          String?  @db.Uuid
+  assetId            String?  @db.Uuid
 
   purchaseRequest PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
   account         Account?        @relation(fields: [accountId], references: [id])
@@ -1216,29 +1220,30 @@ model PurchaseRequestItem {
 // PO is a procurement entity (NOT a workflow document — approvals already ran
 // on the PR): "no approval, no PO" Control 1 checks the PR's REQUEST status.
 model PurchaseOrder {
-  id            String    @id @default(uuid()) @db.Uuid
-  poNumber      String    @unique // PO-… via DocumentSequence
-  purchaseRequestId String? @db.Uuid // nullable: PO may be created without a PR (direct/ad-hoc purchases)
-  supplierId    String    @db.Uuid
-  status        String    @default("DRAFT") // §16: DRAFT→APPROVED→SENT_TO_VENDOR→PARTIALLY_RECEIVED→FULLY_RECEIVED→CLOSED (+ CANCELLED)
-  orderDate     DateTime  @default(now())
-  expectedDelivery DateTime?
-  deliveryAddress String?
-  paymentTerms  String?
-  deliveryTerms String?
-  note          String?
-  sentToVendorAt DateTime?
-  closedAt      DateTime?
-  cancelledAt   DateTime?
-  createdById   String    @db.Uuid
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                String    @id @default(uuid()) @db.Uuid
+  poNumber          String    @unique // PO-… via DocumentSequence
+  purchaseRequestId String?   @db.Uuid // nullable: PO may be created without a PR (direct/ad-hoc purchases)
+  supplierId        String    @db.Uuid
+  status            String    @default("DRAFT") // §16: DRAFT→APPROVED→SENT_TO_VENDOR→PARTIALLY_RECEIVED→FULLY_RECEIVED→CLOSED (+ CANCELLED)
+  orderDate         DateTime  @default(now())
+  expectedDelivery  DateTime?
+  deliveryAddress   String?
+  paymentTerms      String?
+  deliveryTerms     String?
+  note              String?
+  sentToVendorAt    DateTime?
+  closedAt          DateTime?
+  cancelledAt       DateTime?
+  createdById       String    @db.Uuid
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  purchaseRequest PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
-  supplier      Supplier             @relation("PoSupplier", fields: [supplierId], references: [id])
-  createdBy     User                 @relation("PoCreatedBy", fields: [createdById], references: [id])
-  items         PurchaseOrderItem[]
-  goodsReceipts GoodsReceipt[]
+  purchaseRequest PurchaseRequest?    @relation(fields: [purchaseRequestId], references: [id])
+  supplier        Supplier            @relation("PoSupplier", fields: [supplierId], references: [id])
+  createdBy       User                @relation("PoCreatedBy", fields: [createdById], references: [id])
+  items           PurchaseOrderItem[]
+  goodsReceipts   GoodsReceipt[]
+  invoices        Invoice[]           @relation("InvoicePurchaseOrder")
 
   @@index([status])
   @@index([purchaseRequestId])
@@ -1246,16 +1251,16 @@ model PurchaseOrder {
 }
 
 model PurchaseOrderItem {
-  id              String   @id @default(uuid()) @db.Uuid
-  purchaseOrderId String   @db.Uuid
+  id              String  @id @default(uuid()) @db.Uuid
+  purchaseOrderId String  @db.Uuid
   description     String
-  inventoryItemId String?  @db.Uuid // set = consumable → GRN posts stock; null = asset/service (no stock)
+  inventoryItemId String? @db.Uuid // set = consumable → GRN posts stock; null = asset/service (no stock)
   quantity        Int
   unit            String?
-  unitPrice       Decimal  @db.Decimal(12, 2)
+  unitPrice       Decimal @db.Decimal(12, 2)
 
-  purchaseOrder PurchaseOrder   @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
-  inventoryItem InventoryItem?  @relation("PoItems", fields: [inventoryItemId], references: [id])
+  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  inventoryItem InventoryItem?     @relation("PoItems", fields: [inventoryItemId], references: [id])
   grnItems      GoodsReceiptItem[]
 
   @@index([purchaseOrderId])
@@ -1267,38 +1272,101 @@ model PurchaseOrderItem {
 // quantity posts stock IN into the EXISTING StockTransaction ledger (spec §23 —
 // never a parallel stock system).
 model GoodsReceipt {
-  id            String   @id @default(uuid()) @db.Uuid
-  grnNumber     String   @unique // GRN-… via DocumentSequence
-  purchaseOrderId String @db.Uuid
-  receivedById  String   @db.Uuid
-  receivedAt    DateTime @default(now())
-  locationId    String?  @db.Uuid
-  deliveryNoteNo String?
-  remarks       String?
+  id              String   @id @default(uuid()) @db.Uuid
+  grnNumber       String   @unique // GRN-… via DocumentSequence
+  purchaseOrderId String   @db.Uuid
+  receivedById    String   @db.Uuid
+  receivedAt      DateTime @default(now())
+  locationId      String?  @db.Uuid
+  deliveryNoteNo  String?
+  remarks         String?
 
-  purchaseOrder PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id])
-  receivedBy    User                @relation("GrnReceivedBy", fields: [receivedById], references: [id])
-  location      Location?           @relation(fields: [locationId], references: [id])
+  purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id])
+  receivedBy    User               @relation("GrnReceivedBy", fields: [receivedById], references: [id])
+  location      Location?          @relation(fields: [locationId], references: [id])
   items         GoodsReceiptItem[]
+  invoices      Invoice[]          @relation("InvoiceGoodsReceipt")
 
   @@index([purchaseOrderId])
   @@map("goods_receipts")
 }
 
 model GoodsReceiptItem {
-  id            String  @id @default(uuid()) @db.Uuid
-  goodsReceiptId String @db.Uuid
-  poItemId      String  @db.Uuid
-  orderedQty    Int
-  receivedQty   Int
-  acceptedQty   Int
-  rejectedQty   Int
-  condition     String? // damage notes for rejected units
+  id             String  @id @default(uuid()) @db.Uuid
+  goodsReceiptId String  @db.Uuid
+  poItemId       String  @db.Uuid
+  orderedQty     Int
+  receivedQty    Int
+  acceptedQty    Int
+  rejectedQty    Int
+  condition      String? // damage notes for rejected units
 
-  goodsReceipt GoodsReceipt       @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
-  poItem       PurchaseOrderItem  @relation(fields: [poItemId], references: [id])
+  goodsReceipt GoodsReceipt      @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  poItem       PurchaseOrderItem @relation(fields: [poItemId], references: [id])
 
   @@index([goodsReceiptId])
   @@index([poItemId])
   @@map("goods_receipt_items")
+}
+
+// ---------- Procurement Phase 4 (design §22–25, roadmap R6): Invoice + 3-way match ----------
+// Invoice carries PO and GRN references (§22) and runs DRAFT→SUBMITTED→APPROVED→
+// POSTED (approval alignment §25). Three-way match (§23) compares PO ordered
+// qty/price vs GRN accepted qty vs invoice billed qty/price. Control 5 (§35)
+// is the (supplierId, invoiceNumber) unique — duplicate vendor bills rejected.
+model Invoice {
+  id                    String    @id @default(uuid()) @db.Uuid
+  invoiceNumber         String    @unique // INV-… via DocumentSequence
+  supplierInvoiceNumber String    @db.Uuid // not unique alone — vendor's own paper number
+  supplierId            String    @db.Uuid
+  status                String    @default("DRAFT") // DRAFT→SUBMITTED→APPROVED→POSTED (+ REJECTED, CANCELLED)
+  invoiceDate           DateTime
+  dueDate               DateTime?
+  purchaseOrderId       String?   @db.Uuid // §22: Related PO (nullable: service/direct bills)
+  goodsReceiptId        String?   @db.Uuid // §22: Related GRN (nullable when multiple GRNs)
+  subtotal              Decimal   @default(0) @db.Decimal(12, 2)
+  tax                   Decimal   @default(0) @db.Decimal(12, 2)
+  total                 Decimal   @default(0) @db.Decimal(12, 2)
+  note                  String?
+  matchStatus           String? // 3-way match result: MATCHED / PARTIAL_MATCH / MISMATCH / NO_MATCH (null = not yet run)
+  matchDetail           Json? // per-line match breakdown for the review UI
+  submittedAt           DateTime?
+  approvedAt            DateTime?
+  postedAt              DateTime?
+  rejectedAt            DateTime?
+  createdById           String    @db.Uuid
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  supplier      Supplier       @relation("InvoiceSupplier", fields: [supplierId], references: [id])
+  purchaseOrder PurchaseOrder? @relation("InvoicePurchaseOrder", fields: [purchaseOrderId], references: [id])
+  goodsReceipt  GoodsReceipt?  @relation("InvoiceGoodsReceipt", fields: [goodsReceiptId], references: [id])
+  createdBy     User           @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  items         InvoiceItem[]
+
+  // Control 5 (§35): duplicate invoice check — same vendor + paper invoice number
+  @@unique([supplierId, supplierInvoiceNumber])
+  @@index([status])
+  @@index([purchaseOrderId])
+  @@map("invoices")
+}
+
+model InvoiceItem {
+  id          String  @id @default(uuid()) @db.Uuid
+  invoiceId   String  @db.Uuid
+  description String
+  quantity    Int
+  unit        String?
+  unitPrice   Decimal @db.Decimal(12, 2)
+  accountId   String? @db.Uuid // §24: what was the money spent on
+  assetId     String? @db.Uuid // §24: which asset it relates to (optional)
+
+  invoice Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  account Account? @relation("InvoiceItems", fields: [accountId], references: [id])
+  asset   Asset?   @relation("InvoiceItems", fields: [assetId], references: [id])
+
+  @@index([invoiceId])
+  @@index([accountId])
+  @@index([assetId])
+  @@map("invoice_items")
 }
