@@ -396,7 +396,7 @@ export default function PurchaseOrders() {
                 <div className="col-span-3">Description *</div>
                 <div className="col-span-1">Qty *</div>
                 <div className="col-span-1">Unit</div>
-                <div className="col-span-3">Unit price (Ks) *</div>
+                <div className="col-span-2">Unit price (Ks) *</div>
                 <div className="col-span-1 text-right" aria-hidden="true" />
               </div>
               {lines.map((l, idx) => (
@@ -416,7 +416,7 @@ export default function PurchaseOrders() {
                   <div className="col-span-3 sm:col-span-1">
                     <Input placeholder="Unit" value={l.unit} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unit: e.target.value } : x))} />
                   </div>
-                  <div className="col-span-6 sm:col-span-3">
+                  <div className="col-span-6 sm:col-span-2">
                     <Input type="number" min={0} placeholder="Unit price (Ks)" value={l.unitPrice} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} />
                   </div>
                   <div className="col-span-6 sm:col-span-1 flex justify-end">
