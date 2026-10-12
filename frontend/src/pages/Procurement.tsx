@@ -235,17 +235,17 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             <span className="text-xs text-gray-400">{items.length} line{items.length === 1 ? '' : 's'}</span>
           </div>
           <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
-            <div className="col-span-4">Description</div>
+            <div className="col-span-3">Description</div>
             <div className="col-span-1">Qty</div>
             <div className="col-span-1">Unit</div>
             <div className="col-span-2">Unit price (Ks)</div>
             <div className="col-span-2">Account</div>
-            <div className="col-span-1">Asset</div>
+            <div className="col-span-2">Asset</div>
             <div className="col-span-1 text-right" aria-hidden="true" />
           </div>
           {items.map((it, idx) => (
             <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-12 md:col-span-4">
+              <div className="col-span-12 md:col-span-3">
                 <Input placeholder={`Item ${idx + 1} description *`} value={it.description} onChange={(e) => setItem(idx, { description: e.target.value })} />
               </div>
               <div className="col-span-3 md:col-span-1">
@@ -268,7 +268,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
                   ))}
                 </Select>
               </div>
-              <div className="col-span-10 md:col-span-1">
+              <div className="col-span-10 md:col-span-2">
                 <Select value={it.assetId} onChange={(e) => setItem(idx, { assetId: e.target.value })}>
                   <option value="">Asset…</option>
                   {assets.map((a) => (
