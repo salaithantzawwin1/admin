@@ -16,6 +16,7 @@ const nav = [
   { to: '/suppliers', label: 'Suppliers', icon: '🚛', show: () => hasPermission('suppliers.read') },
   { to: '/procurement', label: 'Procurement', icon: '🛒', show: () => hasPermission('requests.create') },
   { to: '/purchase-orders', label: 'Purchase Orders', icon: '🧾', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
+  { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') || hasPermission('inventory.read') },
   { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
   { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
   { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },
