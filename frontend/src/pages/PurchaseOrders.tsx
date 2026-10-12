@@ -362,7 +362,7 @@ export default function PurchaseOrders() {
 
       {/* ---------------- create PO ---------------- */}
       {createOpen && (
-        <Modal onClose={() => setCreateOpen(false)} title="New purchase order" wide>
+        <Modal onClose={() => setCreateOpen(false)} title="New purchase order" wide xl>
           <div className="space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="sm:col-span-2">
@@ -391,35 +391,35 @@ export default function PurchaseOrders() {
                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
                 <span className="text-xs text-gray-400">Stock-posting applies only to 📦 inventory lines</span>
               </div>
-              <div className="hidden sm:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
+              <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
                 <div className="col-span-3">Inventory item (optional)</div>
                 <div className="col-span-3">Description *</div>
                 <div className="col-span-1">Qty *</div>
                 <div className="col-span-1">Unit</div>
                 <div className="col-span-2">Unit price (Ks) *</div>
-                <div className="col-span-1 text-right" aria-hidden="true" />
+                <div className="col-span-2 text-right" aria-hidden="true" />
               </div>
               {lines.map((l, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-                  <div className="col-span-12 sm:col-span-3">
+                  <div className="col-span-12 md:col-span-3">
                     <Select value={l.inventoryItemId} onChange={(e) => pickItem(idx, e.target.value)}>
                       <option value="">— asset / service (no stock) —</option>
                       {inventoryItems.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name} ({i.balance} {i.unit})</option>)}
                     </Select>
                   </div>
-                  <div className="col-span-6 sm:col-span-3">
+                  <div className="col-span-6 md:col-span-3">
                     <Input placeholder={`Line ${idx + 1} description *`} value={l.description} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} />
                   </div>
-                  <div className="col-span-3 sm:col-span-1">
-                    <Input type="number" min={1} placeholder="Qty" value={l.quantity} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, quantity: e.target.value } : x))} />
+                  <div className="col-span-3 md:col-span-1">
+                    <Input type="number" min={1} placeholder="Qty" title="Quantity" value={l.quantity} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, quantity: e.target.value } : x))} />
                   </div>
-                  <div className="col-span-3 sm:col-span-1">
+                  <div className="col-span-3 md:col-span-1">
                     <Input placeholder="Unit" value={l.unit} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unit: e.target.value } : x))} />
                   </div>
-                  <div className="col-span-6 sm:col-span-2">
-                    <Input type="number" min={0} placeholder="Unit price (Ks)" value={l.unitPrice} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} />
+                  <div className="col-span-6 md:col-span-2">
+                    <Input type="number" min={0} placeholder="Unit price (Ks)" title="Unit price in Kyat" value={l.unitPrice} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} />
                   </div>
-                  <div className="col-span-6 sm:col-span-1 flex justify-end">
+                  <div className="col-span-6 md:col-span-1 flex justify-end">
                     <Button variant="danger" title={`Remove line ${idx + 1}`} onClick={() => setLines((ls) => ls.filter((_, i) => i !== idx))} disabled={lines.length <= 1}>✕</Button>
                   </div>
                 </div>
@@ -509,12 +509,12 @@ export default function PurchaseOrders() {
 
       {/* ---------------- GRN entry ---------------- */}
       {grnOpen && detail && (
-        <Modal onClose={() => setGrnOpen(false)} title={`Record GRN — ${detail.poNumber}`} wide>
+        <Modal onClose={() => setGrnOpen(false)} title={`Record GRN — ${detail.poNumber}`} wide xl>
           <div className="space-y-3">
             <div className="text-sm text-gray-600">
               Accepted stock quantities post straight into the inventory ledger. 📦 lines are stock items; plain lines are assets/services (no stock).
             </div>
-            <div className="hidden sm:grid grid-cols-4 gap-2 text-xs text-gray-500 px-3">
+            <div className="hidden md:grid grid-cols-4 gap-2 text-xs text-gray-500 px-3">
               <div>Received *</div>
               <div>Accepted *</div>
               <div>Rejected *</div>

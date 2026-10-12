@@ -70,6 +70,7 @@ export function Modal({
   children,
   error,
   wide,
+  xl,
 }: {
   title: string;
   onClose: () => void;
@@ -78,6 +79,8 @@ export function Modal({
   error?: string | null;
   /** wider dialog (max-w-2xl) for multi-column forms */
   wide?: boolean;
+  /** widest dialog (max-w-4xl) for dense line-item grids (PO / purchase forms) */
+  xl?: boolean;
 }) {
   useScrollLock(true);
   const trapRef = useFocusTrap<HTMLDivElement>(true);
@@ -96,7 +99,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`bg-white rounded-xl shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[85vh] overflow-y-auto outline-none animate-[modalIn_.15s_ease-out]`}
+        className={`bg-white rounded-xl shadow-xl w-full ${xl ? 'max-w-4xl' : wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[85vh] overflow-y-auto outline-none animate-[modalIn_.15s_ease-out]`}
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">

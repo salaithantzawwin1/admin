@@ -22,6 +22,19 @@ body {
   }
 }
 
+/* Number inputs: hide the always-visible Chrome/Edge spin buttons — in a
+   tight 6-column item grid they eat ~28px per field and clip the value.
+   Keyboard arrows and manual typing still work everywhere. */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 /* Bell badge: one short pulse when a new notification arrives */
 @keyframes pingOnce {
   0% {
