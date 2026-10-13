@@ -75,6 +75,12 @@ model User {
   purchaseOrdersCreated  PurchaseOrder[]         @relation("PoCreatedBy")
   goodsReceiptsReceived  GoodsReceipt[]          @relation("GrnReceivedBy")
   invoicesCreated        Invoice[]               @relation("InvoiceCreatedBy")
+  rfqsCreated            Rfq[]                   @relation("RfqCreatedBy")
+  rfqVendorsCreated      RfqVendor[]             @relation("RfqVendorCreatedBy")
+  quotationsCreated      Quotation[]             @relation("QuotationCreatedBy")
+  quotationItemsCreated  QuotationItem[]         @relation("QuotationItemCreatedBy")
+  comparisonsCreated     QuotationComparison[]   @relation("ComparisonCreatedBy")
+  monthlyBudgetsCreated  MonthlyBudget[]         @relation("BudgetCreatedBy")
   telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
   telegramBindCode       String?                 @unique
   telegramUsername       String?
@@ -319,6 +325,150 @@ enum RequestDocType {
   OFFICE_SUPPLY_REQUEST
   TRAVEL_REQUEST
   MAINTENANCE_REQUEST
+  RFQ
+}
+
+// ---------- Procurement Phase 5 (design §11–14, roadmap P3/P4): RFQ / Quotation / Comparison ----------
+// RFQ is a workflow document (RequestDocument, docType = RFQ); the RFQ row
+// carries the procurement fields, rfq_vendors tracks which suppliers were
+// asked, quotations are per-vendor answers and quotation_comparisons record
+// the Procurement Officer's recommendation + justification (§13-14).
+model Rfq {
+  id            String    @id @default(uuid()) @db.Uuid
+  requestId     String    @unique @db.Uuid // link to RequestDocument (workflow)
+  requiredDate  DateTime?
+  dueDate       DateTime? // quotation due date (design §11)
+  specification String?
+  notes         String?
+  createdById   String    @db.Uuid
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  request    RequestDocument      @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  createdBy  User                 @relation("RfqCreatedBy", fields: [createdById], references: [id])
+  rfqVendors RfqVendor[]
+  quotations Quotation[]
+  comparison QuotationComparison?
+
+  @@map("rfqs")
+}
+
+model RfqVendor {
+  id            String    @id @default(uuid()) @db.Uuid
+  rfqId         String    @db.Uuid
+  supplierId    String    @db.Uuid // supplier = vendor for this org
+  priority      Int       @default(0) // attempt earliest seller first
+  contactedAt   DateTime  @default(now())
+  contactReason String?
+  createdById   String    @db.Uuid
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  rfq        Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier   Supplier @relation("RfqVendorSupplier", fields: [supplierId], references: [id], onDelete: Restrict)
+  createdBy  User     @relation("RfqVendorCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([rfqId, supplierId]) // invite a vendor once per RFQ
+  @@index([rfqId])
+  @@index([supplierId])
+  @@map("rfq_vendors")
+}
+
+model Quotation {
+  id           String    @id @default(uuid()) @db.Uuid
+  rfqId        String    @db.Uuid
+  supplierId   String    @db.Uuid // vendor that supplied this quote
+  quoteNumber  String    @db.Uuid
+  quoteDate    DateTime  @default(now())
+  dueDate      DateTime? // promised delivery date
+  validUntil   DateTime? // expiration of the offer
+  paymentTerms String? // e.g. 30 Days, COD (design §12)
+  taxIncluded  Boolean   @default(true)
+  note         String?
+  createdById  String    @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  rfq           Rfq                   @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier      Supplier              @relation("QuotationSupplier", fields: [supplierId], references: [id], onDelete: Restrict)
+  items         QuotationItem[]
+  createdBy     User                  @relation("QuotationCreatedBy", fields: [createdById], references: [id])
+  recommendedIn QuotationComparison[] @relation("ComparisonQuote")
+
+  @@unique([rfqId, quoteNumber]) // quoteNumber unique per RFQ (design §12)
+  @@index([rfqId])
+  @@index([supplierId])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id              String  @id @default(uuid()) @db.Uuid
+  quotationId     String  @db.Uuid
+  description     String
+  quantity        Int
+  unit            String?
+  unitPrice       Decimal @db.Decimal(12, 2)
+  taxPercent      Decimal @db.Decimal(5, 2) @default(0)
+  deliveryDays    Int? // quoted delivery time (design §13)
+  warrantyMonths  Int? // quoted warranty (design §13)
+  discountPercent Decimal @db.Decimal(5, 2) @default(0)
+  createdById     String  @db.Uuid
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  quotation Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  createdBy User       @relation("QuotationItemCreatedBy", fields: [createdById], references: [id])
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+// Quotation comparison + vendor selection decision (design §13-14).
+// The Procurement Officer records the recommendation + justification here;
+// one decision row per RFQ (1:1 with Rfq.comparison).
+model QuotationComparison {
+  id                    String    @id @default(uuid()) @db.Uuid
+  rfqId                 String    @unique @db.Uuid
+  recommendedSupplierId String    @db.Uuid
+  recommendedQuoteId    String    @db.Uuid
+  selectionReason       String // justification for vendor selection (§14)
+  supportingDocument    String? // file/brief reference (design §14)
+  status                String    @default("SELECTED") // SELECTED | REJECTED
+  createdById           String    @db.Uuid
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  rfq                 Rfq       @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  recommendedSupplier Supplier  @relation("ComparisonSupplier", fields: [recommendedSupplierId], references: [id], onDelete: Restrict)
+  recommendedQuote    Quotation @relation("ComparisonQuote", fields: [recommendedQuoteId], references: [id], onDelete: Restrict)
+  createdBy           User      @relation("ComparisonCreatedBy", fields: [createdById], references: [id])
+
+  @@index([recommendedSupplierId])
+  @@map("quotation_comparisons")
+}
+
+// ---------- Procurement R7 — per-account monthly budget + PR-submit check (§9) ----------
+// The design recommends starting budget control as an integration point, not a
+// full budgeting module: set a monthly amount per Account; PR submissions with
+// estimations for that account are validated against the remaining amount
+// (real spend measured from APPROVED/POSTED invoices for the same account).
+model MonthlyBudget {
+  id          String  @id @default(uuid()) @db.Uuid
+  accountId   String  @db.Uuid
+  year        Int // e.g. 2026
+  month       Int // 1..12
+  amount      Decimal @db.Decimal(12, 2)
+  note        String?
+  createdById String  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  account   Account? @relation("BudgetAccount", fields: [accountId], references: [id], onDelete: SetNull)
+  createdBy User     @relation("BudgetCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([accountId, year, month])
+  @@index([year, month])
+  @@map("monthly_budgets")
 }
 
 model ApprovalWorkflow {
@@ -382,6 +532,7 @@ model RequestDocument {
   supplierDrafts  SupplierPurchaseDraft[] @relation("SupplierDraftRequest")
   stockTxns       StockTransaction[]      @relation("StockTxRequest")
   purchaseRequest PurchaseRequest?
+  rfq             Rfq?
 
   @@index([status])
   @@index([requesterId])
@@ -779,6 +930,9 @@ model Supplier {
   purchaseDrafts    SupplierPurchaseDraft[]
   purchaseOrders    PurchaseOrder[]         @relation("PoSupplier")
   invoices          Invoice[]               @relation("InvoiceSupplier")
+  rfqVendors        RfqVendor[]             @relation("RfqVendorSupplier")
+  quotations        Quotation[]             @relation("QuotationSupplier")
+  recommendedIn     QuotationComparison[]   @relation("ComparisonSupplier")
 
   @@map("suppliers")
 }
@@ -1122,9 +1276,10 @@ model Account {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  category     AccountCategory?      @relation(fields: [categoryId], references: [id])
-  prItems      PurchaseRequestItem[]
-  invoiceItems InvoiceItem[]         @relation("InvoiceItems")
+  category       AccountCategory?      @relation(fields: [categoryId], references: [id])
+  prItems        PurchaseRequestItem[]
+  invoiceItems   InvoiceItem[]         @relation("InvoiceItems")
+  monthlyBudgets MonthlyBudget[]       @relation("BudgetAccount")
 
   @@index([categoryId])
   @@map("accounts")
@@ -1317,7 +1472,7 @@ model GoodsReceiptItem {
 model Invoice {
   id                    String    @id @default(uuid()) @db.Uuid
   invoiceNumber         String    @unique // INV-… via DocumentSequence
-  supplierInvoiceNumber String    @db.Uuid // not unique alone — vendor's own paper number
+  supplierInvoiceNumber String    // vendor's own paper number (TEXT — Control 5 unique per supplier)
   supplierId            String    @db.Uuid
   status                String    @default("DRAFT") // DRAFT→SUBMITTED→APPROVED→POSTED (+ REJECTED, CANCELLED)
   invoiceDate           DateTime

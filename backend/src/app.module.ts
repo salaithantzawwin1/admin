@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -15,7 +15,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { EventsModule } from './events/events.module';
 import { AttachmentsModule } from './attachments/attachments.module';
 import { TelegramModule } from './telegram/telegram.module';
-import { WorkflowModule } from './workflow/workflow.module';
+import { WorkflowModule, WorkflowService } from './workflow/workflow.module';
 import { FleetModule } from './fleet/fleet.module';
 import { CarsModule } from './cars/cars.module';
 import { MeetingRoomsModule } from './meeting-rooms/meeting-rooms.module';
@@ -25,6 +25,8 @@ import { SuppliersModule } from './suppliers/suppliers.module';
 import { ProcurementModule } from './procurement/procurement.module';
 import { PurchaseOrdersModule } from './procurement/purchase-orders.module';
 import { InvoicesModule } from './procurement/invoices.module';
+import { BudgetModule, BudgetService } from './budget/budget.module';
+import { ReportsModule } from './reports/reports.module';
 import { SettingsModule } from './settings/settings.module';
 import { HealthController } from './health/health.controller';
 
@@ -54,6 +56,8 @@ import { HealthController } from './health/health.controller';
     ProcurementModule,
     PurchaseOrdersModule,
     InvoicesModule,
+    BudgetModule,
+    ReportsModule,
     TelegramModule,
   ],
   controllers: [HealthController],
@@ -63,4 +67,14 @@ import { HealthController } from './health/health.controller';
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
 })
-export class AppModule {}
+export class AppModule implements OnModuleInit {
+  constructor(
+    private workflow: WorkflowService,
+    private budget: BudgetService,
+  ) {}
+
+  /** R7 §9 — wire the PR-submit budget validation into the approval engine. */
+  onModuleInit() {
+    this.workflow.registerBudgetHook(this.budget);
+  }
+}

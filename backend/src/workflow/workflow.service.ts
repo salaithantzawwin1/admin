@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ApprovalActionType, Prisma, RequestDocType, WorkflowStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
@@ -30,6 +30,13 @@ export class WorkflowService {
   private logger = new Logger('Workflow');
   /** Injected post-boot to avoid a circular dependency (inventory ↔ workflow). */
   private inventoryHook?: { fulfill(requestId: string, actor: Actor): Promise<unknown> };
+  /** R7 §9 — budget validation hook wired at bootstrap (constructor kept stable for tests). */
+  private budgetHook?: { checkRequestSubmission(requestId: string): Promise<unknown> };
+
+  /** Optional R7 §9 hook — a decision object when the PR exceed the budget, undefined when OK. */
+  registerBudgetHook(hook: { checkRequestSubmission(requestId: string): Promise<unknown> }) {
+    this.budgetHook = hook;
+  }
 
   constructor(
     private prisma: PrismaService,
@@ -298,6 +305,19 @@ export class WorkflowService {
     const request = await this.mustFind(id);
     if (request.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can submit');
     if (request.status !== 'DRAFT') throw new BadRequestException(`Cannot submit from status ${request.status}`);
+
+    // §9 budget check: a PR's estimated totals per account are compared with
+    // that account's remaining monthly budget (real spend from invoices).
+    if (request.docType === 'PURCHASE_REQUEST' && this.budgetHook) {
+      const verdict = await this.budgetHook.checkRequestSubmission(id) as
+        | { blocked: { account: string; estimated: number; remaining: number }[]; year: number; month: number }
+        | undefined;
+      if (verdict) {
+        throw new ConflictException(
+          `Budget check (§9): ${verdict.blocked.map((b) => `${b.account} — estimated ${b.estimated.toLocaleString()} > remaining ${b.remaining.toLocaleString()}`).join('; ')} — resolve the ${verdict.year}/${verdict.month} budget first`,
+        );
+      }
+    }
 
     const workflow = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
     if (!workflow || !workflow.active || workflow.steps.length === 0) {
