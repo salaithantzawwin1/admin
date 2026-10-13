@@ -18,6 +18,7 @@ const nav = [
   { to: '/purchase-orders', label: 'Purchase Orders', icon: '🧾', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
   { to: '/rfqs', label: 'RFQ / Quotations', icon: '📨', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
   { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') || hasPermission('inventory.read') },
+  { to: '/purchase-reports', label: 'Purchase Reports', icon: '📊', show: () => hasPermission('procurement.read') },
   { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
   { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
   { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },
