@@ -148,6 +148,15 @@ export default function Procurement() {
                   </td>
                   <td className="px-4 py-3">
                     <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
+                    {canReadAll && r.status === 'APPROVED' && (
+                      <Link
+                        to={`/rfqs?new=1&pr=${r.id}`}
+                        className="block mt-1 text-xs text-blue-600 hover:underline"
+                        title="Ask vendors for quotations on this approved request (design §11)"
+                      >
+                        → Ask for RFQ
+                      </Link>
+                    )}
                   </td>
                   {canReadAll && (
                     <td className="px-4 py-3">
