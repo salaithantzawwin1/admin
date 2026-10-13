@@ -28,6 +28,10 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # npm mirror override for networks that block registry.npmjs.org
+        # (set NPM_REGISTRY in .env.test / .env.prod; no-op default)
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     depends_on:
       db:
@@ -54,6 +58,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_ENV_LABEL: ${VITE_ENV_LABEL:-Production}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
     restart: unless-stopped
     depends_on:
       - backend

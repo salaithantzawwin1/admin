@@ -4,6 +4,10 @@ FROM node:20-alpine AS build
 ARG VITE_ENV_LABEL=AMS
 ENV VITE_ENV_LABEL=$VITE_ENV_LABEL
 WORKDIR /app
+# Some networks block registry.npmjs.org — compose passes NPM_REGISTRY from the
+# env file (e.g. a reachable mirror); the default keeps upstream npm.
+ARG NPM_REGISTRY=https://registry.npmjs.org
+RUN npm config set registry "$NPM_REGISTRY"
 COPY package*.json ./
 RUN npm ci
 COPY . .
