@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, hasPermission } from '../api';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
@@ -92,7 +92,7 @@ function relTime(iso: string): string {
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
 
-type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows';
+type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows' | 'budgets';
 
 /** Company Time Table — office hours the leave windows are derived from. */
 interface Timetable {
@@ -110,7 +110,7 @@ export default function Settings() {
   // active tab lives in the URL (?tab=holidays) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as SettingsTab | null;
-  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' ? tabParam : 'ad';
+  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' || tabParam === 'budgets' ? tabParam : 'ad';
   const setTab = (t: SettingsTab) => setSearchParams(t === 'ad' ? {} : { tab: t }, { replace: false });
   const [cfg, setCfg] = useState<AdConfig | null>(null);
   const [msg, setMsg] = useState('');
@@ -123,6 +123,18 @@ export default function Settings() {
   const [ttMsg, setTtMsg] = useState('');
   const [ttError, setTtError] = useState('');
   const [ttBusy, setTtBusy] = useState(false);
+
+  // ---------- Monthly budgets (R7, design §9) state ----------
+  interface BudgetRow { id: string; accountId: string; year: number; month: number; amount: string; note?: string | null; account?: { id: string; code?: string | null; name: string } | null; spent: number; remaining: number; usedPercent: number }
+  const [budgets, setBudgets] = useState<BudgetRow[]>([]);
+  const [budgetAccounts, setBudgetAccounts] = useState<{ id: string; code?: string | null; name: string }[]>([]);
+  const [budgetYear, setBudgetYear] = useState(new Date().getFullYear());
+  const [budgetMonth, setBudgetMonth] = useState(new Date().getMonth() + 1);
+  const [budgetAccount, setBudgetAccount] = useState('');
+  const [budgetAmount, setBudgetAmount] = useState('');
+  const [budgetBusy, setBudgetBusy] = useState(false);
+  const [budgetMsg, setBudgetMsg] = useState('');
+  const [budgetError, setBudgetError] = useState('');
 
   // ---------- Fleet (hand-back buffer) state ----------
   const [fleetBuffer, setFleetBuffer] = useState<number | null>(null);
@@ -247,6 +259,57 @@ export default function Settings() {
     if (tab !== 'workflows') return;
     loadWorkflows();
   }, [tab, loadWorkflows]);
+
+  // ---------- Monthly budgets (R7, §9) loader ----------
+  const loadBudgets = useCallback(() => {
+    api<BudgetRow[]>(`/budgets?year=${budgetYear}&month=${budgetMonth}`).then(setBudgets).catch((e) => setBudgetError(e.message));
+  }, [budgetYear, budgetMonth]);
+  useEffect(() => {
+    if (tab !== 'budgets') return;
+    api<{ id: string; code?: string | null; name: string }[]>('/procurement/accounts').then((rows) => {
+      setBudgetAccounts(rows.filter((r) => (r as { active?: boolean }).active !== false));
+    }).catch(() => setBudgetAccounts([]));
+    loadBudgets();
+  }, [tab, loadBudgets]);
+
+  const saveBudget = async () => {
+    setBudgetError('');
+    setBudgetMsg('');
+    setBudgetBusy(true);
+    try {
+      await api('/budgets', {
+        method: 'POST',
+        body: {
+          accountId: budgetAccount,
+          year: Number(budgetYear),
+          month: Number(budgetMonth),
+          amount: Number(budgetAmount),
+        },
+      });
+      setBudgetMsg('Budget saved');
+      setBudgetAmount('');
+      loadBudgets();
+    } catch (e) {
+      setBudgetError(e instanceof Error ? e.message : 'Failed to save budget');
+    } finally {
+      setBudgetBusy(false);
+    }
+  };
+
+  const removeBudget = async (id: string) => {
+    setBudgetError('');
+    setBudgetMsg('');
+    setBudgetBusy(true);
+    try {
+      await api(`/budgets/${id}`, { method: 'DELETE' });
+      setBudgetMsg('Budget removed');
+      loadBudgets();
+    } catch (e) {
+      setBudgetError(e instanceof Error ? e.message : 'Failed to remove budget');
+    } finally {
+      setBudgetBusy(false);
+    }
+  };
 
   const openWfCreate = () => {
     setWfName(''); setWfModule(wfModules[0] ?? 'PURCHASE_REQUEST');
@@ -484,6 +547,7 @@ export default function Settings() {
           { key: 'holidays' as SettingsTab, label: 'Public Holidays' },
           { key: 'fleet' as SettingsTab, label: 'Fleet' },
           { key: 'workflows' as SettingsTab, label: 'Approval Workflows' },
+          { key: 'budgets' as SettingsTab, label: 'Budgets' },
           { key: 'telegram' as SettingsTab, label: 'Telegram' },
           { key: 'joins' as SettingsTab, label: 'Telegram Joins' },
         ]).map((t) => (
@@ -798,6 +862,114 @@ export default function Settings() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* ---------- Tab: Monthly budgets (R7, design §9) ---------- */}
+      {tab === 'budgets' && (
+      <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-gray-800">Monthly Budgets</h2>
+          <div className="flex items-end gap-2">
+            <div>
+              <label htmlFor="settings-budget-year" className="block text-xs text-gray-500 mb-1">Year</label>
+              <Select id="settings-budget-year" value={String(budgetYear)} onChange={(e) => setBudgetYear(Number(e.target.value))} className="!w-28">
+                {Array.from({ length: 5 }, (_, i) => now.getFullYear() - 2 + i).map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <label htmlFor="settings-budget-month" className="block text-xs text-gray-500 mb-1">Month</label>
+              <Select id="settings-budget-month" value={String(budgetMonth)} onChange={(e) => setBudgetMonth(Number(e.target.value))} className="!w-32">
+                {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((m, i) => (
+                  <option key={m} value={i + 1}>{m}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Per-account monthly budget (§9). PR submissions estimate against the remaining amount —
+          real spend is measured from APPROVED/POSTED invoice lines for the same account + month.
+          Accounts without a budget are not enforced.
+        </p>
+
+        {budgetError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{budgetError}</div>}
+        {budgetMsg && <div className="mb-3 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{budgetMsg}</div>}
+
+        {hasPermission('procurement.manage') ? (
+        <div className="flex flex-wrap items-end gap-3 mb-5 border-b border-gray-100 pb-4">
+          <div>
+            <label htmlFor="settings-budget-account" className="block text-xs text-gray-500 mb-1">Account</label>
+            <Select id="settings-budget-account" value={budgetAccount} onChange={(e) => setBudgetAccount(e.target.value)} className="!w-64">
+              <option value="">Account…</option>
+              {budgetAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.code ? `${a.code} — ` : ''}{a.name}</option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label htmlFor="settings-budget-amount" className="block text-xs text-gray-500 mb-1">Amount (Ks)</label>
+            <Input
+              id="settings-budget-amount"
+              type="number"
+              min={0}
+              value={budgetAmount}
+              onChange={(e) => setBudgetAmount(e.target.value)}
+              className="!w-40"
+            />
+          </div>
+          <Button onClick={saveBudget} disabled={budgetBusy || !budgetAccount || budgetAmount === '' || Number(budgetAmount) < 0}>
+            {budgetBusy ? 'Saving…' : 'Save budget'}
+          </Button>
+        </div>
+        ) : (
+          <p className="text-sm text-gray-400 mb-4"> procurement.manage permission is required to change budgets.</p>
+        )}
+
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
+              <th className="px-3 py-2 font-semibold first:pl-0">Account</th>
+              <th className="px-3 py-2 font-semibold">Budget</th>
+              <th className="px-3 py-2 font-semibold">Spent</th>
+              <th className="px-3 py-2 font-semibold">Remaining</th>
+              <th className="px-3 py-2 font-semibold">Used</th>
+              {hasPermission('procurement.manage') && <th className="px-3 py-2 font-semibold text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {budgets.length === 0 && (
+              <tr>
+                <td colSpan={hasPermission('procurement.manage') ? 6 : 5}>
+                  <Empty label="No budgets for this year/month yet" />
+                </td>
+              </tr>
+            )}
+            {budgets.map((b) => (
+              <tr key={b.id} className="hover:bg-gray-50">
+                <td className="px-3 py-2 first:pl-0 font-medium text-gray-800">
+                  {b.account?.name ?? '—'}
+                  {b.account?.code && <span className="text-xs text-gray-400 ml-2">{b.account.code}</span>}
+                </td>
+                <td className="px-3 py-2 text-gray-600">{Number(b.amount).toLocaleString()}</td>
+                <td className="px-3 py-2">{b.spent.toLocaleString()}</td>
+                <td className={`px-3 py-2 font-medium ${b.remaining < 0 ? 'text-red-700' : 'text-gray-800'}`}>{b.remaining.toLocaleString()}</td>
+                <td className="px-3 py-2">
+                  <Badge color={b.usedPercent >= 100 ? 'red' : b.usedPercent >= 80 ? 'orange' : b.usedPercent >= 50 ? 'yellow' : 'green'}>{b.usedPercent}%</Badge>
+                </td>
+                {hasPermission('procurement.manage') && (
+                  <td className="px-3 py-2 text-right">
+                    <Button variant="danger" disabled={budgetBusy} onClick={() => removeBudget(b.id)}>
+                      Remove
+                    </Button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       )}
 
       {/* ---------- Tab: Public Holidays editor ---------- */}
