@@ -11,8 +11,6 @@
 --   QuotationItem    ← per-line unit price/qty/terms
 --   QuotationComparison ← recommended vendor + justification (doc-level)
 
-PRAGMA foreign_keys = ON;
-
 -- RFQ: the multi-vendor request for quotation (design §11). Mirrors the PR
 -- identity for traceability: RequestDocument carries the workflow + doc number,
 -- RFQ carries the procurement fields.
@@ -139,5 +137,3 @@ CREATE TABLE "quotation_comparisons" (
 );
 CREATE INDEX "quotation_comparisons_rfqId_idx" ON "quotation_comparisons"("rfqId");
 CREATE INDEX "quotation_comparisons_status_idx" ON "quotation_comparisons"("status");
-
-ALTER TABLE "rfqs" ADD CONSTRAINT "rfqs_requestId_key" UNIQUE ("requestId");
