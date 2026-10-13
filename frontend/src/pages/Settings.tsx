@@ -282,7 +282,7 @@ export default function Settings() {
       const qs = new URLSearchParams({ year: String(budgetYear), month: String(budgetMonth) });
       const q = budgetQuery.trim();
       if (q) qs.set('q', q);
-      const res = await fetch(`/api/budgets.csv?${qs.toString()}`, {
+      const res = await fetch(`/api/budgets/csv?${qs.toString()}`, {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
       if (!res.ok) throw new Error('Export failed');
