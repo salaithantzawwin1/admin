@@ -88,6 +88,40 @@ export class BudgetService {
     return Promise.all(rows.map(async (row) => ({ ...row, ...await this.usageFor(row.accountId, row.year, row.month, Number(row.amount)) })));
   }
 
+  /**
+   * CSV export of the budget table — same Excel-friendly shape as the
+   * inventory spending/ledger CSVs (UTF-8 BOM + CRLF). `q` narrows by account
+   * name/code so the download matches the table's filter.
+   */
+  async csv(params: { year: number; month?: number; q?: string }) {
+    const rows = await this.list(params);
+    const q = (params.q ?? '').trim().toLowerCase();
+    const filtered = q
+      ? rows.filter((r) =>
+          (r.account?.name ?? '').toLowerCase().includes(q) ||
+          (r.account?.code ?? '').toLowerCase().includes(q),
+        )
+      : rows;
+    const head = ['Account', 'Code', 'Year', 'Month', 'Budget (Ks)', 'Spent (Ks)', 'Remaining (Ks)', 'Used %', 'Note'];
+    const lines = [
+      head,
+      ...filtered.map((r) => [
+        r.account?.name ?? '',
+        r.account?.code ?? '',
+        String(r.year),
+        String(r.month),
+        String(r.amount),
+        String(r.spent),
+        String(r.remaining),
+        String(r.usedPercent),
+        r.note ?? '',
+      ]),
+    ];
+    const content = '\ufeff' + lines.map((l) => l.map(csvCell).join(',')).join('\r\n');
+    const stamp = `${params.year}-${params.month ? String(params.month).padStart(2, '0') : 'all'}`;
+    return { filename: `budgets-${stamp}.csv`, content };
+  }
+
   /** Budget vs actual for a month — every report/table surfaces this shape. */
   async usageFor(accountId: string, year: number, month: number, budgetAmount: number) {
     const spend = await this.spendFor(accountId, year, month);
@@ -158,4 +192,9 @@ export class BudgetService {
 
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/** Excel-friendly CSV cell — quotes separators/quotes/newlines per RFC 4180. */
+function csvCell(v: string): string {
+  return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }

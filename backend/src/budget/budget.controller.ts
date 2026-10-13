@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
-import type { Request } from 'express';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import type { Request, Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsIn, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -35,6 +35,26 @@ export class BudgetController {
       month: month ? Number(month) : undefined,
       accountId,
     });
+  }
+
+  /** CSV export of the budget table (Excel-friendly BOM + CRLF). */
+  @Get('csv')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)
+  async csv(
+    @Query('year') year?: string,
+    @Query('month') month?: string,
+    @Query('q') q?: string,
+    @Res() res?: Response,
+  ) {
+    const now = new Date();
+    const { filename, content } = await this.budget.csv({
+      year: Number(year) || now.getUTCFullYear(),
+      month: month ? Number(month) : undefined,
+      q,
+    });
+    res!.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res!.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res!.send(content);
   }
 
   @Post()

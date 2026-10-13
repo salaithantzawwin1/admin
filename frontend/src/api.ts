@@ -42,9 +42,13 @@ export function clearSession() {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** raw JSON error body — lets callers read structured payloads (e.g. the
+   *  §9 BUDGET_EXCEEDED block list) instead of only the message string */
+  details?: unknown;
+  constructor(status: number, message: string, details?: unknown) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -80,7 +84,7 @@ export async function api<T = unknown>(
           ? (data as { message: string[] }).message.join(', ')
           : (data as { message: string }).message
         : `Request failed (${res.status})`;
-    throw new ApiError(res.status, msg);
+    throw new ApiError(res.status, msg, data);
   }
   return data as T;
 }

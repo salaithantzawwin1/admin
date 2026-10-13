@@ -5,6 +5,7 @@ import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui'
 import { CarPanel } from '../components/CarPanel';
 import { MeetingRoomPanel } from '../components/MeetingRoomPanel';
 import { PurchaseRequestPanel } from '../components/PurchaseRequestPanel';
+import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDateTime } from '../util/yangonTime';
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
@@ -50,6 +51,8 @@ export default function RequestDetail() {
   const [error, setError] = useState('');
   const [comment, setComment] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  // §9 budget block — friendly explain modal instead of a raw 409 message
+  const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -78,7 +81,9 @@ export default function RequestDetail() {
       setComment('');
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      const block = budgetBlockFrom(e);
+      if (block) setBudgetBlock(block);
+      else setError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -121,6 +126,7 @@ export default function RequestDetail() {
         title={detail.docNumber}
         subtitle={detail.title}
       />
+      {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 

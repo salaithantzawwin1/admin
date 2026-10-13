@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
+import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDate } from '../util/yangonTime';
 import { toast } from '../components/Toast';
 
@@ -187,6 +188,8 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
   const [budgetCode, setBudgetCode] = useState('');
   const [justification, setJustification] = useState('');
   const [items, setItems] = useState<DraftItem[]>([emptyItem()]);
+  // §9 budget block — friendly explain modal instead of a raw 409 message
+  const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
 
   useEffect(() => {
     api<Account[]>('/procurement/accounts').then(setAccounts).catch(() => setAccounts([]));
@@ -228,12 +231,15 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
       }
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      const block = budgetBlockFrom(e);
+      if (block) setBudgetBlock(block);
+      else setError(e instanceof Error ? e.message : 'Failed');
       setBusy(false);
     }
   };
 
   return (
+    <>
     <Modal title="New purchase request" error={error} wide xl onClose={onClose}>
       <div className="space-y-4">
         {/* line items — bordered editor with desktop column headers; on small
@@ -337,5 +343,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
         </Button>
       </div>
     </Modal>
+    {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
+    </>
   );
 }

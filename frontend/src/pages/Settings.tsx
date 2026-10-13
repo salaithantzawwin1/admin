@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, hasPermission } from '../api';
+import { api, getToken, hasPermission } from '../api';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
@@ -135,6 +135,13 @@ export default function Settings() {
   const [budgetBusy, setBudgetBusy] = useState(false);
   const [budgetMsg, setBudgetMsg] = useState('');
   const [budgetError, setBudgetError] = useState('');
+  const [budgetQuery, setBudgetQuery] = useState('');
+  const [budgetCsvBusy, setBudgetCsvBusy] = useState(false);
+  // Account filter (name/code, case-insensitive) — narrows the table AND the CSV export
+  const budgetQueryNorm = budgetQuery.trim().toLowerCase();
+  const budgetRows = budgetQueryNorm
+    ? budgets.filter((b) => (b.account?.name ?? '').toLowerCase().includes(budgetQueryNorm) || (b.account?.code ?? '').toLowerCase().includes(budgetQueryNorm))
+    : budgets;
 
   // ---------- Fleet (hand-back buffer) state ----------
   const [fleetBuffer, setFleetBuffer] = useState<number | null>(null);
@@ -264,6 +271,33 @@ export default function Settings() {
   const loadBudgets = useCallback(() => {
     api<BudgetRow[]>(`/budgets?year=${budgetYear}&month=${budgetMonth}`).then(setBudgets).catch((e) => setBudgetError(e.message));
   }, [budgetYear, budgetMonth]);
+
+  /** CSV export of the visible month — same pattern as the Inventory
+   *  spending/ledger CSVs (auth header → blob → anchor download); `q` keeps
+   *  the download in sync with the account filter. */
+  const downloadBudgetsCsv = async () => {
+    setBudgetCsvBusy(true);
+    setBudgetError('');
+    try {
+      const qs = new URLSearchParams({ year: String(budgetYear), month: String(budgetMonth) });
+      const q = budgetQuery.trim();
+      if (q) qs.set('q', q);
+      const res = await fetch(`/api/budgets.csv?${qs.toString()}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `budgets-${budgetYear}-${String(budgetMonth).padStart(2, '0')}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setBudgetError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setBudgetCsvBusy(false);
+    }
+  };
   useEffect(() => {
     if (tab !== 'budgets') return;
     api<{ id: string; code?: string | null; name: string }[]>('/procurement/accounts').then((rows) => {
@@ -927,6 +961,17 @@ export default function Settings() {
           <p className="text-sm text-gray-400 mb-4"> procurement.manage permission is required to change budgets.</p>
         )}
 
+        <div className="flex flex-wrap items-end justify-between gap-3 mb-3">
+          <div className="flex items-end gap-2">
+            <div>
+              <label htmlFor="settings-budget-search" className="block text-xs text-gray-500 mb-1">Filter by account</label>
+              <Input id="settings-budget-search" placeholder="Account name or code…" value={budgetQuery} onChange={(e) => setBudgetQuery(e.target.value)} className="!w-56" />
+            </div>
+            <Button variant="ghost" onClick={downloadBudgetsCsv} disabled={budgetCsvBusy}>{budgetCsvBusy ? 'Exporting…' : '⬇ CSV'}</Button>
+          </div>
+          <div className="text-xs text-gray-400 pb-2">{budgetRows.length} of {budgets.length} budget{budgets.length === 1 ? '' : 's'}</div>
+        </div>
+
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
@@ -946,7 +991,14 @@ export default function Settings() {
                 </td>
               </tr>
             )}
-            {budgets.map((b) => (
+            {budgets.length > 0 && budgetRows.length === 0 && (
+              <tr>
+                <td colSpan={hasPermission('procurement.manage') ? 6 : 5}>
+                  <Empty label={`No accounts match “${budgetQuery.trim()}”`} />
+                </td>
+              </tr>
+            )}
+            {budgetRows.map((b) => (
               <tr key={b.id} className="hover:bg-gray-50">
                 <td className="px-3 py-2 first:pl-0 font-medium text-gray-800">
                   {b.account?.name ?? '—'}

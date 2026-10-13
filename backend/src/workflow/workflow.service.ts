@@ -310,12 +310,19 @@ export class WorkflowService {
     // that account's remaining monthly budget (real spend from invoices).
     if (request.docType === 'PURCHASE_REQUEST' && this.budgetHook) {
       const verdict = await this.budgetHook.checkRequestSubmission(id) as
-        | { blocked: { account: string; estimated: number; remaining: number }[]; year: number; month: number }
+        | { blocked: { account: string; estimated: number; budget: number; alreadySpent: number; remaining: number }[]; year: number; month: number }
         | undefined;
       if (verdict) {
-        throw new ConflictException(
-          `Budget check (§9): ${verdict.blocked.map((b) => `${b.account} — estimated ${b.estimated.toLocaleString()} > remaining ${b.remaining.toLocaleString()}`).join('; ')} — resolve the ${verdict.year}/${verdict.month} budget first`,
-        );
+        // Structured 409 (code BUDGET_EXCEEDED): the frontend opens a friendly
+        // explain modal showing which account is blocked and its remaining
+        // amount — `message` stays for plain-text consumers (Telegram, logs).
+        throw new ConflictException({
+          message: `Budget check (§9): ${verdict.blocked.map((b) => `${b.account} — estimated ${b.estimated.toLocaleString()} > remaining ${b.remaining.toLocaleString()}`).join('; ')} — resolve the ${verdict.year}/${verdict.month} budget first`,
+          code: 'BUDGET_EXCEEDED',
+          blocked: verdict.blocked,
+          year: verdict.year,
+          month: verdict.month,
+        });
       }
     }
 

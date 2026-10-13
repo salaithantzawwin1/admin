@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { Modal } from '../components/Modal';
 import { fmtDate } from '../util/yangonTime';
 
@@ -39,6 +40,8 @@ export default function MyRequests() {
   const navigate = useNavigate();
   // in-app confirm dialog state (replaces window.confirm)
   const [confirming, setConfirming] = useState<{ kind: 'recall' | 'cancelApproved'; id: string } | null>(null);
+  // §9 budget block — friendly explain modal instead of a raw 409 message
+  const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
 
   const load = useCallback(() => {
     api<{ items: RequestRow[] }>('/requests?scope=mine&pageSize=100')
@@ -72,7 +75,9 @@ export default function MyRequests() {
       await api(`/requests/${id}/submit`, { method: 'POST' });
       load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      const block = budgetBlockFrom(e);
+      if (block) setBudgetBlock(block);
+      else setError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -229,6 +234,7 @@ export default function MyRequests() {
           onClose={() => setConfirming(null)}
         />
       )}
+      {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
     </div>
   );
 }
