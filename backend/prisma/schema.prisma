@@ -1278,6 +1278,7 @@ model Account {
 
   category       AccountCategory?      @relation(fields: [categoryId], references: [id])
   prItems        PurchaseRequestItem[]
+  poItems        PurchaseOrderItem[]
   invoiceItems   InvoiceItem[]         @relation("InvoiceItems")
   monthlyBudgets MonthlyBudget[]       @relation("BudgetAccount")
 
@@ -1413,12 +1414,18 @@ model PurchaseOrderItem {
   quantity        Int
   unit            String?
   unitPrice       Decimal @db.Decimal(12, 2)
+  // §17/§39 — the purchasing stage is where an Account is assigned (the PR form
+  // no longer asks requesters for it). API requires it for every new PO line;
+  // the column stays nullable so lines created before this phase remain valid.
+  accountId       String? @db.Uuid
 
   purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   inventoryItem InventoryItem?     @relation("PoItems", fields: [inventoryItemId], references: [id])
+  account       Account?           @relation(fields: [accountId], references: [id])
   grnItems      GoodsReceiptItem[]
 
   @@index([purchaseOrderId])
+  @@index([accountId])
   @@map("purchase_order_items")
 }
 

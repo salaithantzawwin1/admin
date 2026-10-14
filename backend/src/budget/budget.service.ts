@@ -167,6 +167,16 @@ export class BudgetService {
       const est = Number(item.estimatedUnitPrice ?? 0) * item.quantity;
       perAccount.set(item.accountId, (perAccount.get(item.accountId) ?? 0) + est);
     }
+    return this.checkTotals(perAccount);
+  }
+
+  /**
+   * §9 core — per-account estimated totals vs the current month's remaining
+   * budget. Shared by the PR-submit hook (pre-approval) and PO creation
+   * (the purchasing stage now owns Account — design §17/§39), so both
+   * enforcement points return the identical structured verdict.
+   */
+  async checkTotals(perAccount: Map<string, number>) {
     if (perAccount.size === 0) return;
 
     const now = new Date();

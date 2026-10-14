@@ -14,6 +14,7 @@ class PoItemDto {
   @IsInt() @Min(1) quantity!: number;
   @IsOptional() @IsString() @MaxLength(32) unit?: string;
   @IsNumber() @Min(0) unitPrice!: number;
+  @IsString() @MinLength(1) accountId!: string; // §17/§39 — purchasing stage assigns the Account
 }
 
 class CreatePoDto {

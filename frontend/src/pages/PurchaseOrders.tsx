@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
+import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDate } from '../util/yangonTime';
 import { toast } from '../components/Toast';
 
@@ -10,6 +11,8 @@ import { toast } from '../components/Toast';
 // PO flow: create (DRAFT, from an APPROVED PR or ad-hoc) → approve → send to
 // vendor → receive via GRN (partial deliveries OK) → fully received → close.
 // GRN accepted consumable lines post stock IN into the inventory ledger.
+// Every line charges an Account (design §17/§39): the purchasing stage is
+// where classification happens — §9 budget check runs on PO create.
 // ---------------------------------------------------------------------------
 
 interface PoItem {
@@ -68,6 +71,12 @@ interface PrOption {
   title?: string | null;
 }
 
+interface AccountOpt {
+  id: string;
+  code?: string | null;
+  name: string;
+}
+
 const PO_STATUS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
   DRAFT: 'gray',
   APPROVED: 'blue',
@@ -87,9 +96,10 @@ interface LineDraft {
   quantity: string;
   unit: string;
   unitPrice: string;
+  accountId: string; // §17 — required: which account the line is charged to
 }
 
-const emptyLine = (): LineDraft => ({ inventoryItemId: '', description: '', quantity: '1', unit: '', unitPrice: '' });
+const emptyLine = (): LineDraft => ({ inventoryItemId: '', description: '', quantity: '1', unit: '', unitPrice: '', accountId: '' });
 
 export default function PurchaseOrders() {
   const canManage = hasPermission('procurement.manage');
@@ -101,6 +111,9 @@ export default function PurchaseOrders() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItemOpt[]>([]);
   const [approvedPrs, setApprovedPrs] = useState<PrOption[]>([]);
+  const [accounts, setAccounts] = useState<AccountOpt[]>([]);
+  // §9 budget block on PO create — same explain modal as the PR submit path
+  const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [supplierId, setSupplierId] = useState('');
@@ -139,6 +152,7 @@ export default function PurchaseOrders() {
     api<{ items: ({ id: string; docNumber: string; title?: string | null } | PrOption)[] }>('/procurement/requests?status=APPROVED&pageSize=50')
       .then((r) => setApprovedPrs((r as { items?: PrOption[] }).items ?? []))
       .catch(() => undefined);
+    api<AccountOpt[]>('/procurement/accounts').then(setAccounts).catch(() => setAccounts([]));
   }, [canManage]);
 
   const openCreate = () => {
@@ -179,9 +193,11 @@ export default function PurchaseOrders() {
         quantity: Number(l.quantity) || 0,
         unit: l.unit.trim() || undefined,
         unitPrice: Number(l.unitPrice) || 0,
+        accountId: l.accountId,
       }));
     if (items.length === 0) { toast('At least one item is required', 'error'); return; }
     if (items.some((i) => !i.quantity || i.unitPrice < 0)) { toast('Check quantities and prices', 'error'); return; }
+    if (items.some((i) => !i.accountId)) { toast('Pick an account for every line — it drives the budget check', 'error'); return; }
     setBusy(true);
     try {
       await api('/purchase-orders', {
@@ -199,7 +215,9 @@ export default function PurchaseOrders() {
       setPage(1);
       load();
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not create the PO', 'error');
+      const block = budgetBlockFrom(e);
+      if (block) setBudgetBlock(block);
+      else toast(e instanceof Error ? e.message : 'Could not create the PO', 'error');
     } finally {
       setBusy(false);
     }
@@ -397,7 +415,7 @@ export default function PurchaseOrders() {
                 <div className="col-span-1">Qty *</div>
                 <div className="col-span-1">Unit</div>
                 <div className="col-span-2">Unit price (Ks) *</div>
-                <div className="col-span-2 text-right" aria-hidden="true" />
+                <div className="col-span-2">Account *</div>
               </div>
               {lines.map((l, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 items-start">
@@ -419,7 +437,18 @@ export default function PurchaseOrders() {
                   <div className="col-span-6 md:col-span-2">
                     <Input type="number" min={0} placeholder="Unit price (Ks)" title="Unit price in Kyat" value={l.unitPrice} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, unitPrice: e.target.value } : x))} />
                   </div>
-                  <div className="col-span-6 md:col-span-1 flex justify-end">
+                  <div className="col-span-9 md:col-span-2">
+                    <Select value={l.accountId} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, accountId: e.target.value } : x))} aria-label={`Account for line ${idx + 1}`}>
+                      <option value="">Account… *</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.code ? `${a.code} — ` : ''}
+                          {a.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="col-span-3 md:col-span-1 flex justify-end">
                     <Button variant="danger" title={`Remove line ${idx + 1}`} onClick={() => setLines((ls) => ls.filter((_, i) => i !== idx))} disabled={lines.length <= 1}>✕</Button>
                   </div>
                 </div>
@@ -560,6 +589,8 @@ export default function PurchaseOrders() {
           </div>
         </Modal>
       )}
+
+      {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
     </div>
   );
 }

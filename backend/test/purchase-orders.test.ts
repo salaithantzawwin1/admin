@@ -47,6 +47,8 @@ function makePrisma(opts: any = {}) {
   };
   const prisma: any = {
     supplier: { findUnique: async () => (opts.supplier ?? { id: 'sup-1', name: 'Yangon Office Supplies', isActive: true }) },
+    // §17 — PO lines charge an account; the spy knows the seeded accounts
+    account: { findMany: async ({ where }: any) => (opts.accounts ?? [{ id: 'acc-1' }]).filter((a: any) => where.id.in.includes(a.id)) },
     purchaseRequest: {
       findUnique: async () => opts.pr ?? null,
     },
@@ -119,7 +121,7 @@ function makePrisma(opts: any = {}) {
   return prisma;
 }
 
-function makeService(prisma: any) {
+function makeService(prisma: any, budget?: { checkTotals(perAccount: Map<string, number>): Promise<unknown> }) {
   const { PurchaseOrdersService } = require('../src/procurement/purchase-orders.service');
   const { InventoryService } = require('../src/inventory/inventory.service');
   // Real inventory engine over the spy prisma (applyTransaction path)
@@ -129,6 +131,7 @@ function makeService(prisma: any) {
     { log: async () => ({}) } as any,
     { next: async (p: string) => `${p}-202610-0001` } as any,
     inventory,
+    budget ?? { checkTotals: async () => undefined }, // §9 hook: pass a stub/verdict per test
   );
 }
 
@@ -139,7 +142,7 @@ async function main() {
     const prisma = makePrisma({ pr: { id: 'pr-1', request: { status: 'PENDING_APPROVAL', docNumber: 'PR-202610-0001' } } });
     const svc = makeService(prisma);
     await assert.rejects(
-      () => svc.create({ purchaseRequestId: 'req-1', supplierId: 'sup-1', items: [{ description: 'A4 paper', quantity: 10, unitPrice: 8000 }] }, ACTOR),
+      () => svc.create({ purchaseRequestId: 'req-1', supplierId: 'sup-1', items: [{ description: 'A4 paper', quantity: 10, unitPrice: 8000, accountId: 'acc-1' }] }, ACTOR),
       /no approval, no PO/i,
     );
   });
@@ -147,9 +150,57 @@ async function main() {
   await test('Control 1: PO from an APPROVED PR is created as DRAFT with PO- number', async () => {
     const prisma = makePrisma({ pr: { id: 'pr-1', request: { status: 'APPROVED', docNumber: 'PR-202610-0001' } } });
     const svc = makeService(prisma);
-    const po = await svc.create({ purchaseRequestId: 'req-1', supplierId: 'sup-1', items: [{ description: 'A4 paper', quantity: 10, unitPrice: 8000 }] }, ACTOR);
+    const po = await svc.create({ purchaseRequestId: 'req-1', supplierId: 'sup-1', items: [{ description: 'A4 paper', quantity: 10, unitPrice: 8000, accountId: 'acc-1' }] }, ACTOR);
     assert.strictEqual(po.status, 'DRAFT');
     assert.ok(po.poNumber.startsWith('PO-'), 'PO number must use the PO- prefix');
+  });
+
+  await test('§17: a line without an account is rejected — purchasing owns Account', async () => {
+    const prisma = makePrisma({ pr: { id: 'pr-1', request: { status: 'APPROVED', docNumber: 'PR-202610-0001' } } });
+    const svc = makeService(prisma);
+    await assert.rejects(
+      () => svc.create({ supplierId: 'sup-1', items: [{ description: 'A4 paper', quantity: 10, unitPrice: 8000 } as any] }, ACTOR),
+      /account is required/i,
+    );
+  });
+
+  await test('§17: an unknown account id is rejected before anything is written', async () => {
+    const prisma = makePrisma({ pr: { id: 'pr-1', request: { status: 'APPROVED', docNumber: 'PR-202610-0001' } } });
+    const svc = makeService(prisma);
+    await assert.rejects(
+      () => svc.create({ supplierId: 'sup-1', items: [{ description: 'A4 paper', quantity: 10, unitPrice: 8000, accountId: 'acc-404' }] }, ACTOR),
+      /Unknown account: acc-404/,
+    );
+    assert.strictEqual(prisma.__state.prismaOps.filter(([op]: any[]) => op === 'po.create').length, 0, 'no PO row may be written for a bad account');
+  });
+
+  await test('§9: PO create passes the per-account totals to the budget hook (verdict blocks)', async () => {
+    const prisma = makePrisma({ pr: { id: 'pr-1', request: { status: 'APPROVED', docNumber: 'PR-202610-0001' } } });
+    const seen: Record<string, number> = {};
+    const budget = {
+      checkTotals: async (perAccount: Map<string, number>) => {
+        for (const [k, v] of perAccount) seen[k] = v;
+        return {
+          blocked: [{ account: 'Consumables', estimated: 80000, budget: 50000, alreadySpent: 20000, remaining: 30000 }],
+          year: 2026,
+          month: 10,
+        };
+      },
+    };
+    const svc = makeService(prisma, budget);
+    await assert.rejects(
+      async () => await svc.create({ supplierId: 'sup-1', items: [
+        { description: 'Toner', quantity: 2, unitPrice: 30000, accountId: 'acc-1' },
+        { description: 'Paper', quantity: 5, unitPrice: 4000, accountId: 'acc-1' },
+      ] }, ACTOR),
+      (e: any) => {
+        if (typeof e?.getStatus !== 'function' || e.getStatus() !== 409) return false;
+        const body = typeof e.getResponse === 'function' ? e.getResponse() : e?.response;
+        return body?.code === 'BUDGET_EXCEEDED' && Array.isArray(body?.blocked) && body.blocked.length > 0 && typeof body.year === 'number' && typeof body.month === 'number';
+      },
+    );
+    assert.strictEqual(seen['acc-1'], 2 * 30000 + 5 * 4000, 'hook must receive qty × unitPrice per account');
+    assert.strictEqual(prisma.__state.prismaOps.filter(([op]: any[]) => op === 'po.create').length, 0, 'a budget-blocked PO must not be written');
   });
 
   await test('§16 machine: cannot receive against a DRAFT PO (Control 2), GRN needs SENT_TO_VENDOR', async () => {

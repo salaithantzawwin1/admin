@@ -9,9 +9,11 @@ import { toast } from '../components/Toast';
 
 // ---------------------------------------------------------------------------
 // Procurement — Purchase Requests (Design §5–7, phase P1).
-// A PR is a workflow document (PR-…) + line items with optional Account/Asset
-// references. Creation follows the standard request flow: create as DRAFT here,
-// then POST /requests/:id/submit (same as car and meeting-room requests).
+// A PR is a workflow document (PR-…) + line items. Account/Asset are NOT
+// collected here: the employee only says what is needed, and the purchasing
+// stage assigns the Account (design §17/§39 — PO lines carry it; invoices
+// classify per line). Creation follows the standard request flow: create as
+// DRAFT here, then POST /requests/:id/submit (same as car/meeting requests).
 // ---------------------------------------------------------------------------
 
 interface PrItem {
@@ -42,19 +44,6 @@ interface PrRow {
   } | null;
 }
 
-interface Account {
-  id: string;
-  code?: string | null;
-  name: string;
-  category?: { name: string } | null;
-}
-
-interface Asset {
-  id: string;
-  assetCode: string;
-  name: string;
-}
-
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
   DRAFT: 'gray',
   PENDING_APPROVAL: 'yellow',
@@ -68,17 +57,16 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   IN_PROGRESS: 'blue',
 };
 
-/** Line-item editor state — mirrors PurchaseRequestItem on the backend. */
+/** Line-item editor state — mirrors PurchaseRequestItem on the backend.
+ *  Account/Asset live on the PO/invoice lines (§17/§39), not on the request. */
 interface DraftItem {
   description: string;
   quantity: number;
   unit: string;
   estimatedUnitPrice: string;
-  accountId: string;
-  assetId: string;
 }
 
-const emptyItem = (): DraftItem => ({ description: '', quantity: 1, unit: '', estimatedUnitPrice: '', accountId: '', assetId: '' });
+const emptyItem = (): DraftItem => ({ description: '', quantity: 1, unit: '', estimatedUnitPrice: '' });
 
 const fmtMoney = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
@@ -179,8 +167,6 @@ export default function Procurement() {
 }
 
 function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [assets, setAssets] = useState<Asset[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [priority, setPriority] = useState('NORMAL');
@@ -190,11 +176,6 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<DraftItem[]>([emptyItem()]);
   // §9 budget block — friendly explain modal instead of a raw 409 message
   const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
-
-  useEffect(() => {
-    api<Account[]>('/procurement/accounts').then(setAccounts).catch(() => setAccounts([]));
-    api<Asset[]>('/procurement/assets').then(setAssets).catch(() => setAssets([]));
-  }, []);
 
   const setItem = (idx: number, patch: Partial<DraftItem>) =>
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
@@ -218,8 +199,6 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             quantity: Number(it.quantity),
             unit: it.unit.trim() || undefined,
             estimatedUnitPrice: it.estimatedUnitPrice === '' ? undefined : Number(it.estimatedUnitPrice),
-            accountId: it.accountId || undefined,
-            assetId: it.assetId || undefined,
           })),
         },
       });
@@ -250,50 +229,27 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             <span className="text-xs text-gray-400">{items.length} line{items.length === 1 ? '' : 's'}</span>
           </div>
           <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
-            <div className="col-span-3">Description</div>
+            <div className="col-span-5">Description</div>
             <div className="col-span-1">Qty</div>
             <div className="col-span-1">Unit</div>
-            <div className="col-span-2">Unit price (Ks)</div>
-            <div className="col-span-2">Account</div>
-            <div className="col-span-2">Asset</div>
+            <div className="col-span-4">Unit price (Ks)</div>
             <div className="col-span-1 text-right" aria-hidden="true" />
           </div>
           {items.map((it, idx) => (
             <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-              <div className="col-span-12 md:col-span-3">
+              <div className="col-span-12 md:col-span-5">
                 <Input placeholder={`Item ${idx + 1} description *`} value={it.description} onChange={(e) => setItem(idx, { description: e.target.value })} />
               </div>
-              <div className="col-span-3 md:col-span-1">
+              <div className="col-span-4 md:col-span-1">
                 <Input type="number" min={1} placeholder="Qty" title="Quantity" value={it.quantity} onChange={(e) => setItem(idx, { quantity: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} />
               </div>
-              <div className="col-span-3 md:col-span-1">
+              <div className="col-span-4 md:col-span-1">
                 <Input placeholder="Unit" value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} />
               </div>
-              <div className="col-span-6 md:col-span-2">
+              <div className="col-span-4 md:col-span-4">
                 <Input type="number" min={0} placeholder="Unit price" title="Unit price in Kyat" value={it.estimatedUnitPrice} onChange={(e) => setItem(idx, { estimatedUnitPrice: e.target.value })} />
               </div>
-              <div className="col-span-6 md:col-span-2">
-                <Select value={it.accountId} onChange={(e) => setItem(idx, { accountId: e.target.value })}>
-                  <option value="">Account…</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.code ? `${a.code} — ` : ''}
-                      {a.name}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="col-span-10 md:col-span-2">
-                <Select value={it.assetId} onChange={(e) => setItem(idx, { assetId: e.target.value })}>
-                  <option value="">Asset…</option>
-                  {assets.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.assetCode}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="col-span-2 md:col-span-1 flex justify-end">
+              <div className="col-span-12 md:col-span-1 flex justify-end">
                 <Button variant="danger" title={`Remove item ${idx + 1}`} onClick={() => setItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev))}>
                   ×
                 </Button>

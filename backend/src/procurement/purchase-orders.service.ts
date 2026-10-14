@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { InventoryService } from '../inventory/inventory.service';
+import { BudgetService } from '../budget/budget.service';
 import { Actor } from '../org/org.service';
 
 export interface PoItemInput {
@@ -11,6 +12,8 @@ export interface PoItemInput {
   quantity: number;
   unit?: string;
   unitPrice: number;
+  /** §17/§39 — required on every new line: the purchasing stage owns Account. */
+  accountId: string;
 }
 
 export interface CreatePoInput {
@@ -73,6 +76,7 @@ export class PurchaseOrdersService {
     private audit: AuditService,
     private numbering: NumberingService,
     private inventory: InventoryService,
+    private budget: BudgetService,
   ) {}
 
   // ---------- PO lifecycle ----------
@@ -136,6 +140,33 @@ export class PurchaseOrdersService {
     }
 
     const items = data.items.map((it, idx) => this.normalizePoItem(it, idx));
+
+    // §17 — the account on each line must exist (it drives the §9 budget check
+    // below and the invoice/ledger classification later)
+    const accountIds = [...new Set(items.map((i) => i.accountId))];
+    const accounts = await this.prisma.account.findMany({ where: { id: { in: accountIds } }, select: { id: true } });
+    if (accounts.length !== accountIds.length) {
+      const known = new Set(accounts.map((a) => a.id));
+      throw new BadRequestException(`Unknown account: ${accountIds.filter((id) => !known.has(id)).join(', ')}`);
+    }
+
+    // §9 budget check at the purchasing stage — the PR form no longer carries
+    // accounts, so PO creation is where estimated totals are enforced against
+    // the current month's remaining budget (same structured BUDGET_EXCEEDED
+    // payload as the PR-submit hook → the same explain modal in the UI).
+    const perAccount = new Map<string, number>();
+    for (const it of items) perAccount.set(it.accountId, (perAccount.get(it.accountId) ?? 0) + it.quantity * it.unitPrice);
+    const verdict = await this.budget.checkTotals(perAccount);
+    if (verdict) {
+      throw new ConflictException({
+        message: `Budget check (§9): ${verdict.blocked.map((b) => `${b.account} — estimated ${b.estimated.toLocaleString()} > remaining ${b.remaining.toLocaleString()}`).join('; ')} — resolve the ${verdict.year}/${verdict.month} budget first`,
+        code: 'BUDGET_EXCEEDED',
+        blocked: verdict.blocked,
+        year: verdict.year,
+        month: verdict.month,
+      });
+    }
+
     const po = await this.prisma.purchaseOrder.create({
       data: {
         poNumber: await this.numbering.next('PO'),
@@ -340,12 +371,15 @@ export class PurchaseOrdersService {
     if (!Number.isFinite(quantity) || quantity < 1) throw new BadRequestException(`Item ${idx + 1}: quantity must be at least 1`);
     const unitPrice = Number(it.unitPrice);
     if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new BadRequestException(`Item ${idx + 1}: unit price must be a positive number`);
+    const accountId = (it.accountId ?? '').trim();
+    if (!accountId) throw new BadRequestException(`Item ${idx + 1}: account is required (pick the account this purchase is charged to)`);
     return {
       description,
       inventoryItemId: it.inventoryItemId || undefined,
       quantity,
       unit: it.unit?.trim() || undefined,
       unitPrice,
+      accountId,
     };
   }
 }
