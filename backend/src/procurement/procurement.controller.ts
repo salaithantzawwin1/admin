@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ArrayMinSize, IsArray, IsIn, IsInt, IsISO8601, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
@@ -44,6 +44,21 @@ class CreateRfqDto {
 }
 
 class UpdateRfqDto extends CreateRfqDto {}
+
+/** Chart-of-accounts master data (Settings → Accounts). Code optional + unique; '' clears it. */
+class CreateAccountDto {
+  @IsOptional() @IsString() @MaxLength(32) code?: string;
+  @IsString() @MinLength(1) @MaxLength(200) name!: string;
+  @IsOptional() @IsString() categoryId?: string;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+class UpdateAccountDto {
+  @IsOptional() @IsString() @MaxLength(32) code?: string;
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(200) name?: string;
+  @IsOptional() @IsString() categoryId?: string;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
 
 class AddRfqVendorDto {
   @IsString() supplierId!: string;
@@ -106,6 +121,30 @@ export class ProcurementController {
   @Get('accounts')
   accounts(@Query('all') all?: string) {
     return this.procurement.listAccounts(all === '1');
+  }
+
+  @Get('account-categories')
+  accountCategories() {
+    return this.procurement.listAccountCategories();
+  }
+
+  // ---------- chart of accounts CRUD (Settings → Accounts) ----------
+  @Post('accounts')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  createAccount(@Req() req, @Body() body: CreateAccountDto) {
+    return this.procurement.createAccount(body, this.actor(req));
+  }
+
+  @Patch('accounts/:id')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  updateAccount(@Req() req, @Param('id') id: string, @Body() body: UpdateAccountDto) {
+    return this.procurement.updateAccount(id, body, this.actor(req));
+  }
+
+  @Delete('accounts/:id')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  deleteAccount(@Req() req, @Param('id') id: string) {
+    return this.procurement.deleteAccount(id, this.actor(req));
   }
 
   @Get('assets')

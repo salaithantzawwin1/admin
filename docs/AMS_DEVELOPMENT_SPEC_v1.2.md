@@ -258,7 +258,7 @@ Should be as close as practical to production.
 
 ## Production
 
-Runs on Ubuntu Server 24.04 LTS.
+Runs on Ubuntu Server 22.04 LTS (live VM: 22.04.5).
 
 All production services should be deployed through controlled release processes.
 

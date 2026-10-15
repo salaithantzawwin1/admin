@@ -54,6 +54,109 @@ export class ProcurementService {
     });
   }
 
+  // ---------- chart of accounts (Settings → Accounts; CRUD master data) ----------
+  listAccountCategories() {
+    return this.prisma.accountCategory.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  async createAccount(
+    data: { code?: string; name: string; categoryId?: string; active?: boolean },
+    actor: Actor,
+  ) {
+    const code = data.code?.trim() || null;
+    if (code) {
+      const taken = await this.prisma.account.findUnique({ where: { code } });
+      if (taken) throw new ConflictException(`Account code "${code}" already exists`);
+    }
+    if (data.categoryId) {
+      const cat = await this.prisma.accountCategory.findUnique({ where: { id: data.categoryId } });
+      if (!cat) throw new BadRequestException('Unknown account category');
+    }
+    const account = await this.prisma.account.create({
+      data: {
+        code,
+        name: data.name.trim(),
+        categoryId: data.categoryId || null,
+        active: data.active ?? true,
+      },
+      include: { category: true },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ACCOUNT_CREATED', module: 'PROCUREMENT', recordId: account.id,
+      newValue: { code, name: account.name, category: account.category?.name, active: account.active },
+    });
+    return account;
+  }
+
+  async updateAccount(
+    id: string,
+    data: { code?: string; name?: string; categoryId?: string; active?: boolean },
+    actor: Actor,
+  ) {
+    const prev = await this.prisma.account.findUnique({ where: { id }, include: { category: true } });
+    if (!prev) throw new NotFoundException('Account not found');
+    // code: undefined = keep, '' = clear, other = set (unique check against the rest of the chart)
+    const code = data.code === undefined ? prev.code : (data.code.trim() || null);
+    if (code && code !== prev.code) {
+      const taken = await this.prisma.account.findUnique({ where: { code } });
+      if (taken) throw new ConflictException(`Account code "${code}" already exists`);
+    }
+    if (data.categoryId) {
+      const cat = await this.prisma.accountCategory.findUnique({ where: { id: data.categoryId } });
+      if (!cat) throw new BadRequestException('Unknown account category');
+    }
+    const account = await this.prisma.account.update({
+      where: { id },
+      data: {
+        ...(data.code !== undefined ? { code } : {}),
+        ...(data.name !== undefined ? { name: data.name.trim() } : {}),
+        ...(data.categoryId !== undefined ? { categoryId: data.categoryId || null } : {}),
+        ...(data.active !== undefined ? { active: data.active } : {}),
+      },
+      include: { category: true },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ACCOUNT_UPDATED', module: 'PROCUREMENT', recordId: id,
+      oldValue: { code: prev.code, name: prev.name, category: prev.category?.name, active: prev.active },
+      newValue: { code: account.code, name: account.name, category: account.category?.name, active: account.active },
+    });
+    return account;
+  }
+
+  /**
+   * Hard delete only when the account has NO history (PR/PO/invoice lines,
+   * monthly budgets) — same audit-integrity rule as user deletion. Accounts
+   * WITH history must be deactivated (active=false) instead, so old documents
+   * keep pointing at a real row and the account leaves every form picker.
+   */
+  async deleteAccount(id: string, actor: Actor) {
+    const account = await this.prisma.account.findUnique({
+      where: { id },
+      include: { _count: { select: { prItems: true, poItems: true, invoiceItems: true, monthlyBudgets: true } } },
+    });
+    if (!account) throw new NotFoundException('Account not found');
+    const c = account._count;
+    const usedIn: string[] = [];
+    if (c.prItems) usedIn.push(`${c.prItems} purchase-request line${c.prItems === 1 ? '' : 's'}`);
+    if (c.poItems) usedIn.push(`${c.poItems} PO line${c.poItems === 1 ? '' : 's'}`);
+    if (c.invoiceItems) usedIn.push(`${c.invoiceItems} invoice line${c.invoiceItems === 1 ? '' : 's'}`);
+    if (c.monthlyBudgets) usedIn.push(`${c.monthlyBudgets} monthly budget${c.monthlyBudgets === 1 ? '' : 's'}`);
+    if (usedIn.length) {
+      throw new ConflictException(
+        `Account "${account.code ? `${account.code} — ` : ''}${account.name}" is used by ${usedIn.join(', ')} — deactivate it instead of deleting (audit integrity)`,
+      );
+    }
+    await this.prisma.account.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ACCOUNT_DELETED', module: 'PROCUREMENT', recordId: id,
+      oldValue: { code: account.code, name: account.name, active: account.active },
+    });
+    return { id, deleted: true };
+  }
+
   // ---------- purchase requests ----------
   /** Lists PRs — every requester sees their own; procurement.read sees all. */
   async list(params: { page: number; pageSize: number; status?: string; canReadAll: boolean; actor: Actor }) {

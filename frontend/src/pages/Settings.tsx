@@ -92,7 +92,7 @@ function relTime(iso: string): string {
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
 
-type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows' | 'budgets';
+type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows' | 'budgets' | 'accounts';
 
 /** Company Time Table — office hours the leave windows are derived from. */
 interface Timetable {
@@ -110,7 +110,7 @@ export default function Settings() {
   // active tab lives in the URL (?tab=holidays) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as SettingsTab | null;
-  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' || tabParam === 'budgets' ? tabParam : 'ad';
+  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' || tabParam === 'budgets' || tabParam === 'accounts' ? tabParam : 'ad';
   const setTab = (t: SettingsTab) => setSearchParams(t === 'ad' ? {} : { tab: t }, { replace: false });
   const [cfg, setCfg] = useState<AdConfig | null>(null);
   const [msg, setMsg] = useState('');
@@ -142,6 +142,29 @@ export default function Settings() {
   const budgetRows = budgetQueryNorm
     ? budgets.filter((b) => (b.account?.name ?? '').toLowerCase().includes(budgetQueryNorm) || (b.account?.code ?? '').toLowerCase().includes(budgetQueryNorm))
     : budgets;
+
+  // ---------- Chart of accounts (Account master CRUD) state ----------
+  interface AcctCat { id: string; name: string }
+  interface AcctRow { id: string; code?: string | null; name: string; active: boolean; categoryId?: string | null; category?: AcctCat | null }
+  const [accts, setAccts] = useState<AcctRow[]>([]);
+  const [acctCats, setAcctCats] = useState<AcctCat[]>([]);
+  const [acctLoading, setAcctLoading] = useState(false);
+  const [acctQuery, setAcctQuery] = useState('');
+  const [acctCreate, setAcctCreate] = useState(false);              // create modal open
+  const [acctEdit, setAcctEdit] = useState<AcctRow | null>(null);  // editing an existing account
+  const [acctDelete, setAcctDelete] = useState<AcctRow | null>(null); // in-app delete confirm
+  const [acctCode, setAcctCode] = useState('');
+  const [acctName, setAcctName] = useState('');
+  const [acctCat, setAcctCat] = useState('');
+  const [acctActive, setAcctActive] = useState(true);
+  const [acctBusy, setAcctBusy] = useState(false);
+  const [acctMsg, setAcctMsg] = useState('');
+  const [acctError, setAcctError] = useState('');
+  // filter (code / name / category, case-insensitive)
+  const acctQueryNorm = acctQuery.trim().toLowerCase();
+  const acctRows = acctQueryNorm
+    ? accts.filter((a) => (a.code ?? '').toLowerCase().includes(acctQueryNorm) || a.name.toLowerCase().includes(acctQueryNorm) || (a.category?.name ?? '').toLowerCase().includes(acctQueryNorm))
+    : accts;
 
   // ---------- Fleet (hand-back buffer) state ----------
   const [fleetBuffer, setFleetBuffer] = useState<number | null>(null);
@@ -305,6 +328,84 @@ export default function Settings() {
     }).catch(() => setBudgetAccounts([]));
     loadBudgets();
   }, [tab, loadBudgets]);
+
+  // ---------- Chart of accounts (Account master CRUD) ----------
+  const loadAccounts = useCallback(() => {
+    setAcctLoading(true);
+    // ?all=1 includes inactive rows — the management table must show them
+    api<AcctRow[]>('/procurement/accounts?all=1')
+      .then(setAccts)
+      .catch((e) => setAcctError(e.message))
+      .finally(() => setAcctLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (tab !== 'accounts') return;
+    loadAccounts();
+    api<AcctCat[]>('/procurement/account-categories').then(setAcctCats).catch(() => setAcctCats([]));
+  }, [tab, loadAccounts]);
+
+  const openAcctCreate = () => {
+    setAcctEdit(null); setAcctCode(''); setAcctName(''); setAcctCat(''); setAcctActive(true);
+    setAcctMsg(''); setAcctError('');
+    setAcctCreate(true);
+  };
+
+  const openAcctEdit = (a: AcctRow) => {
+    setAcctCreate(false);
+    setAcctEdit(a); setAcctCode(a.code ?? ''); setAcctName(a.name); setAcctCat(a.categoryId ?? ''); setAcctActive(a.active);
+    setAcctMsg(''); setAcctError('');
+  };
+
+  const saveAcct = async () => {
+    setAcctBusy(true); setAcctError(''); setAcctMsg('');
+    const body = { code: acctCode.trim(), name: acctName.trim(), categoryId: acctCat || null, active: acctActive };
+    try {
+      if (acctEdit) {
+        await api(`/procurement/accounts/${acctEdit.id}`, { method: 'PATCH', body });
+        setAcctMsg(`Account "${body.name}" saved.`);
+      } else {
+        await api('/procurement/accounts', { method: 'POST', body });
+        setAcctMsg(`Account "${body.name}" created.`);
+      }
+      setAcctCreate(false); setAcctEdit(null);
+      loadAccounts();
+    } catch (e) {
+      setAcctError(e instanceof Error ? e.message : 'Failed to save account');
+    } finally {
+      setAcctBusy(false);
+    }
+  };
+
+  const toggleAcctActive = async (a: AcctRow) => {
+    setAcctBusy(true); setAcctError(''); setAcctMsg('');
+    try {
+      await api(`/procurement/accounts/${a.id}`, { method: 'PATCH', body: { active: !a.active } });
+      setAcctMsg(a.active ? `Account "${a.name}" deactivated — it no longer appears in form pickers.` : `Account "${a.name}" activated.`);
+      loadAccounts();
+    } catch (e) {
+      setAcctError(e instanceof Error ? e.message : 'Failed to update the account');
+    } finally {
+      setAcctBusy(false);
+    }
+  };
+
+  const deleteAcct = async () => {
+    if (!acctDelete) return;
+    setAcctBusy(true); setAcctError(''); setAcctMsg('');
+    try {
+      await api(`/procurement/accounts/${acctDelete.id}`, { method: 'DELETE' });
+      setAcctMsg(`Account "${acctDelete.name}" deleted.`);
+      setAcctDelete(null);
+      loadAccounts();
+    } catch (e) {
+      // 409 in-use → the server message says "deactivate instead"; keep it visible
+      setAcctError(e instanceof Error ? e.message : 'Failed to delete the account');
+      setAcctDelete(null);
+    } finally {
+      setAcctBusy(false);
+    }
+  };
 
   const saveBudget = async () => {
     setBudgetError('');
@@ -581,6 +682,7 @@ export default function Settings() {
           { key: 'holidays' as SettingsTab, label: 'Public Holidays' },
           { key: 'fleet' as SettingsTab, label: 'Fleet' },
           { key: 'workflows' as SettingsTab, label: 'Approval Workflows' },
+          { key: 'accounts' as SettingsTab, label: 'Accounts' },
           { key: 'budgets' as SettingsTab, label: 'Budgets' },
           { key: 'telegram' as SettingsTab, label: 'Telegram' },
           { key: 'joins' as SettingsTab, label: 'Telegram Joins' },
@@ -896,6 +998,121 @@ export default function Settings() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* ---------- Tab: Chart of Accounts (Account master CRUD) ---------- */}
+      {tab === 'accounts' && (
+      <>
+      <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="font-semibold text-gray-800">Chart of Accounts</h2>
+          {hasPermission('procurement.manage') && <Button onClick={openAcctCreate}>+ New account</Button>}
+        </div>
+        <p className="text-sm text-gray-500 mb-4">
+          Accounts that purchases are charged to — PO lines, invoice lines, monthly budgets and purchase reports all
+          reference them. Deactivate an account you want to retire instead of deleting it once it has history.
+        </p>
+
+        {acctError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{acctError}</div>}
+        {acctMsg && <div className="mb-3 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{acctMsg}</div>}
+
+        <div className="flex items-end justify-between gap-3 mb-3">
+          <div>
+            <label htmlFor="settings-acct-search" className="block text-xs text-gray-500 mb-1">Filter</label>
+            <Input id="settings-acct-search" placeholder="Code, name or category…" value={acctQuery} onChange={(e) => setAcctQuery(e.target.value)} className="!w-56" />
+          </div>
+          <div className="text-xs text-gray-400 pb-2">{acctRows.length} of {accts.length} account{accts.length === 1 ? '' : 's'}</div>
+        </div>
+
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
+              <th className="px-3 py-2 font-semibold first:pl-0">Code</th>
+              <th className="px-3 py-2 font-semibold">Name</th>
+              <th className="px-3 py-2 font-semibold">Category</th>
+              <th className="px-3 py-2 font-semibold">Status</th>
+              {hasPermission('procurement.manage') && <th className="px-3 py-2 font-semibold text-right">Actions</th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {accts.length === 0 && (
+              <tr>
+                <td colSpan={hasPermission('procurement.manage') ? 5 : 4}>
+                  <Empty label={acctLoading ? 'Loading…' : 'No accounts yet — create the first one'} />
+                </td>
+              </tr>
+            )}
+            {accts.length > 0 && acctRows.length === 0 && (
+              <tr>
+                <td colSpan={hasPermission('procurement.manage') ? 5 : 4}>
+                  <Empty label={`No accounts match “${acctQuery.trim()}”`} />
+                </td>
+              </tr>
+            )}
+            {acctRows.map((a) => (
+              <tr key={a.id} className="hover:bg-gray-50">
+                <td className="px-3 py-2 first:pl-0 font-mono text-xs text-gray-500">{a.code ?? '—'}</td>
+                <td className="px-3 py-2 font-medium text-gray-800">{a.name}</td>
+                <td className="px-3 py-2 text-gray-600">{a.category?.name ?? '—'}</td>
+                <td className="px-3 py-2"><Badge color={a.active ? 'green' : 'gray'}>{a.active ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
+                {hasPermission('procurement.manage') && (
+                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                    <Button variant="ghost" disabled={acctBusy} onClick={() => openAcctEdit(a)}>Edit</Button>{' '}
+                    <Button variant="ghost" disabled={acctBusy} onClick={() => toggleAcctActive(a)}>{a.active ? 'Deactivate' : 'Activate'}</Button>{' '}
+                    <Button variant="danger" disabled={acctBusy} onClick={() => { setAcctDelete(a); setAcctError(''); setAcctMsg(''); }}>Delete</Button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Create / edit account */}
+      {(acctCreate || acctEdit) && (
+        <Modal title={acctEdit ? 'Edit account' : 'New account'} onClose={() => { setAcctCreate(false); setAcctEdit(null); }} error={acctError} wide>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="settings-acct-code" className="block text-xs text-gray-500 mb-1">Code (optional, unique)</label>
+              <Input id="settings-acct-code" placeholder="ACC-OS-001" value={acctCode} onChange={(e) => setAcctCode(e.target.value)} maxLength={32} />
+            </div>
+            <div>
+              <label htmlFor="settings-acct-cat" className="block text-xs text-gray-500 mb-1">Category</label>
+              <Select id="settings-acct-cat" value={acctCat} onChange={(e) => setAcctCat(e.target.value)}>
+                <option value="">— none —</option>
+                {acctCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="settings-acct-name" className="block text-xs text-gray-500 mb-1">Name *</label>
+              <Input id="settings-acct-name" placeholder="Office Supplies" value={acctName} onChange={(e) => setAcctName(e.target.value)} maxLength={200} />
+            </div>
+            <label className="sm:col-span-2 flex items-center gap-2 text-sm text-gray-700">
+              <input type="checkbox" checked={acctActive} onChange={(e) => setAcctActive(e.target.checked)} className="rounded border-gray-300" />
+              Active — offered in PO / invoice / budget pickers (inactive accounts stay on old documents)
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => { setAcctCreate(false); setAcctEdit(null); }}>Cancel</Button>
+            <Button onClick={saveAcct} disabled={acctBusy || !acctName.trim()}>{acctBusy ? 'Saving…' : acctEdit ? 'Save changes' : 'Create account'}</Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete account (confirm — server rejects in-use accounts) */}
+      {acctDelete && (
+        <Modal title="Delete account" onClose={() => setAcctDelete(null)} error={acctError}>
+          <p className="text-sm text-gray-600 mb-4">
+            Permanently delete <span className="font-medium text-gray-800">{acctDelete.code ? `${acctDelete.code} — ` : ''}{acctDelete.name}</span>?
+            Accounts with purchase-request, PO, invoice or budget history cannot be deleted — deactivate them instead.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setAcctDelete(null)}>Cancel</Button>
+            <Button variant="danger" onClick={deleteAcct} disabled={acctBusy}>{acctBusy ? 'Deleting…' : 'Delete'}</Button>
+          </div>
+        </Modal>
+      )}
+      </>
       )}
 
       {/* ---------- Tab: Monthly budgets (R7, design §9) ---------- */}
