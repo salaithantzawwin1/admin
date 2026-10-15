@@ -120,7 +120,11 @@ export class ProcurementController {
   // ---------- master lookups (PR form pickers) ----------
   @Get('accounts')
   accounts(@Query('all') all?: string) {
-    return this.procurement.listAccounts(all === '1');
+    // `listAccounts(activeOnly)` — invert the `all` flag: pickers (no param) get
+    // ACTIVE-only rows; the Settings management table passes ?all=1 for everything.
+    // (was `all === '1'` — inverted since Phase 1: inactive accounts leaked into
+    //  the PO/invoice pickers and the management table hid them; caught by prod E2E)
+    return this.procurement.listAccounts(all !== '1');
   }
 
   @Get('account-categories')

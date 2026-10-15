@@ -85,6 +85,7 @@ function makePrisma() {
 }
 
 const { ProcurementService } = require('../src/procurement/procurement.service');
+const { ProcurementController } = require('../src/procurement/procurement.controller');
 
 function makeSvc() {
   const { spy, accounts, categories } = makePrisma();
@@ -168,6 +169,15 @@ async function main() {
   await test('delete: missing account → 404', async () => {
     const { svc } = makeSvc();
     await assert.rejects(() => svc.deleteAccount('nope', ACTOR), /Account not found/);
+  });
+
+  await test('controller: GET /accounts → ACTIVE-only; ?all=1 → everything (inverted-flag regression, prod E2E)', async () => {
+    const calls: boolean[] = [];
+    const stub: any = { listAccounts: async (activeOnly: boolean) => { calls.push(activeOnly); return []; } };
+    const ctrl = new ProcurementController(stub, {} as any);
+    await ctrl.accounts(undefined); // pickers — must be active-only
+    await ctrl.accounts('1');       // management table — must include inactive
+    assert.deepStrictEqual(calls, [true, false], `listAccounts(activeOnly) calls, got ${JSON.stringify(calls)}`);
   });
 
   const summary = failures.length ? `\nFAILED (${failures.length}): ${failures.join(' | ')}` : `\n${passed} passed, 0 failed`;
