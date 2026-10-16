@@ -60,30 +60,32 @@ ALTER TABLE "vehicle_documents" ADD CONSTRAINT "vehicle_documents_documentTypeId
 ALTER TABLE "vehicle_documents" ADD CONSTRAINT "vehicle_documents_attachmentId_fkey" FOREIGN KEY ("attachmentId") REFERENCES "attachments"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- ---- spec §6.1 suggested default document types (idempotent) ----
-INSERT INTO "vehicle_document_types" ("code", "name", "sortOrder") VALUES
-    ('REGISTRATION', 'Vehicle registration / license', 1),
-    ('ROAD_TAX', 'Road tax', 2),
-    ('INSURANCE', 'Motor insurance', 3),
-    ('COMPREHENSIVE_INSURANCE', 'Comprehensive insurance', 4),
-    ('THIRD_PARTY_INSURANCE', 'Third-party insurance', 5),
-    ('INSPECTION', 'Inspection / roadworthiness certificate', 6),
-    ('ROUTE_PERMIT', 'Commercial / route permit', 7),
-    ('LEASE_CONTRACT', 'Lease / rental contract', 8),
-    ('CUSTOMS_CERTIFICATE', 'Import / customs certificate', 9),
-    ('OTHER', 'Other configurable document', 10)
+-- NOTE: updatedAt is NOT NULL with no DB default (Prisma convention) — raw
+-- inserts must supply it, exactly as the app does through the client.
+INSERT INTO "vehicle_document_types" ("code", "name", "sortOrder", "updatedAt") VALUES
+    ('REGISTRATION', 'Vehicle registration / license', 1, CURRENT_TIMESTAMP),
+    ('ROAD_TAX', 'Road tax', 2, CURRENT_TIMESTAMP),
+    ('INSURANCE', 'Motor insurance', 3, CURRENT_TIMESTAMP),
+    ('COMPREHENSIVE_INSURANCE', 'Comprehensive insurance', 4, CURRENT_TIMESTAMP),
+    ('THIRD_PARTY_INSURANCE', 'Third-party insurance', 5, CURRENT_TIMESTAMP),
+    ('INSPECTION', 'Inspection / roadworthiness certificate', 6, CURRENT_TIMESTAMP),
+    ('ROUTE_PERMIT', 'Commercial / route permit', 7, CURRENT_TIMESTAMP),
+    ('LEASE_CONTRACT', 'Lease / rental contract', 8, CURRENT_TIMESTAMP),
+    ('CUSTOMS_CERTIFICATE', 'Import / customs certificate', 9, CURRENT_TIMESTAMP),
+    ('OTHER', 'Other configurable document', 10, CURRENT_TIMESTAMP)
 ON CONFLICT ("code") DO NOTHING;
 
 -- ---- backfill: legacy expiry columns become current register records ----
 -- Issue dates are unknown (the old columns only ever stored the expiry), so
 -- issueDate stays NULL and renewalStatus starts NOT_STARTED.
-INSERT INTO "vehicle_documents" ("vehicleId", "documentTypeId", "expiryDate")
-SELECT v."id", t."id", v."registrationExpiry"
+INSERT INTO "vehicle_documents" ("vehicleId", "documentTypeId", "expiryDate", "updatedAt")
+SELECT v."id", t."id", v."registrationExpiry", CURRENT_TIMESTAMP
 FROM "vehicles" v
 JOIN "vehicle_document_types" t ON t."code" = 'REGISTRATION'
 WHERE v."registrationExpiry" IS NOT NULL;
 
-INSERT INTO "vehicle_documents" ("vehicleId", "documentTypeId", "expiryDate")
-SELECT v."id", t."id", v."insuranceExpiry"
+INSERT INTO "vehicle_documents" ("vehicleId", "documentTypeId", "expiryDate", "updatedAt")
+SELECT v."id", t."id", v."insuranceExpiry", CURRENT_TIMESTAMP
 FROM "vehicles" v
 JOIN "vehicle_document_types" t ON t."code" = 'INSURANCE'
 WHERE v."insuranceExpiry" IS NOT NULL;
