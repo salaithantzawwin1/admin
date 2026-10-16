@@ -7,6 +7,7 @@ import { toast } from '../components/Toast';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
+import { FleetDocumentsModal, FleetDocType } from '../components/FleetDocumentsModal';
 
 interface Driver {
   id: string;
@@ -106,6 +107,9 @@ interface Vehicle {
   /** server-computed VMS §6.3 status — EXPIRED | DUE_TODAY | UPCOMING | VALID | null */
   registrationExpiryStatus?: string | null;
   insuranceExpiryStatus?: string | null;
+  /** VMS §6.5 — server-side compliance verdict (mandatory documents / licence) */
+  dispatchBlocked?: boolean;
+  dispatchBlockReason?: string | null;
 }
 
 const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red'> = {
@@ -178,6 +182,12 @@ export default function Fleet() {
   const [deletingV, setDeletingV] = useState<Vehicle | null>(null);
   const [deletingD, setDeletingD] = useState<Driver | null>(null);
   const [deletingType, setDeletingType] = useState<VehicleTypeRow | null>(null);
+  // document register (VMS Phase B §6.1/§6.2) — modal + Setup-tab master data
+  const [docsFor, setDocsFor] = useState<Vehicle | null>(null);
+  const [docTypes, setDocTypes] = useState<FleetDocType[]>([]);
+  const [dtForm, setDtForm] = useState({ code: '', name: '', vehicleType: '', mandatoryForDispatch: false, allowNoExpiry: false, warningDays: '30, 14, 7, 1' });
+  const [editingDt, setEditingDt] = useState<FleetDocType | null>(null);
+  const [dtError, setDtError] = useState('');
   const [cancelingAbsence, setCancelingAbsence] = useState<Absence | null>(null);
   // employee link picker state (driverId → employeeId or '')
   const [empPick, setEmpPick] = useState<Record<string, string>>({});
@@ -228,6 +238,7 @@ export default function Fleet() {
     api<Absence[]>('/fleet/absences').then(setAbsences).catch(() => {});
     api<VUnavail[]>('/fleet/vehicles/unavailabilities').then(setVUnavails).catch(() => {});
     api<VehicleTypeRow[]>('/fleet/vehicle-types').then(setTypes).catch(() => {});
+    api<FleetDocType[]>('/fleet/document-types?all=true').then(setDocTypes).catch(() => {});
     api<Timetable>('/settings/timetable').then(setTimetable).catch(() => {});
     if (hasPermission('fleet.manage')) {
       api<TgBinding[]>('/fleet/drivers/telegram-bindings')
@@ -413,6 +424,68 @@ export default function Fleet() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to delete type — deactivate it instead if vehicles use it');
       throw e; // ConfirmDialog keeps itself open and shows the error inside
+    }
+  };
+
+  // ---------- document types (VMS spec §6.1 — Phase B) ----------
+  const dtPayload = () => ({
+    code: dtForm.code.trim(),
+    name: dtForm.name.trim(),
+    vehicleType: dtForm.vehicleType || null,
+    mandatoryForDispatch: dtForm.mandatoryForDispatch,
+    allowNoExpiry: dtForm.allowNoExpiry,
+    // blank field = [] = server falls back to the global 30/14/7/1 ladder
+    warningDays: dtForm.warningDays.split(',').map((s) => s.trim()).filter(Boolean).map(Number),
+  });
+
+  const resetDtForm = () => {
+    setEditingDt(null);
+    setDtForm({ code: '', name: '', vehicleType: '', mandatoryForDispatch: false, allowNoExpiry: false, warningDays: '30, 14, 7, 1' });
+  };
+
+  const saveDocType = async () => {
+    setDtError('');
+    const body = dtPayload();
+    if (!body.code || !body.name) {
+      setDtError('Code and name are required');
+      return;
+    }
+    try {
+      if (editingDt) {
+        // code is the stable key (used by the sweep dedup + legacy mirror) — never edited
+        const { code: _code, ...update } = body;
+        await api(`/fleet/document-types/${editingDt.id}`, { method: 'PATCH', body: update });
+        flash('Document type updated');
+      } else {
+        await api('/fleet/document-types', { method: 'POST', body });
+        flash('Document type added');
+      }
+      resetDtForm();
+      load();
+    } catch (e) {
+      setDtError(e instanceof Error ? e.message : 'Failed to save document type');
+    }
+  };
+
+  const patchDocType = async (t: FleetDocType, body: Record<string, unknown>) => {
+    setDtError('');
+    try {
+      await api(`/fleet/document-types/${t.id}`, { method: 'PATCH', body });
+      load();
+    } catch (e) {
+      setDtError(e instanceof Error ? e.message : 'Failed to update document type');
+    }
+  };
+
+  const deleteDocType = async (t: FleetDocType) => {
+    setDtError('');
+    try {
+      await api(`/fleet/document-types/${t.id}`, { method: 'DELETE' });
+      flash(`Document type ${t.name} deleted`);
+      load();
+    } catch (e) {
+      // records exist → the server refuses and tells the user to deactivate
+      setDtError(e instanceof Error ? e.message : 'Failed to delete document type');
     }
   };
 
@@ -1133,7 +1206,20 @@ export default function Fleet() {
             {vehicles.length === 0 && <tr><td colSpan={canManage ? 8 : 7}><Empty /></td></tr>}
             {vehicles.map((v) => (
               <tr key={v.id} className="hover:bg-gray-50">
-                <td className="px-4 py-3 font-medium">{v.vehicleNo}</td>
+                <td className="px-4 py-3 font-medium">
+                  <div>{v.vehicleNo}</div>
+                  <button className="text-xs text-blue-600 hover:underline" onClick={() => setDocsFor(v)}>
+                    Docs
+                  </button>
+                  {v.dispatchBlocked && (
+                    <div
+                      className="text-[10px] font-semibold text-red-600 whitespace-nowrap"
+                      title={v.dispatchBlockReason ?? ''}
+                    >
+                      ⛔ blocked
+                    </div>
+                  )}
+                </td>
                 <td className="px-4 py-3">{v.vehicleType}</td>
                 <td className="px-4 py-3">{v.brandModel}</td>
                 <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
@@ -1530,6 +1616,128 @@ export default function Fleet() {
         </Card>
       )}
 
+      {/* VMS §6.1 — configurable document types (Phase B): which documents a
+          vehicle must carry and which of them BLOCK dispatch (§6.5) */}
+      {fleetTab === 'setup' && (canManage || canSetup) && (
+        <Card className="mb-6 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Document types</h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                VMS §6.1 — the documents a vehicle can carry (registration, road tax, insurance…). “Mandatory” types with a
+                missing or expired record block assignment &amp; dispatch (§6.5). Driver licences live on the driver record and
+                alert automatically. A type with records cannot be deleted — deactivate it instead.
+              </p>
+            </div>
+          </div>
+          {dtError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{dtError}</div>}
+          {canSetup && (
+            <div className="space-y-2 mb-4 border border-gray-200 rounded-lg p-3 bg-gray-50/60">
+              <div className="grid grid-cols-12 gap-2 items-end">
+                <div className="col-span-3">
+                  <label htmlFor="dt-code" className="block text-xs text-gray-500 mb-1">Code *</label>
+                  <Input id="dt-code" placeholder="ROAD_TAX" value={dtForm.code} disabled={!!editingDt} onChange={(e) => setDtForm({ ...dtForm, code: e.target.value })} />
+                </div>
+                <div className="col-span-3">
+                  <label htmlFor="dt-name" className="block text-xs text-gray-500 mb-1">Name *</label>
+                  <Input id="dt-name" placeholder="Road tax" value={dtForm.name} onChange={(e) => setDtForm({ ...dtForm, name: e.target.value })} />
+                </div>
+                <div className="col-span-2">
+                  <label htmlFor="dt-scope" className="block text-xs text-gray-500 mb-1">Applies to</label>
+                  <Select id="dt-scope" value={dtForm.vehicleType} onChange={(e) => setDtForm({ ...dtForm, vehicleType: e.target.value })}>
+                    <option value="">All vehicle types</option>
+                    {types.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  </Select>
+                </div>
+                <div className="col-span-2">
+                  <label htmlFor="dt-warn" className="block text-xs text-gray-500 mb-1">Warn days</label>
+                  <Input id="dt-warn" placeholder="30, 14, 7, 1" value={dtForm.warningDays} onChange={(e) => setDtForm({ ...dtForm, warningDays: e.target.value })} />
+                </div>
+                <div className="col-span-2 flex flex-col gap-1 text-xs text-gray-700">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="checkbox" checked={dtForm.mandatoryForDispatch} onChange={(e) => setDtForm({ ...dtForm, mandatoryForDispatch: e.target.checked })} />
+                    Mandatory for dispatch
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="checkbox" checked={dtForm.allowNoExpiry} onChange={(e) => setDtForm({ ...dtForm, allowNoExpiry: e.target.checked })} />
+                    Expiry date optional
+                  </label>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                {editingDt && <Button variant="ghost" onClick={() => { resetDtForm(); setDtError(''); }}>Cancel</Button>}
+                <Button onClick={saveDocType} disabled={!dtForm.code.trim() || !dtForm.name.trim()}>
+                  {editingDt ? 'Save changes' : 'Add document type'}
+                </Button>
+              </div>
+            </div>
+          )}
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                <th className="px-4 py-3 font-medium">Document</th>
+                <th className="px-4 py-3 font-medium">Applies to</th>
+                <th className="px-4 py-3 font-medium">Dispatch policy</th>
+                <th className="px-4 py-3 font-medium">Reminder</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                {canSetup && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {docTypes.length === 0 && <tr><td colSpan={canSetup ? 6 : 5}><Empty label="No document types yet" /></td></tr>}
+              {docTypes.map((t) => (
+                <tr key={t.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5">
+                    <div className="font-medium">{t.name}</div>
+                    <div className="text-[10px] font-mono text-gray-400">{t.code}</div>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs">{t.vehicleType ?? <span className="text-gray-500">All vehicle types</span>}</td>
+                  <td className="px-4 py-2.5">
+                    <Badge color={t.mandatoryForDispatch ? 'red' : 'gray'}>
+                      {t.mandatoryForDispatch ? 'MANDATORY' : 'optional'}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500">
+                    {t.warningDays.length ? `${t.warningDays.join('/')} d before` : 'default 30/14/7/1'}
+                    <div className="text-[10px] text-gray-400">{t.allowNoExpiry ? 'expiry optional' : 'expiry required'}</div>
+                  </td>
+                  <td className="px-4 py-2.5"><Badge color={t.active ? 'green' : 'gray'}>{t.active ? 'ACTIVE' : 'HIDDEN'}</Badge></td>
+                  {canSetup && (
+                    <td className="px-4 py-2.5 text-right whitespace-nowrap text-xs">
+                      <button
+                        className="text-blue-600 hover:underline mr-2"
+                        onClick={() => {
+                          setEditingDt(t);
+                          setDtForm({
+                            code: t.code, name: t.name, vehicleType: t.vehicleType ?? '',
+                            mandatoryForDispatch: t.mandatoryForDispatch, allowNoExpiry: t.allowNoExpiry,
+                            warningDays: t.warningDays.length ? t.warningDays.join(', ') : '',
+                          });
+                          setDtError('');
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className={`mr-2 hover:underline ${t.mandatoryForDispatch ? 'text-amber-600' : 'text-red-600'}`}
+                        title={t.mandatoryForDispatch ? 'Stop blocking dispatch for this document' : 'Expired/missing records will block assign & dispatch (§6.5)'}
+                        onClick={() => patchDocType(t, { mandatoryForDispatch: !t.mandatoryForDispatch })}
+                      >
+                        {t.mandatoryForDispatch ? 'Unmark' : 'Make mandatory'}
+                      </button>
+                      <button className="text-blue-600 hover:underline mr-2" onClick={() => patchDocType(t, { active: !t.active })}>
+                        {t.active ? 'Hide' : 'Show'}
+                      </button>
+                      <button className="text-red-600 hover:underline" onClick={() => deleteDocType(t)}>Delete</button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
       {historyFor && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setHistoryFor(null)}>
           <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[85vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
@@ -1579,6 +1787,14 @@ export default function Fleet() {
             )}
           </div>
         </div>
+      )}
+
+      {docsFor && (
+        <FleetDocumentsModal
+          vehicle={docsFor}
+          onClose={() => setDocsFor(null)}
+          onChanged={load}
+        />
       )}
 
       {bindCodeFor && (

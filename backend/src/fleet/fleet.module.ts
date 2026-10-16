@@ -5,9 +5,10 @@ import { AuthModule } from '../auth/auth.module';
 import { SettingsModule } from '../settings/settings.module';
 import { FleetController } from './fleet.controller';
 import { FleetService } from './fleet.service';
+import { FleetComplianceModule } from './compliance.module';
 
 @Module({
-  imports: [TelegramModule, NotificationsModule, AuthModule, forwardRef(() => SettingsModule)],
+  imports: [TelegramModule, NotificationsModule, AuthModule, forwardRef(() => SettingsModule), FleetComplianceModule],
   controllers: [FleetController],
   providers: [FleetService],
 })

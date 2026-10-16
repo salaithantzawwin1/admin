@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DriverStatus, Prisma, VehicleStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
@@ -10,53 +10,50 @@ import { PERMISSIONS } from '../auth/permissions';
 import { TimetableService } from '../settings/timetable.service';
 import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
+import { FleetComplianceService, ComplianceViolation } from './compliance.service';
+import { EXPIRY_WARNING_DAYS, ExpiryStatus, expiryStatus, daysUntilExpiry, ymd } from './expiry';
+
+// Phase A helpers moved to ./expiry.ts in Phase B — re-exported so existing
+// importers (tests, dashboard code) keep working unchanged.
+export { EXPIRY_WARNING_DAYS, ExpiryStatus, expiryStatus, daysUntilExpiry } from './expiry';
 
 /** Leave granularity against the Company Time Table. */
 export type AbsenceDayType = 'FULL' | 'HALF';
 export type AbsencePeriod = 'FULL_DAY' | 'MORNING' | 'EVENING';
 
-// ---------- document expiry (VMS spec §6.3 — Phase A) ----------
+// ---------- document expiry (VMS spec §6.3) — see ./expiry.ts (Phase B) ----------
 
-/** Business-local calendar date ('YYYY-MM-DD') in the organization timezone.
- *  Spec §6.3: browser/UTC-local time must never be the source of truth for
- *  expiry math — 'en-CA' formatting yields an ISO date part that compares
- *  lexicographically = chronologically. */
-const EXPIRY_TZ = 'Asia/Yangon';
-const ymd = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: EXPIRY_TZ }).format(d);
-
-/** Warning thresholds (calendar days before expiry) — spec §6.4 defaults. */
-export const EXPIRY_WARNING_DAYS = [30, 14, 7, 1] as const;
-
-export type ExpiryStatus = 'EXPIRED' | 'DUE_TODAY' | 'UPCOMING' | 'VALID';
-
-/** Single server-side status calculation shared by the vehicle/driver lists,
- *  the dashboard feed and the daily alert job. Returns null when no date is
- *  set (field-level NOT_CONFIGURED — Phase B's document types decide whether
- *  a missing document is a violation). */
-export function expiryStatus(expiry: Date | null | undefined, now: Date = new Date()): ExpiryStatus | null {
-  if (!expiry) return null;
-  const today = ymd(now);
-  const exp = ymd(expiry);
-  if (exp < today) return 'EXPIRED';
-  if (exp === today) return 'DUE_TODAY';
-  return (Date.parse(exp) - Date.parse(today)) / 86_400_000 <= 30 ? 'UPCOMING' : 'VALID';
+/** §6.3 per-type reminder thresholds — whole days 1–365, deduped, descending. */
+function normalizeWarningDays(days?: number[]): number[] {
+  if (!days) return [];
+  if (days.some((n) => !Number.isInteger(n) || n < 1 || n > 365)) {
+    throw new BadRequestException('Warning days must be whole numbers between 1 and 365');
+  }
+  return [...new Set(days)].sort((a, b) => b - a);
 }
 
-/** Whole business-local days until expiry: 0 = today, negative = overdue. */
-export function daysUntilExpiry(expiry: Date, now: Date = new Date()): number {
-  return Math.round((Date.parse(ymd(expiry)) - Date.parse(ymd(now))) / 86_400_000);
+/** Optional date body param: undefined = leave unchanged, ''/null = clear,
+ *  anything unparseable = 400 (never silently stored). */
+function parseOptionalDate(value: string | null | undefined, field: string): Date | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) throw new BadRequestException(`${field} must be a valid date`);
+  return d;
 }
 
 export interface ExpiryAlert {
-  kind: 'VEHICLE' | 'DRIVER';
+  kind: 'VEHICLE' | 'DRIVER' | 'DOCUMENT';
   id: string;
-  /** vehicleNo or driver name */
+  /** vehicleNo, driver name, or "vehicleNo — doc type" */
   label: string;
-  doc: 'registration' | 'insurance' | 'license';
+  doc: string; // 'registration' | 'insurance' | 'license' | document-type code
   docLabel: string;
   expiry: Date;
   status: 'EXPIRED' | 'DUE_TODAY' | 'UPCOMING';
   daysLeft: number;
+  /** per-type reminder thresholds (§6.2); undefined = global 30/14/7/1 */
+  thresholds?: readonly number[];
 }
 
 /** Dedup key per §6.4: document + expiry date + threshold. The recipient is
@@ -75,6 +72,9 @@ export class FleetService {
     private notifications: NotificationsService,
     private permissions: PermissionsService,
     private timetable: TimetableService,
+    /** Phase B — optional so legacy test constructions (7 args) keep working;
+     *  the app provides it via FleetComplianceModule. */
+    @Optional() private compliance?: FleetComplianceService,
   ) {}
 
   // ---------- vehicle type master data (Plan §6) ----------
@@ -153,6 +153,320 @@ export class FleetService {
     return { ok: true };
   }
 
+  // ---------- document types (VMS spec §6.1 — Phase B) ----------
+
+  /** Active types drive the register pickers; managers pass ?all=true. */
+  listDocumentTypes(all = false) {
+    return this.prisma.vehicleDocumentType.findMany({
+      where: all ? undefined : { active: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  }
+
+  async createDocumentType(
+    dto: { code: string; name: string; vehicleType?: string | null; mandatoryForDispatch?: boolean; allowNoExpiry?: boolean; warningDays?: number[]; sortOrder?: number },
+    actor: Actor,
+  ) {
+    const code = dto.code.trim().toUpperCase().replace(/\s+/g, '_');
+    if (!/^[A-Z][A-Z0-9_]{1,31}$/.test(code)) {
+      throw new BadRequestException('Code: letters/numbers/underscore (e.g. ROAD_TAX) — stored uppercase like the existing list');
+    }
+    const name = dto.name?.trim() ?? '';
+    if (name.length < 2 || name.length > 120) throw new BadRequestException('Name must be 2–120 characters');
+    const exists = await this.prisma.vehicleDocumentType.findUnique({ where: { code } });
+    if (exists) throw new ConflictException(`Document type "${code}" already exists`);
+    const type = await this.prisma.vehicleDocumentType.create({
+      data: {
+        code, name,
+        vehicleType: (dto.vehicleType || null) as never,
+        mandatoryForDispatch: dto.mandatoryForDispatch ?? false,
+        allowNoExpiry: dto.allowNoExpiry ?? false,
+        warningDays: normalizeWarningDays(dto.warningDays),
+        sortOrder: dto.sortOrder ?? 0,
+      },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'DOCUMENT_TYPE_CREATED', module: 'FLEET', recordId: type.id,
+      newValue: { code: type.code, name: type.name, vehicleType: type.vehicleType, mandatoryForDispatch: type.mandatoryForDispatch },
+    });
+    return type;
+  }
+
+  async updateDocumentType(
+    id: string,
+    dto: { name?: string; vehicleType?: string | null; mandatoryForDispatch?: boolean; allowNoExpiry?: boolean; warningDays?: number[]; active?: boolean; sortOrder?: number },
+    actor: Actor,
+  ) {
+    const type = await this.prisma.vehicleDocumentType.findUnique({ where: { id } });
+    if (!type) throw new NotFoundException('Document type not found');
+    const data: Record<string, unknown> = {};
+    if (dto.name !== undefined) {
+      const name = dto.name.trim();
+      if (name.length < 2 || name.length > 120) throw new BadRequestException('Name must be 2–120 characters');
+      data.name = name;
+    }
+    if (dto.vehicleType !== undefined) data.vehicleType = (dto.vehicleType || null) as never;
+    if (dto.mandatoryForDispatch !== undefined) data.mandatoryForDispatch = dto.mandatoryForDispatch;
+    if (dto.allowNoExpiry !== undefined) data.allowNoExpiry = dto.allowNoExpiry;
+    if (dto.warningDays !== undefined) data.warningDays = normalizeWarningDays(dto.warningDays);
+    if (dto.active !== undefined) data.active = dto.active;
+    if (dto.sortOrder !== undefined) data.sortOrder = dto.sortOrder;
+    const updated = await this.prisma.vehicleDocumentType.update({ where: { id }, data });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'DOCUMENT_TYPE_UPDATED', module: 'FLEET', recordId: id,
+      oldValue: { name: type.name, mandatoryForDispatch: type.mandatoryForDispatch, allowNoExpiry: type.allowNoExpiry, active: type.active, vehicleType: type.vehicleType, warningDays: type.warningDays },
+      newValue: { name: updated.name, mandatoryForDispatch: updated.mandatoryForDispatch, allowNoExpiry: updated.allowNoExpiry, active: updated.active, vehicleType: updated.vehicleType, warningDays: updated.warningDays },
+    });
+    return updated;
+  }
+
+  /** Delete only when no document record uses the type — otherwise deactivate
+   *  so the register/history stays intact (same rule as vehicle types). */
+  async deleteDocumentType(id: string, actor: Actor) {
+    const type = await this.prisma.vehicleDocumentType.findUnique({ where: { id } });
+    if (!type) throw new NotFoundException('Document type not found');
+    const used = await this.prisma.vehicleDocument.count({ where: { documentTypeId: id } });
+    if (used > 0) {
+      throw new ConflictException(`Cannot delete "${type.name}": ${used} document record(s) use it — deactivate it instead`);
+    }
+    await this.prisma.vehicleDocumentType.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'DOCUMENT_TYPE_DELETED', module: 'FLEET', recordId: id,
+      oldValue: { code: type.code, name: type.name },
+    });
+    return { ok: true };
+  }
+
+  // ---------- vehicle document register (VMS spec §6.2 — Phase B) ----------
+
+  /** Full register for one vehicle: current rows AND superseded history
+   *  (spec §6.2: versions are kept, a renewal never overwrites the old date). */
+  async listVehicleDocuments(vehicleId: string) {
+    const vehicle = await this.prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { id: true, vehicleNo: true } });
+    if (!vehicle) throw new NotFoundException('Vehicle not found');
+    const docs = await this.prisma.vehicleDocument.findMany({
+      where: { vehicleId },
+      include: {
+        documentType: { select: { id: true, code: true, name: true, mandatoryForDispatch: true, allowNoExpiry: true } },
+        attachment: { select: { id: true, filename: true, mimeType: true, size: true } },
+      },
+      orderBy: [{ documentTypeId: 'asc' }, { createdAt: 'desc' }],
+    });
+    return docs.map((d) => {
+      const current = d.supersededById === null;
+      return {
+        ...d,
+        current,
+        // status only for current rows — superseded history shows renewalStatus
+        status: current ? expiryStatus(d.expiryDate) : null,
+        daysLeft: current && d.expiryDate ? daysUntilExpiry(d.expiryDate) : null,
+      };
+    });
+  }
+
+  async createVehicleDocument(
+    vehicleId: string,
+    dto: { documentTypeId: string; documentNo?: string; issuingAuthority?: string; issueDate?: string; expiryDate?: string | null; renewalStatus?: string; notes?: string; attachmentId?: string },
+    actor: Actor,
+  ) {
+    const vehicle = await this.prisma.vehicle.findUnique({ where: { id: vehicleId }, select: { id: true, vehicleNo: true } });
+    if (!vehicle) throw new NotFoundException('Vehicle not found');
+    const type = await this.prisma.vehicleDocumentType.findUnique({ where: { id: dto.documentTypeId } });
+    if (!type) throw new NotFoundException('Document type not found');
+    const expiry = parseOptionalDate(dto.expiryDate, 'expiryDate');
+    if (!expiry && !type.allowNoExpiry) {
+      throw new BadRequestException(`"${type.name}" requires an expiry date (enable "no expiry" on the type if this document never expires)`);
+    }
+    const issue = parseOptionalDate(dto.issueDate, 'issueDate');
+    if (issue && expiry && issue > expiry) throw new BadRequestException('Issue date cannot be after the expiry date');
+    // one CURRENT record per vehicle+type — renewals create versions, not duplicates
+    const existing = await this.prisma.vehicleDocument.findFirst({
+      where: { vehicleId, documentTypeId: type.id, supersededById: null },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException(`"${type.name}" already has a record for ${vehicle.vehicleNo} — renew it instead of adding a second one`);
+    }
+    await this.assertAttachment(dto.attachmentId);
+    const doc = await this.prisma.vehicleDocument.create({
+      data: {
+        vehicleId,
+        documentTypeId: type.id,
+        documentNo: dto.documentNo?.trim() || null,
+        issuingAuthority: dto.issuingAuthority?.trim() || null,
+        issueDate: issue,
+        expiryDate: expiry,
+        renewalStatus: (dto.renewalStatus as never) || 'NOT_STARTED',
+        notes: dto.notes?.trim() || null,
+        attachmentId: dto.attachmentId || null,
+      },
+    });
+    await this.mirrorLegacyExpiry(vehicleId, type.code, expiry ?? null);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_DOCUMENT_CREATED', module: 'FLEET', recordId: doc.id,
+      newValue: { vehicleNo: vehicle.vehicleNo, document: type.name, expiryDate: expiry, documentNo: doc.documentNo },
+    });
+    return doc;
+  }
+
+  /** Edit the CURRENT record in place (history rows are immutable — renewals
+   *  preserve the old date, spec §6.2). */
+  async updateVehicleDocument(
+    id: string,
+    dto: { documentNo?: string | null; issuingAuthority?: string | null; issueDate?: string | null; expiryDate?: string | null; renewalStatus?: string; notes?: string | null; attachmentId?: string | null },
+    actor: Actor,
+  ) {
+    const doc = await this.prisma.vehicleDocument.findUnique({
+      where: { id },
+      include: { documentType: true, vehicle: { select: { vehicleNo: true } } },
+    });
+    if (!doc) throw new NotFoundException('Document not found');
+    if (doc.supersededById) {
+      throw new ConflictException('This record was superseded by a renewal — history is preserved and cannot be edited');
+    }
+    const expiry = dto.expiryDate !== undefined ? parseOptionalDate(dto.expiryDate, 'expiryDate') : undefined;
+    if (expiry === null && !doc.documentType.allowNoExpiry) {
+      throw new BadRequestException(`"${doc.documentType.name}" requires an expiry date (enable "no expiry" on the type first)`);
+    }
+    const issue = dto.issueDate !== undefined ? parseOptionalDate(dto.issueDate, 'issueDate') : undefined;
+    const effectiveExpiry = expiry === undefined ? doc.expiryDate : expiry;
+    const effectiveIssue = issue === undefined ? doc.issueDate : issue;
+    if (effectiveIssue && effectiveExpiry && effectiveIssue > effectiveExpiry) {
+      throw new BadRequestException('Issue date cannot be after the expiry date');
+    }
+    const data: Record<string, unknown> = {};
+    if (dto.documentNo !== undefined) data.documentNo = dto.documentNo?.trim() || null;
+    if (dto.issuingAuthority !== undefined) data.issuingAuthority = dto.issuingAuthority?.trim() || null;
+    if (issue !== undefined) data.issueDate = issue;
+    if (expiry !== undefined) data.expiryDate = expiry;
+    if (dto.renewalStatus !== undefined) {
+      if (dto.renewalStatus === 'RENEWED') throw new BadRequestException('renewalStatus=RENEWED is written by the renew action, not by hand');
+      data.renewalStatus = dto.renewalStatus;
+    }
+    if (dto.notes !== undefined) data.notes = dto.notes?.trim() || null;
+    if (dto.attachmentId !== undefined) data.attachmentId = dto.attachmentId || null;
+    await this.assertAttachment(dto.attachmentId);
+    const updated = await this.prisma.vehicleDocument.update({ where: { id }, data });
+    if (expiry !== undefined) await this.mirrorLegacyExpiry(doc.vehicleId, doc.documentType.code, expiry);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_DOCUMENT_UPDATED', module: 'FLEET', recordId: id,
+      oldValue: { expiryDate: doc.expiryDate, renewalStatus: doc.renewalStatus, documentNo: doc.documentNo },
+      newValue: { expiryDate: updated.expiryDate, renewalStatus: updated.renewalStatus, documentNo: updated.documentNo },
+    });
+    return updated;
+  }
+
+  /** Renewal (spec §6.2): a NEW record points at the old one, the old row gets
+   *  supersededById + renewalStatus=RENEWED — the previous expiry is never
+   *  overwritten (§6.4: renewal closes the old reminders and schedules the new). */
+  async renewVehicleDocument(
+    id: string,
+    dto: { documentNo?: string; issuingAuthority?: string; issueDate?: string; expiryDate?: string | null; notes?: string; attachmentId?: string },
+    actor: Actor,
+  ) {
+    const old = await this.prisma.vehicleDocument.findUnique({
+      where: { id },
+      include: { documentType: true, vehicle: { select: { vehicleNo: true } } },
+    });
+    if (!old) throw new NotFoundException('Document not found');
+    if (old.supersededById) {
+      throw new ConflictException('This record was already renewed — open the current record instead');
+    }
+    const expiry = parseOptionalDate(dto.expiryDate, 'expiryDate');
+    if (!expiry && !old.documentType.allowNoExpiry) {
+      throw new BadRequestException(`The renewed "${old.documentType.name}" record requires an expiry date`);
+    }
+    const issue = parseOptionalDate(dto.issueDate, 'issueDate');
+    if (issue && expiry && issue > expiry) throw new BadRequestException('Issue date cannot be after the expiry date');
+    await this.assertAttachment(dto.attachmentId);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const doc = await tx.vehicleDocument.create({
+        data: {
+          vehicleId: old.vehicleId,
+          documentTypeId: old.documentTypeId,
+          documentNo: dto.documentNo?.trim() || null,
+          issuingAuthority: dto.issuingAuthority?.trim() || null,
+          issueDate: issue,
+          expiryDate: expiry,
+          notes: dto.notes?.trim() || null,
+          attachmentId: dto.attachmentId || null,
+          previousId: old.id,
+        },
+      });
+      await tx.vehicleDocument.update({
+        where: { id: old.id },
+        data: { supersededById: doc.id, renewalStatus: 'RENEWED' },
+      });
+      return doc;
+    });
+    await this.mirrorLegacyExpiry(old.vehicleId, old.documentType.code, expiry ?? null);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_DOCUMENT_RENEWED', module: 'FLEET', recordId: created.id,
+      oldValue: { expiryDate: old.expiryDate, documentNo: old.documentNo },
+      newValue: { vehicleNo: old.vehicle.vehicleNo, document: old.documentType.name, expiryDate: expiry, documentNo: created.documentNo, previousId: old.id },
+    });
+    return created;
+  }
+
+  /** Delete a CURRENT record only (superseded history is never removed). */
+  async deleteVehicleDocument(id: string, actor: Actor) {
+    const doc = await this.prisma.vehicleDocument.findUnique({
+      where: { id },
+      include: { documentType: true, vehicle: { select: { vehicleNo: true } } },
+    });
+    if (!doc) throw new NotFoundException('Document not found');
+    if (doc.supersededById) {
+      throw new ConflictException('Cannot delete a superseded record — renewals are kept as history (spec §6.2)');
+    }
+    await this.prisma.vehicleDocument.delete({ where: { id } });
+    // the legacy column mirrors whatever current record remains (usually none → null)
+    const remaining = await this.prisma.vehicleDocument.findFirst({
+      where: { vehicleId: doc.vehicleId, documentTypeId: doc.documentTypeId, supersededById: null },
+      select: { expiryDate: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    await this.mirrorLegacyExpiry(doc.vehicleId, doc.documentType.code, remaining?.expiryDate ?? null);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'VEHICLE_DOCUMENT_DELETED', module: 'FLEET', recordId: id,
+      oldValue: { vehicleNo: doc.vehicle.vehicleNo, document: doc.documentType.name, expiryDate: doc.expiryDate },
+    });
+    return { ok: true };
+  }
+
+  /** §6.5 compliance for one vehicle — the same rules the assign/dispatch
+   *  block uses, exposed for the vehicle documents panel. */
+  async vehicleCompliance(vehicleId: string) {
+    if (!this.compliance) return { violations: [] as ComplianceViolation[] };
+    const violations = (await this.compliance.violationsForVehicle(vehicleId)) ?? [];
+    return { violations };
+  }
+
+  /** Linking a file is by id (upload happens through POST /attachments/upload);
+   *  validate the target exists so a typo cannot store a dangling reference. */
+  private async assertAttachment(attachmentId?: string | null) {
+    if (!attachmentId) return;
+    const a = await this.prisma.attachment.findUnique({ where: { id: attachmentId }, select: { id: true } });
+    if (!a) throw new BadRequestException('attachmentId does not exist — upload the file first');
+  }
+
+  /** The two legacy Phase A columns stay in sync with the register so the fleet
+   *  table's Expiry column and the Phase A list statuses keep working. */
+  private async mirrorLegacyExpiry(vehicleId: string, code: string, expiry: Date | null) {
+    if (code === 'REGISTRATION') {
+      await this.prisma.vehicle.update({ where: { id: vehicleId }, data: { registrationExpiry: expiry } });
+    } else if (code === 'INSURANCE') {
+      await this.prisma.vehicle.update({ where: { id: vehicleId }, data: { insuranceExpiry: expiry } });
+    }
+  }
+
   // ---------- vehicles ----------
   /**
    * Vehicle list with EFFECTIVE status. The DB column is written at ASSIGN time
@@ -181,6 +495,8 @@ export class FleetService {
       select: { vehicleId: true },
     });
     const onRoad = new Set(live.map((r) => r.vehicleId as string));
+    // §6.5 dispatch-compliance chip (only when the compliance service is wired)
+    const blocked = this.compliance ? await this.compliance.blockedMap(rows, now) : null;
     // a trip the driver STARTED that runs past its window must keep the car
     // IN_USE until the odometer close-out — otherwise a running-late ride
     // flashes AVAILABLE and someone else books the car mid-trip
@@ -189,17 +505,23 @@ export class FleetService {
       select: { vehicleId: true },
     });
     const started = new Set(startedTrips.map((t) => t.vehicleId));
-    return rows.map((v) => ({
-      ...v,
-      status: onRoad.has(v.id) || started.has(v.id)
-        ? 'IN_USE'
-        : v.status === 'IN_USE'
-          ? 'AVAILABLE'
-          : v.status,
-      // VMS spec §6.3 — shared server-side expiry status (lists, dashboard, alerts)
-      registrationExpiryStatus: expiryStatus(v.registrationExpiry, now),
-      insuranceExpiryStatus: expiryStatus(v.insuranceExpiry, now),
-    }));
+    return rows.map((v) => {
+      const violations = blocked?.get(v.id);
+      return {
+        ...v,
+        status: onRoad.has(v.id) || started.has(v.id)
+          ? 'IN_USE'
+          : v.status === 'IN_USE'
+            ? 'AVAILABLE'
+            : v.status,
+        // VMS spec §6.3 — shared server-side expiry status (lists, dashboard, alerts)
+        registrationExpiryStatus: expiryStatus(v.registrationExpiry, now),
+        insuranceExpiryStatus: expiryStatus(v.insuranceExpiry, now),
+        // VMS spec §6.5 — mandatory-document compliance (assign/dispatch block)
+        dispatchBlocked: !!violations?.length,
+        dispatchBlockReason: violations?.length ? violations.map((x) => x.detail).join(' · ') : null,
+      };
+    });
   }
 
   async createVehicle(data: {
@@ -413,26 +735,47 @@ export class FleetService {
     }));
   }
 
-  // ---------- document expiry alerts (VMS spec §6.3–6.4 — Phase A) ----------
+  // ---------- document expiry alerts (VMS spec §6.3–6.4) ----------
 
-  /** Currently non-VALID document expiries (vehicle registration/insurance +
-   *  driver licences) for the dashboard card and the daily sweep. Sorted
+  /** Currently non-VALID document expiries for the dashboard card and the
+   *  daily sweep: document-register records (Phase B) + the legacy vehicle
+   *  registration/insurance columns + driver licences. A legacy column is
+   *  suppressed as soon as a current register record covers the same code —
+   *  the register rows backfilled by migration 53 carry the same dates, and
+   *  the two would otherwise alert twice (different dedup keys). Sorted
    *  EXPIRED → DUE_TODAY → UPCOMING, then by date. */
   async expiryAlerts(now: Date = new Date()): Promise<ExpiryAlert[]> {
-    const [vehicles, drivers] = await Promise.all([
+    const [vehicles, drivers, docRows] = await Promise.all([
       this.prisma.vehicle.findMany({ select: { id: true, vehicleNo: true, registrationExpiry: true, insuranceExpiry: true } }),
       this.prisma.driver.findMany({ select: { id: true, name: true, licenseExpiry: true } }),
+      // current (non-superseded) register records with a date — §6.2/§6.4:
+      // a renewal supersedes the old row, which closes its reminders
+      this.prisma.vehicleDocument.findMany({
+        where: { supersededById: null, expiryDate: { not: null } },
+        select: {
+          id: true, vehicleId: true, expiryDate: true,
+          documentType: { select: { code: true, name: true, warningDays: true } },
+          vehicle: { select: { vehicleNo: true } },
+        },
+      }),
     ]);
     const rows: ExpiryAlert[] = [];
-    const push = (kind: ExpiryAlert['kind'], id: string, label: string, doc: ExpiryAlert['doc'], docLabel: string, expiry: Date | null) => {
+    const push = (kind: ExpiryAlert['kind'], id: string, label: string, doc: string, docLabel: string, expiry: Date | null, thresholds?: readonly number[]) => {
       const status = expiryStatus(expiry, now);
       if (expiry && status && status !== 'VALID') {
-        rows.push({ kind, id, label, doc, docLabel, expiry, status, daysLeft: daysUntilExpiry(expiry, now) });
+        rows.push({ kind, id, label, doc, docLabel, expiry, status, daysLeft: daysUntilExpiry(expiry, now), ...(thresholds?.length ? { thresholds } : {}) });
       }
     };
+    // Phase B register records first — they mark their vehicle+code as "covered"
+    const registerBacked = new Set<string>();
+    for (const r of docRows) {
+      registerBacked.add(`${r.vehicleId}:${r.documentType.code}`);
+      push('DOCUMENT', r.id, r.vehicle.vehicleNo, r.documentType.code, r.documentType.name, r.expiryDate, r.documentType.warningDays);
+    }
     for (const v of vehicles) {
-      push('VEHICLE', v.id, v.vehicleNo, 'registration', 'Vehicle registration', v.registrationExpiry);
-      push('VEHICLE', v.id, v.vehicleNo, 'insurance', 'Motor insurance', v.insuranceExpiry);
+      // legacy Phase A columns — only while no register record covers them
+      if (!registerBacked.has(`${v.id}:REGISTRATION`)) push('VEHICLE', v.id, v.vehicleNo, 'registration', 'Vehicle registration', v.registrationExpiry);
+      if (!registerBacked.has(`${v.id}:INSURANCE`)) push('VEHICLE', v.id, v.vehicleNo, 'insurance', 'Motor insurance', v.insuranceExpiry);
     }
     for (const d of drivers) {
       push('DRIVER', d.id, d.name, 'license', 'Driver license', d.licenseExpiry);
@@ -457,7 +800,9 @@ export class FleetService {
   /** Sweep body — exported as a plain method so tests can drive `now`. */
   async runExpiryAlerts(now: Date = new Date()) {
     const alerts = (await this.expiryAlerts(now)).filter(
-      (a) => a.status !== 'UPCOMING' || (EXPIRY_WARNING_DAYS as readonly number[]).includes(a.daysLeft),
+      // register records may carry per-type thresholds (§6.2/§6.3); the Phase A
+      // columns and licences fall back to the global 30/14/7/1 defaults
+      (a) => a.status !== 'UPCOMING' || (a.thresholds ?? (EXPIRY_WARNING_DAYS as readonly number[])).includes(a.daysLeft),
     );
     if (alerts.length === 0) return { alerts: 0, recipients: 0, sent: 0 };
     // spec §6.4 recipients: fleet coordinators/managers — resolved server-side
@@ -471,9 +816,9 @@ export class FleetService {
     );
     let sent = 0;
     for (const a of alerts) {
-      const title = a.kind === 'VEHICLE'
-        ? `📄 ${a.docLabel} expiring — ${a.label}`
-        : `🪪 Driver license expiring — ${a.label}`;
+      const title = a.kind === 'DRIVER'
+        ? `🪪 Driver license expiring — ${a.label}`
+        : `📄 ${a.docLabel} expiring — ${a.label}`;
       const when = a.status === 'EXPIRED' ? 'has EXPIRED'
         : a.status === 'DUE_TODAY' ? 'expires TODAY'
         : `expires in ${a.daysLeft} day(s)`;

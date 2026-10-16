@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, TripStatus, VehicleStatus, WorkflowStatus } from '@prisma/client';
 import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.module';
@@ -12,6 +12,7 @@ import { TimetableService } from '../settings/timetable.service';
 import { EventsService } from '../events/events.service';
 import { yangonShort } from '../util/yangon-time';
 import { Actor } from '../org/org.service';
+import { FleetComplianceService } from '../fleet/compliance.service';
 
 @Injectable()
 export class CarsService {
@@ -24,7 +25,23 @@ export class CarsService {
     private telegram: TelegramService,
     private timetable: TimetableService,
     private events: EventsService,
+    /** VMS §6.5 document-compliance block — optional so legacy test
+     *  constructions keep working; the app provides it via FleetComplianceModule. */
+    @Optional() private compliance?: FleetComplianceService,
   ) {}
+
+  /** VMS §6.5 — mandatory-document + driver-licence rules for one assignment.
+   *  Throws the block reason so assign/reassign/dispatch all fail the same way;
+   *  the message is surfaced verbatim by the Car panel. */
+  private async assertDispatchCompliant(vehicle: { id: string; vehicleNo: string; vehicleType: string; driverId?: string | null }, driverId: string | null | undefined, when: 'assign' | 'dispatch') {
+    if (!this.compliance) return; // compliance module not wired (tests) — no block
+    const violations = await this.compliance.violationsFor(vehicle, { driverId: driverId ?? null });
+    if (violations.length > 0) {
+      throw new ConflictException(
+        `Document compliance blocks ${when === 'dispatch' ? 'dispatch of ' : ''}${vehicle.vehicleNo}: ${violations.map((v) => v.detail).join('; ')}`,
+      );
+    }
+  }
 
   /**
    * Create a car request: creates the base RequestDocument (workflow drives approval)
@@ -501,6 +518,10 @@ export class CarsService {
     if (vehicle.status === 'OUT_OF_SERVICE' || vehicle.status === 'UNDER_MAINTENANCE') {
       throw new ConflictException(`Vehicle ${vehicle.vehicleNo} is ${vehicle.status}`);
     }
+    // VMS §6.5 + §8.2 step 6 — a mandatory document that is expired or missing
+    // (or the assigned driver's expired licence) blocks allocation. Policy is
+    // configured per document type (mandatoryForDispatch), default off.
+    await this.assertDispatchCompliant(vehicle, data.driverId, 'assign');
 
     // planned-unavailability guard: a vehicle blocked by Administration (service /
     // inspection / repair) for the trip window cannot be assigned — no exemption
@@ -789,6 +810,9 @@ export class CarsService {
     if (vehicle.status === 'OUT_OF_SERVICE' || vehicle.status === 'UNDER_MAINTENANCE') {
       throw new ConflictException(`Vehicle ${vehicle.vehicleNo} is ${vehicle.status}`);
     }
+    // §6.5 — the REPLACEMENT vehicle+driver must satisfy the same compliance
+    // rules as the original assignment
+    await this.assertDispatchCompliant(vehicle, data.driverId ?? assignment.driverId, 'assign');
     // planned-unavailability guard for the replacement vehicle (same rule as assign)
     const blockedRe = await this.prisma.vehicleUnavailability.findFirst({
       where: { vehicleId: data.vehicleId, status: 'ACTIVE', startsAt: { lt: request.carRequest.endDate }, endsAt: { gt: request.carRequest.startDate } },
@@ -1330,6 +1354,9 @@ export class CarsService {
         `Start mileage (${data.startMileage}) cannot be less than current odometer (${assignment.vehicle.currentMileage})`,
       );
     }
+    // VMS §8.3 — a trip cannot be DISPATCHED while blocked by a mandatory
+    // compliance rule: re-check at start (documents may have expired since assign)
+    await this.assertDispatchCompliant(assignment.vehicle, assignment.driverId, 'dispatch');
 
     const trip = await this.prisma.$transaction(async (tx) => {
       const t = await tx.carTrip.create({

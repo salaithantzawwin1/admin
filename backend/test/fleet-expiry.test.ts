@@ -58,6 +58,10 @@ let recipientsNow: string[] = recipients; // flipped to [] by the no-holders tes
 const prisma: any = {
   vehicle: { findMany: async () => vehicles },
   driver: { findMany: async () => drivers },
+  // Phase B: the document register — this fixture has NO register records, so
+  // every vehicle still alerts through its legacy columns (suppression only
+  // kicks in when a current record covers the same code)
+  vehicleDocument: { findMany: async () => [] },
   carRequest: { findMany: async () => [] },
   carAssignment: { findMany: async () => [] },
   notification: {

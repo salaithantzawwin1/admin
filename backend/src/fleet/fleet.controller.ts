@@ -1,6 +1,6 @@
 import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { DriverStatus, VehicleStatus, VehicleType } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
@@ -15,6 +15,62 @@ class VehicleTypeDto {
 
 class VehicleTypeUpdateDto {
   @IsOptional() @IsBoolean() active?: boolean;
+}
+
+// ---------- VMS Phase B — document register DTOs (spec §6.1/§6.2) ----------
+
+const RENEWAL_STATUSES = ['NOT_STARTED', 'REQUESTED', 'IN_PROGRESS', 'NOT_REQUIRED'] as const; // RENEWED is written by the renew action
+
+class DocumentTypeDto {
+  @IsString() @MinLength(2) @MaxLength(64) code!: string;
+  @IsString() @MinLength(2) @MaxLength(120) name!: string;
+  /** null/omitted = applies to every vehicle type */
+  @IsOptional() @IsIn([...Object.values(VehicleType), null]) vehicleType?: VehicleType | null;
+  @IsOptional() @IsBoolean() mandatoryForDispatch?: boolean;
+  @IsOptional() @IsBoolean() allowNoExpiry?: boolean;
+  @IsOptional() @IsArray() @IsInt({ each: true }) warningDays?: number[];
+  @IsOptional() @IsInt() @Min(0) @Max(999) sortOrder?: number;
+}
+
+class DocumentTypeUpdateDto {
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(120) name?: string;
+  @IsOptional() @IsIn([...Object.values(VehicleType), null]) vehicleType?: VehicleType | null;
+  @IsOptional() @IsBoolean() mandatoryForDispatch?: boolean;
+  @IsOptional() @IsBoolean() allowNoExpiry?: boolean;
+  @IsOptional() @IsArray() @IsInt({ each: true }) warningDays?: number[];
+  @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Max(999) sortOrder?: number;
+}
+
+class VehicleDocumentDto {
+  @IsString() documentTypeId!: string;
+  @IsOptional() @IsString() @MaxLength(64) documentNo?: string;
+  @IsOptional() @IsString() @MaxLength(128) issuingAuthority?: string;
+  @IsOptional() @IsDateString() issueDate?: string;
+  /** Required unless the type has allowNoExpiry (spec §6.2). */
+  @IsOptional() @IsDateString() expiryDate?: string;
+  @IsOptional() @IsIn(RENEWAL_STATUSES) renewalStatus?: string;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  @IsOptional() @IsString() attachmentId?: string;
+}
+
+class VehicleDocumentUpdateDto {
+  @IsOptional() @IsString() @MaxLength(64) documentNo?: string | null;
+  @IsOptional() @IsString() @MaxLength(128) issuingAuthority?: string | null;
+  @IsOptional() @IsDateString() issueDate?: string | null;
+  @IsOptional() @IsDateString() expiryDate?: string | null;
+  @IsOptional() @IsIn(RENEWAL_STATUSES) renewalStatus?: string;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string | null;
+  @IsOptional() @IsString() attachmentId?: string | null;
+}
+
+class VehicleDocumentRenewDto {
+  @IsOptional() @IsString() @MaxLength(64) documentNo?: string;
+  @IsOptional() @IsString() @MaxLength(128) issuingAuthority?: string;
+  @IsOptional() @IsDateString() issueDate?: string;
+  @IsOptional() @IsDateString() expiryDate?: string;
+  @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  @IsOptional() @IsString() attachmentId?: string;
 }
 
 const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'] as const;
@@ -192,6 +248,75 @@ export class FleetController {
   @Delete('vehicle-types/:id')
   deleteVehicleType(@Req() req, @Param('id') id: string) {
     return this.fleet.deleteVehicleType(id, this.actor(req));
+  }
+
+  // ---------- document types (VMS §6.1 — Phase B) ----------
+
+  /** Active types drive the register picker; managers pass ?all=true. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('document-types')
+  documentTypes(@Query('all') all?: string) {
+    return this.fleet.listDocumentTypes(all === 'true');
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_TYPES_MANAGE)
+  @Post('document-types')
+  createDocumentType(@Req() req, @Body() dto: DocumentTypeDto) {
+    return this.fleet.createDocumentType(dto, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_TYPES_MANAGE)
+  @Patch('document-types/:id')
+  updateDocumentType(@Req() req, @Param('id') id: string, @Body() dto: DocumentTypeUpdateDto) {
+    return this.fleet.updateDocumentType(id, dto, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_TYPES_MANAGE)
+  @Delete('document-types/:id')
+  deleteDocumentType(@Req() req, @Param('id') id: string) {
+    return this.fleet.deleteDocumentType(id, this.actor(req));
+  }
+
+  // ---------- vehicle document register (VMS §6.2 — Phase B) ----------
+
+  /** Full register incl. superseded history. Declared before vehicles/:id →
+   *  the extra path segment keeps it distinct regardless of order. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('vehicles/:id/documents')
+  vehicleDocuments(@Param('id') id: string) {
+    return this.fleet.listVehicleDocuments(id);
+  }
+
+  /** §6.5 compliance for this vehicle — the same rules as the dispatch block. */
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  @Get('vehicles/:id/compliance')
+  vehicleCompliance(@Param('id') id: string) {
+    return this.fleet.vehicleCompliance(id);
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Post('vehicles/:id/documents')
+  createVehicleDocument(@Req() req, @Param('id') id: string, @Body() dto: VehicleDocumentDto) {
+    return this.fleet.createVehicleDocument(id, dto, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Patch('documents/:id')
+  updateVehicleDocument(@Req() req, @Param('id') id: string, @Body() dto: VehicleDocumentUpdateDto) {
+    return this.fleet.updateVehicleDocument(id, dto, this.actor(req));
+  }
+
+  /** Renewal: new record supersedes the old (history preserved — §6.2). */
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Post('documents/:id/renew')
+  renewVehicleDocument(@Req() req, @Param('id') id: string, @Body() dto: VehicleDocumentRenewDto) {
+    return this.fleet.renewVehicleDocument(id, dto, this.actor(req));
+  }
+
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @Delete('documents/:id')
+  deleteVehicleDocument(@Req() req, @Param('id') id: string) {
+    return this.fleet.deleteVehicleDocument(id, this.actor(req));
   }
 
   // ---------- write: SYSTEM_ADMIN or ADMINISTRATION ----------

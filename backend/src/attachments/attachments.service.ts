@@ -95,7 +95,11 @@ export class AttachmentsService {
   }
 
   async download(id: string, userId: string) {
-    const attachment = await this.prisma.attachment.findUnique({ where: { id } });
+    const attachment = await this.prisma.attachment.findUnique({
+      where: { id },
+      // VMS §6.2 — document-register files are owned by their document row
+      include: { vehicleDocuments: { select: { id: true }, take: 1 } },
+    });
     if (!attachment) throw new NotFoundException('Attachment not found');
 
     if (attachment.announcementId) {
@@ -109,6 +113,10 @@ export class AttachmentsService {
         const privileged = await this.permissions.userHas(userId, 'requests.read.all');
         if (!privileged) throw new ForbiddenException('No access to this attachment');
       }
+    } else if (attachment.vehicleDocuments.length > 0) {
+      // document-register file: readable by anyone who may read the fleet module
+      const canRead = await this.permissions.userHas(userId, 'fleet.read');
+      if (!canRead) throw new ForbiddenException('No access to this attachment');
     }
 
     const filePath = path.join(this.uploadRoot, attachment.storedName);

@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { WorkflowModule, WorkflowService } from '../workflow/workflow.module';
 import { SettingsModule } from '../settings/settings.module';
+import { FleetComplianceModule } from '../fleet/compliance.module';
 import { CarsController } from './cars.controller';
 import { CarsService } from './cars.service';
 import { TripRemindersService } from './trip-reminders.service';
@@ -11,7 +12,7 @@ import { TelegramCarActionsService } from './telegram-car-actions.service';
 export { CarsService } from './cars.service';
 
 @Module({
-  imports: [AuthModule, TelegramModule, WorkflowModule, SettingsModule],
+  imports: [AuthModule, TelegramModule, WorkflowModule, SettingsModule, FleetComplianceModule],
   controllers: [CarsController],
   providers: [CarsService, TripRemindersService, TelegramCarActionsService],
   exports: [CarsService],

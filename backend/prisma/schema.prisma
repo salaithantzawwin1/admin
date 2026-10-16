@@ -616,6 +616,9 @@ model Attachment {
   request      RequestDocument? @relation(fields: [requestId], references: [id], onDelete: Cascade)
   announcement Announcement?    @relation(fields: [announcementId], references: [id], onDelete: Cascade)
   uploadedBy   User             @relation("Attachments", fields: [uploadedById], references: [id])
+  /// VMS §6.2 — a document record points at its file; the FK lives on
+  /// vehicle_documents, so request/announcement attachments are unaffected.
+  vehicleDocuments VehicleDocument[]
 
   @@index([requestId])
   @@index([announcementId])
@@ -778,6 +781,74 @@ model FacilityMaster {
   updatedAt DateTime @updatedAt
 
   @@map("facilities")
+}
+
+// ---------------- VMS Phase B — document register (Vehicle spec §6.1/§6.2) ----------------
+
+/// Configurable document types (spec §6.1 suggested defaults are seeded by
+/// migration 53). AMS is single-organization, so a type is scoped to a
+/// vehicle type (NULL = every vehicle type) instead of company/branch.
+model VehicleDocumentType {
+  id        String       @id @default(uuid()) @db.Uuid
+  code      String       @unique // stable key: REGISTRATION, ROAD_TAX, INSURANCE…
+  name      String       // display label
+  vehicleType VehicleType? // NULL = applies to every vehicle type
+  /// spec §6.5 — expired/missing on a mandatory type blocks assign & dispatch.
+  /// Seeded FALSE: Administration opts in per type (gap analysis decision #2).
+  mandatoryForDispatch Boolean @default(false)
+  /// spec §6.2 — expiry may be NULL only when the type allows it
+  allowNoExpiry Boolean @default(false)
+  /// spec §6.3 reminder thresholds; EMPTY = use the global 30/14/7/1 defaults
+  warningDays   Int[]    @default([])
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  documents VehicleDocument[]
+
+  @@map("vehicle_document_types")
+}
+
+/// Renewal workflow state of a document record (spec §6.2).
+enum DocumentRenewalStatus {
+  NOT_STARTED
+  REQUESTED
+  IN_PROGRESS
+  RENEWED
+  NOT_REQUIRED
+}
+
+/// One row per document VERSION (spec §6.2): a renewal creates a NEW row with
+/// previousId pointing at the old one; the old row then carries supersededById
+/// and renewalStatus=RENEWED — the previous expiry date is never overwritten.
+/// previousId/supersededById are service-managed lineage columns (no Prisma
+/// relation): integrity is enforced in the renewal transaction.
+model VehicleDocument {
+  id               String                @id @default(uuid()) @db.Uuid
+  vehicleId        String                @db.Uuid
+  documentTypeId   String                @db.Uuid
+  documentNo       String? // document/reference number
+  issuingAuthority String?
+  issueDate        DateTime?
+  expiryDate       DateTime? // NULL only when the type has allowNoExpiry
+  renewalStatus    DocumentRenewalStatus @default(NOT_STARTED)
+  previousId       String?  @db.Uuid // the record this one renewed
+  supersededById   String?  @db.Uuid // forward pointer — written on the OLD row at renewal
+  notes            String?
+  attachmentId     String?  @db.Uuid // §6.2 attachment/file reference
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  vehicle      Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  documentType VehicleDocumentType @relation(fields: [documentTypeId], references: [id], onDelete: Restrict)
+  attachment   Attachment?         @relation(fields: [attachmentId], references: [id])
+
+  @@index([vehicleId])
+  @@index([documentTypeId])
+  @@index([expiryDate])
+  @@index([supersededById])
+  @@map("vehicle_documents")
 }
 
 enum DriverStatus {
@@ -1082,6 +1153,7 @@ model Vehicle {
   expenses         CarExpense[]
   carRequests      CarRequest[]
   unavailabilities VehicleUnavailability[]
+  documents        VehicleDocument[]
 
   @@map("vehicles")
 }
