@@ -17,6 +17,9 @@ export class NotificationsService {
     body?: string;
     link?: string;
     requestId?: string;
+    /** Alert dedup key (VMS spec §6.4) — unique per recipient+event; a
+     *  duplicate insert throws P2002 and the caller treats it as "already sent". */
+    dedupeKey?: string;
   }) {
     const created = await this.prisma.notification.create({ data: params });
     // best-effort Telegram mirror — DB write stays authoritative, Telegram must never fail the flow

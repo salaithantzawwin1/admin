@@ -42,6 +42,8 @@ const TYPE_META: Record<string, { icon: string; cls: string }> = {
   TELEGRAM_JOIN_REQUESTED: { icon: '📨', cls: 'bg-purple-100 text-purple-600' },
   ANNOUNCEMENT: { icon: '📣', cls: 'bg-amber-100 text-amber-700' },
   REMINDER: { icon: '⏰', cls: 'bg-amber-100 text-amber-600' },
+  // fleet / VMS document expiry (spec §6.4)
+  VEHICLE_DOC_EXPIRY: { icon: '📄', cls: 'bg-red-100 text-red-600' },
 };
 
 export function typeMeta(type: string) {

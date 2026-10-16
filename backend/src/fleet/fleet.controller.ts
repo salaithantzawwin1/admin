@@ -45,8 +45,9 @@ class VehicleUpdateDto {
   /** null clears the default driver ("blank"); undefined leaves it unchanged. */
   @IsOptional() @IsString() driverId?: string | null;
   @IsOptional() @IsIn(Object.values(VehicleStatus)) status?: VehicleStatus;
-  @IsOptional() @IsDateString() registrationExpiry?: string;
-  @IsOptional() @IsDateString() insuranceExpiry?: string;
+  /** null clears the date (renewal recorded elsewhere); undefined leaves it unchanged. */
+  @IsOptional() @IsDateString() registrationExpiry?: string | null;
+  @IsOptional() @IsDateString() insuranceExpiry?: string | null;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
   @IsOptional() @IsInt() @Min(0) currentMileage?: number;
   // ---- Tier 1 identification & specification (null clears, string sets)
@@ -102,7 +103,8 @@ class DriverUpdateDto {
   /** null clears the field ("blank"); undefined leaves it unchanged. */
   @IsOptional() @IsString() @MaxLength(32) phone?: string | null;
   @IsOptional() @IsString() @MaxLength(64) licenseNo?: string | null;
-  @IsOptional() @IsDateString() licenseExpiry?: string;
+  /** null clears the date; undefined leaves it unchanged. */
+  @IsOptional() @IsDateString() licenseExpiry?: string | null;
   @IsOptional() @IsIn(Object.values(DriverStatus)) status?: DriverStatus;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
 }
@@ -123,6 +125,14 @@ export class FleetController {
   @RequirePermissions(PERMISSIONS.FLEET_READ)
   vehicles(@Query('status') status?: VehicleStatus) {
     return this.fleet.listVehicles(status);
+  }
+
+  /** Document-expiry alert feed (VMS spec §6.3/§13.1) — dashboard card + Fleet
+   *  page: vehicle registration/insurance + driver licences not VALID today. */
+  @Get('expiry-alerts')
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  expiryAlerts() {
+    return this.fleet.expiryAlerts();
   }
 
   /** Vehicle unavailability windows — ACTIVE by default; ?all=true includes cancelled.

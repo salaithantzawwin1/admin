@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [inboxCount, setInboxCount] = useState<number | null>(null);
   const [carQueueCount, setCarQueueCount] = useState<number | null>(null);
   const [roomQueueCount, setRoomQueueCount] = useState<number | null>(null);
+  const [docAlertCount, setDocAlertCount] = useState<number | null>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [movements, setMovements] = useState<MovementRow[] | null>(null);
 
@@ -53,6 +54,12 @@ export default function Dashboard() {
         .then((r) => setMovements(r.top))
         .catch(() => setMovements(null));
     }
+    // VMS spec §13.1 — document-expiry alerts (reg / insurance / driver licences)
+    if (hasPermission('fleet.read')) {
+      api<{ status: string }[]>('/fleet/expiry-alerts')
+        .then((r) => setDocAlertCount(r.length))
+        .catch(() => setDocAlertCount(null));
+    }
   }, []);
 
   useEffect(load, [load]);
@@ -66,6 +73,7 @@ export default function Dashboard() {
   const isApprover = hasPermission('approvals.act');
   const canAssign = hasPermission('cars.assign');
   const canAssignRooms = hasPermission('meeting-rooms.assign');
+  const canSeeFleet = hasPermission('fleet.read');
 
   return (
     <div>
@@ -75,7 +83,7 @@ export default function Dashboard() {
       <p className="text-sm text-gray-500 mb-6">Choose an action from the menu on the left.</p>
 
       {/* Role queues — only for people who act on requests */}
-      {(isApprover || canAssign || canAssignRooms) && (
+      {(isApprover || canAssign || canAssignRooms || canSeeFleet) && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
           {isApprover && (
             <Link to="/approvals" className="block">
@@ -92,6 +100,15 @@ export default function Dashboard() {
                 <div className="text-sm text-gray-500">Cars to Assign</div>
                 <div className="text-2xl font-bold text-gray-800 mt-1">{carQueueCount ?? '—'}</div>
                 <div className="text-xs text-gray-400 mt-2">Approved — waiting for vehicle →</div>
+              </Card>
+            </Link>
+          )}
+          {canSeeFleet && (
+            <Link to="/fleet" className="block">
+              <Card className="p-5 hover:border-blue-300 transition-colors h-full">
+                <div className="text-sm text-gray-500">📄 Documents Expiring (30d)</div>
+                <div className="text-2xl font-bold text-gray-800 mt-1">{docAlertCount ?? '—'}</div>
+                <div className="text-xs text-gray-400 mt-2">Reg / insurance / licences not valid →</div>
               </Card>
             </Link>
           )}

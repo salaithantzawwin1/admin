@@ -315,6 +315,7 @@ enum NotificationType {
   TELEGRAM_JOIN_REQUESTED
   CANCELLED
   ANNOUNCEMENT
+  VEHICLE_DOC_EXPIRY
 }
 
 enum RequestDocType {
@@ -584,6 +585,10 @@ model Notification {
   link       String?
   requestId  String?
   readStatus NotificationReadStatus @default(UNREAD)
+  /// Alert dedup key (VMS spec §6.4): document_id + expiry_date + threshold +
+  /// recipient. Unique — the daily expiry sweep skips keys that already exist,
+  /// so a rerun/restart can never double-send the same reminder.
+  dedupeKey  String?               @unique
   createdAt  DateTime               @default(now())
 
   user User @relation("Notifications", fields: [userId], references: [id], onDelete: Cascade)

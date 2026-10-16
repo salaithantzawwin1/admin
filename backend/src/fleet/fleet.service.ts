@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DriverStatus, Prisma, VehicleStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
@@ -6,6 +6,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
+import { PERMISSIONS } from '../auth/permissions';
 import { TimetableService } from '../settings/timetable.service';
 import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
@@ -14,8 +15,58 @@ import { Actor } from '../org/org.service';
 export type AbsenceDayType = 'FULL' | 'HALF';
 export type AbsencePeriod = 'FULL_DAY' | 'MORNING' | 'EVENING';
 
+// ---------- document expiry (VMS spec §6.3 — Phase A) ----------
+
+/** Business-local calendar date ('YYYY-MM-DD') in the organization timezone.
+ *  Spec §6.3: browser/UTC-local time must never be the source of truth for
+ *  expiry math — 'en-CA' formatting yields an ISO date part that compares
+ *  lexicographically = chronologically. */
+const EXPIRY_TZ = 'Asia/Yangon';
+const ymd = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: EXPIRY_TZ }).format(d);
+
+/** Warning thresholds (calendar days before expiry) — spec §6.4 defaults. */
+export const EXPIRY_WARNING_DAYS = [30, 14, 7, 1] as const;
+
+export type ExpiryStatus = 'EXPIRED' | 'DUE_TODAY' | 'UPCOMING' | 'VALID';
+
+/** Single server-side status calculation shared by the vehicle/driver lists,
+ *  the dashboard feed and the daily alert job. Returns null when no date is
+ *  set (field-level NOT_CONFIGURED — Phase B's document types decide whether
+ *  a missing document is a violation). */
+export function expiryStatus(expiry: Date | null | undefined, now: Date = new Date()): ExpiryStatus | null {
+  if (!expiry) return null;
+  const today = ymd(now);
+  const exp = ymd(expiry);
+  if (exp < today) return 'EXPIRED';
+  if (exp === today) return 'DUE_TODAY';
+  return (Date.parse(exp) - Date.parse(today)) / 86_400_000 <= 30 ? 'UPCOMING' : 'VALID';
+}
+
+/** Whole business-local days until expiry: 0 = today, negative = overdue. */
+export function daysUntilExpiry(expiry: Date, now: Date = new Date()): number {
+  return Math.round((Date.parse(ymd(expiry)) - Date.parse(ymd(now))) / 86_400_000);
+}
+
+export interface ExpiryAlert {
+  kind: 'VEHICLE' | 'DRIVER';
+  id: string;
+  /** vehicleNo or driver name */
+  label: string;
+  doc: 'registration' | 'insurance' | 'license';
+  docLabel: string;
+  expiry: Date;
+  status: 'EXPIRED' | 'DUE_TODAY' | 'UPCOMING';
+  daysLeft: number;
+}
+
+/** Dedup key per §6.4: document + expiry date + threshold. The recipient is
+ *  appended per notification (spec includes recipient in the key). */
+const alertKey = (a: ExpiryAlert) =>
+  `doc-expiry:${a.kind}:${a.id}:${a.doc}:${ymd(a.expiry)}:${a.status === 'UPCOMING' ? `d${a.daysLeft}` : a.status.toLowerCase()}`;
+
 @Injectable()
 export class FleetService {
+  private readonly logger = new Logger(FleetService.name);
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
@@ -145,6 +196,9 @@ export class FleetService {
         : v.status === 'IN_USE'
           ? 'AVAILABLE'
           : v.status,
+      // VMS spec §6.3 — shared server-side expiry status (lists, dashboard, alerts)
+      registrationExpiryStatus: expiryStatus(v.registrationExpiry, now),
+      insuranceExpiryStatus: expiryStatus(v.insuranceExpiry, now),
     }));
   }
 
@@ -189,7 +243,7 @@ export class FleetService {
 
   async updateVehicle(id: string, data: {
     brandModel?: string; vehicleType?: string; capacity?: number; driverId?: string | null; status?: string;
-    registrationExpiry?: string; insuranceExpiry?: string; notes?: string; currentMileage?: number;
+    registrationExpiry?: string | null; insuranceExpiry?: string | null; notes?: string; currentMileage?: number;
     vin?: string | null; fuelType?: string | null; engineNo?: string | null; chassisNo?: string | null;
     make?: string | null; model?: string | null; year?: number | null;
   }, actor: Actor) {
@@ -214,8 +268,9 @@ export class FleetService {
         capacity: data.capacity,
         driverId,
         status: data.status as VehicleStatus | undefined,
-        registrationExpiry: data.registrationExpiry ? new Date(data.registrationExpiry) : undefined,
-        insuranceExpiry: data.insuranceExpiry ? new Date(data.insuranceExpiry) : undefined,
+        // null clears ("" handled by the frontend as null), undefined leaves unchanged
+        registrationExpiry: data.registrationExpiry === null ? null : data.registrationExpiry ? new Date(data.registrationExpiry) : undefined,
+        insuranceExpiry: data.insuranceExpiry === null ? null : data.insuranceExpiry ? new Date(data.insuranceExpiry) : undefined,
         notes: data.notes,
         currentMileage: data.currentMileage,
         // Tier 1: null clears the field, undefined leaves it unchanged ("" treated as clear)
@@ -352,8 +407,90 @@ export class FleetService {
         : d.status === 'ON_TRIP'
           ? 'AVAILABLE'
           : d.status,
+      // VMS spec §6.3 — driver licence expiry (spec puts licences on the driver record)
+      licenseExpiryStatus: expiryStatus(d.licenseExpiry, now),
       ...(etaByDriver.has(d.id) ? { activeEta: etaByDriver.get(d.id) } : {}),
     }));
+  }
+
+  // ---------- document expiry alerts (VMS spec §6.3–6.4 — Phase A) ----------
+
+  /** Currently non-VALID document expiries (vehicle registration/insurance +
+   *  driver licences) for the dashboard card and the daily sweep. Sorted
+   *  EXPIRED → DUE_TODAY → UPCOMING, then by date. */
+  async expiryAlerts(now: Date = new Date()): Promise<ExpiryAlert[]> {
+    const [vehicles, drivers] = await Promise.all([
+      this.prisma.vehicle.findMany({ select: { id: true, vehicleNo: true, registrationExpiry: true, insuranceExpiry: true } }),
+      this.prisma.driver.findMany({ select: { id: true, name: true, licenseExpiry: true } }),
+    ]);
+    const rows: ExpiryAlert[] = [];
+    const push = (kind: ExpiryAlert['kind'], id: string, label: string, doc: ExpiryAlert['doc'], docLabel: string, expiry: Date | null) => {
+      const status = expiryStatus(expiry, now);
+      if (expiry && status && status !== 'VALID') {
+        rows.push({ kind, id, label, doc, docLabel, expiry, status, daysLeft: daysUntilExpiry(expiry, now) });
+      }
+    };
+    for (const v of vehicles) {
+      push('VEHICLE', v.id, v.vehicleNo, 'registration', 'Vehicle registration', v.registrationExpiry);
+      push('VEHICLE', v.id, v.vehicleNo, 'insurance', 'Motor insurance', v.insuranceExpiry);
+    }
+    for (const d of drivers) {
+      push('DRIVER', d.id, d.name, 'license', 'Driver license', d.licenseExpiry);
+    }
+    const rank: Record<ExpiryAlert['status'], number> = { EXPIRED: 0, DUE_TODAY: 1, UPCOMING: 2 };
+    return rows.sort((a, b) => rank[a.status] - rank[b.status] || a.expiry.getTime() - b.expiry.getTime());
+  }
+
+  /** Daily document-expiry sweep — 08:30 business-local (spec §6.4 "daily
+   *  scheduled job… configured timezone"). The backend container runs with
+   *  TZ=Asia/Yangon (compose.yaml), so node-cron evaluates the schedule on
+   *  Yangon wall-clock time — '30 8 * * *' = 08:30 Asia/Yangon. Alerts on
+   *  EXPIRED / DUE_TODAY and on the 30/14/7/1-day thresholds exactly once each
+   *  per recipient (Notification.dedupeKey), delivered in-app + Telegram via the
+   *  shared notification service. Dashboard stays the source of truth if
+   *  Telegram delivery fails (mirrors are best-effort by design). */
+  @Cron('30 8 * * *')
+  async dailyExpiryAlerts() {
+    return this.runExpiryAlerts();
+  }
+
+  /** Sweep body — exported as a plain method so tests can drive `now`. */
+  async runExpiryAlerts(now: Date = new Date()) {
+    const alerts = (await this.expiryAlerts(now)).filter(
+      (a) => a.status !== 'UPCOMING' || (EXPIRY_WARNING_DAYS as readonly number[]).includes(a.daysLeft),
+    );
+    if (alerts.length === 0) return { alerts: 0, recipients: 0, sent: 0 };
+    // spec §6.4 recipients: fleet coordinators/managers — resolved server-side
+    // from the permission, never from a client-supplied list
+    const recipients = await this.permissions.usersWithPermissions([PERMISSIONS.FLEET_MANAGE]);
+    if (recipients.length === 0) return { alerts: alerts.length, recipients: 0, sent: 0 };
+    const keys = alerts.flatMap((a) => recipients.map((u) => `${alertKey(a)}:${u}`));
+    const existing = new Set(
+      (await this.prisma.notification.findMany({ where: { dedupeKey: { in: keys } }, select: { dedupeKey: true } }))
+        .map((n) => n.dedupeKey as string),
+    );
+    let sent = 0;
+    for (const a of alerts) {
+      const title = a.kind === 'VEHICLE'
+        ? `📄 ${a.docLabel} expiring — ${a.label}`
+        : `🪪 Driver license expiring — ${a.label}`;
+      const when = a.status === 'EXPIRED' ? 'has EXPIRED'
+        : a.status === 'DUE_TODAY' ? 'expires TODAY'
+        : `expires in ${a.daysLeft} day(s)`;
+      const body = `${a.docLabel} for ${a.label} ${when} — ${ymd(a.expiry)}. Start the renewal and update the record.`;
+      for (const userId of recipients) {
+        const dedupeKey = `${alertKey(a)}:${userId}`;
+        if (existing.has(dedupeKey)) continue;
+        try {
+          await this.notifications.notify({ userId, type: 'VEHICLE_DOC_EXPIRY', title, body, link: '/fleet', dedupeKey });
+          sent++;
+        } catch (e) {
+          // unique-index race (another instance sent it first) = already done
+          this.logger.warn(`expiry alert skipped for ${userId}: ${(e as Error).message}`);
+        }
+      }
+    }
+    return { alerts: alerts.length, recipients: recipients.length, sent };
   }
 
   /** Telegram binding state per driver — bind codes are admin-only (fleet.manage). */
@@ -397,7 +534,7 @@ export class FleetService {
   }
 
   async updateDriver(id: string, data: {
-    name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string;
+    name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string | null;
     status?: string; notes?: string;
   }, actor: Actor) {
     return this.updateDriverCore(id, data, actor);
@@ -492,7 +629,7 @@ export class FleetService {
   }
 
   private async updateDriverCore(id: string, data: {
-    name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string;
+    name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string | null;
     status?: string; notes?: string;
   }, actor: Actor) {
     const driver = await this.prisma.driver.findUnique({ where: { id } });
@@ -505,7 +642,8 @@ export class FleetService {
         // null clears ("blank"), undefined leaves unchanged
         phone: data.phone === null ? null : data.phone,
         licenseNo: data.licenseNo === null ? null : data.licenseNo,
-        licenseExpiry: data.licenseExpiry ? new Date(data.licenseExpiry) : undefined,
+        // null clears the date, undefined leaves it unchanged
+        licenseExpiry: data.licenseExpiry === null ? null : data.licenseExpiry ? new Date(data.licenseExpiry) : undefined,
         status: data.status as DriverStatus | undefined,
         notes: data.notes,
       },

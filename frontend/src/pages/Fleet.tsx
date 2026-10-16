@@ -13,6 +13,9 @@ interface Driver {
   name: string;
   phone?: string;
   licenseNo?: string;
+  licenseExpiry?: string | null;
+  /** server-computed VMS §6.3 status for the licence expiry */
+  licenseExpiryStatus?: string | null;
   status: string;
   vehicles?: { vehicleNo: string }[];
   telegramChatId?: string | null;
@@ -98,6 +101,11 @@ interface Vehicle {
   make?: string | null;
   model?: string | null;
   year?: number | null;
+  registrationExpiry?: string | null;
+  insuranceExpiry?: string | null;
+  /** server-computed VMS §6.3 status — EXPIRED | DUE_TODAY | UPCOMING | VALID | null */
+  registrationExpiryStatus?: string | null;
+  insuranceExpiryStatus?: string | null;
 }
 
 const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red'> = {
@@ -118,16 +126,32 @@ interface VehicleTypeRow {
   name: string;
   active: boolean;
 }
+/** Compact expiry cell — colours per VMS spec §6.3: red expired/due-today,
+ *  amber upcoming (≤30 days), green valid. */
+function ExpiryPill({ label, date, status }: { label: string; date?: string | null; status?: string | null }) {
+  if (!date) return <div className="text-xs text-gray-300">{label}: —</div>;
+  const cls = status === 'EXPIRED' || status === 'DUE_TODAY' ? 'bg-red-50 text-red-700'
+    : status === 'UPCOMING' ? 'bg-amber-50 text-amber-700'
+    : 'bg-green-50 text-green-700';
+  const flag = status === 'EXPIRED' ? ' ✕' : status === 'DUE_TODAY' ? ' TODAY' : status === 'UPCOMING' ? ' ⚠' : '';
+  return (
+    <div className="text-xs whitespace-nowrap" title={`${label} — ${fmtDate(date)}`}>
+      {label} <span className={`px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{fmtDate(date)}{flag}</span>
+    </div>
+  );
+}
+
 const VEHICLE_STATUSES = ['AVAILABLE', 'IN_USE', 'UNDER_MAINTENANCE', 'OUT_OF_SERVICE'];
 const DRIVER_STATUSES = ['AVAILABLE', 'ON_TRIP', 'ON_LEAVE', 'INACTIVE'];
 
 const emptyVForm: Record<string, string | number> = {
   vehicleNo: '', vehicleType: '', brandModel: '', capacity: 4, driverId: '', status: 'AVAILABLE',
   vin: '', fuelType: '', engineNo: '', chassisNo: '', make: '', model: '', year: '',
+  registrationExpiry: '', insuranceExpiry: '',
 };
 const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'];
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i; // same rule as the backend vehicle DTO
-const emptyDForm = { name: '', phone: '', licenseNo: '', status: 'AVAILABLE' };
+const emptyDForm = { name: '', phone: '', licenseNo: '', licenseExpiry: '', status: 'AVAILABLE' };
 
 export default function Fleet() {
   const [bindCodeFor, setBindCodeFor] = useState<string | null>(null);
@@ -247,6 +271,8 @@ export default function Fleet() {
           make: opt(vForm.make),
           model: opt(vForm.model),
           year: vForm.year === '' ? undefined : Number(vForm.year),
+          registrationExpiry: opt(vForm.registrationExpiry),
+          insuranceExpiry: opt(vForm.insuranceExpiry),
         },
       });
       setVForm(emptyVForm);
@@ -263,7 +289,8 @@ export default function Fleet() {
     try {
       // note: `status` is not part of the create DTO (defaults to AVAILABLE server-side)
       const { status: _status, ...rest } = dForm;
-      await api('/fleet/drivers', { method: 'POST', body: rest });
+      // licence expiry must be omitted (undefined) when blank — '' fails @IsDateString
+      await api('/fleet/drivers', { method: 'POST', body: { ...rest, ...(rest.licenseExpiry ? { licenseExpiry: rest.licenseExpiry } : {}) } });
       setDForm(emptyDForm);
       setShowD(false);
       flash('Driver added');
@@ -294,6 +321,9 @@ export default function Fleet() {
           make: vForm.make || null,
           model: vForm.model || null,
           year: vForm.year ? Number(vForm.year) : null,
+          // null clears the expiry date (spec §6.2 renewal replaces it elsewhere)
+          registrationExpiry: vForm.registrationExpiry || null,
+          insuranceExpiry: vForm.insuranceExpiry || null,
         },
       });
       setEditingV(null);
@@ -312,7 +342,7 @@ export default function Fleet() {
       await api(`/fleet/drivers/${editingD.id}`, {
         method: 'PATCH',
         // null clears the field ("blank") — undefined would leave it unchanged
-        body: { name: dForm.name, phone: dForm.phone || null, licenseNo: dForm.licenseNo || null, status: dForm.status },
+        body: { name: dForm.name, phone: dForm.phone || null, licenseNo: dForm.licenseNo || null, licenseExpiry: dForm.licenseExpiry || null, status: dForm.status },
       });
       setEditingD(null);
       setDForm(emptyDForm);
@@ -840,6 +870,10 @@ export default function Fleet() {
                 <Input id="fleet-license-no" placeholder="DL-xxxx" value={dForm.licenseNo} onChange={(e) => setDForm({ ...dForm, licenseNo: e.target.value })} />
               </div>
             </div>
+            <div>
+              <label htmlFor="fleet-license-expiry" className="block text-xs text-gray-500 mb-1">License expiry</label>
+              <Input id="fleet-license-expiry" type="date" value={dForm.licenseExpiry} onChange={(e) => setDForm({ ...dForm, licenseExpiry: e.target.value })} />
+            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setShowD(false)}>Cancel</Button>
               <Button onClick={createDriver} disabled={!dForm.name}>Add Driver</Button>
@@ -875,6 +909,16 @@ export default function Fleet() {
                   <option value="">— Driver —</option>
                   {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="fleet-reg-expiry" className="block text-xs text-gray-500 mb-1">Registration expiry</label>
+                <Input id="fleet-reg-expiry" type="date" value={vForm.registrationExpiry} onChange={(e) => setVForm({ ...vForm, registrationExpiry: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-ins-expiry" className="block text-xs text-gray-500 mb-1">Insurance expiry</label>
+                <Input id="fleet-ins-expiry" type="date" value={vForm.insuranceExpiry} onChange={(e) => setVForm({ ...vForm, insuranceExpiry: e.target.value })} />
               </div>
             </div>
             {/* Optional paperwork/spec data — collapsed so the quick add stays quick */}
@@ -954,6 +998,16 @@ export default function Fleet() {
                   <option value="">— Driver —</option>
                   {drivers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="fleet-reg-expiry-2" className="block text-xs text-gray-500 mb-1">Registration expiry</label>
+                <Input id="fleet-reg-expiry-2" type="date" value={vForm.registrationExpiry} onChange={(e) => setVForm({ ...vForm, registrationExpiry: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-ins-expiry-2" className="block text-xs text-gray-500 mb-1">Insurance expiry</label>
+                <Input id="fleet-ins-expiry-2" type="date" value={vForm.insuranceExpiry} onChange={(e) => setVForm({ ...vForm, insuranceExpiry: e.target.value })} />
               </div>
             </div>
             {/* Identification & specs — rarely edited, collapsed by default to keep
@@ -1046,6 +1100,10 @@ export default function Fleet() {
                 {DRIVER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </div>
+            <div>
+              <label htmlFor="fleet-license-expiry-2" className="block text-xs text-gray-500 mb-1">License expiry</label>
+              <Input id="fleet-license-expiry-2" type="date" value={dForm.licenseExpiry} onChange={(e) => setDForm({ ...dForm, licenseExpiry: e.target.value })} />
+            </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setEditingD(null)}>Cancel</Button>
               <Button onClick={saveDriver} disabled={!dForm.name}>Save</Button>
@@ -1066,12 +1124,13 @@ export default function Fleet() {
               <th className="px-4 py-3 font-medium">Brand / Model</th>
               <th className="px-4 py-3 font-medium">Specs</th>
               <th className="px-4 py-3 font-medium">Driver</th>
+              <th className="px-4 py-3 font-medium">Documents</th>
               <th className="px-4 py-3 font-medium">Status</th>
               {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {vehicles.length === 0 && <tr><td colSpan={canManage ? 7 : 6}><Empty /></td></tr>}
+            {vehicles.length === 0 && <tr><td colSpan={canManage ? 8 : 7}><Empty /></td></tr>}
             {vehicles.map((v) => (
               <tr key={v.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">{v.vehicleNo}</td>
@@ -1087,6 +1146,10 @@ export default function Fleet() {
                   {v.vin ? <span title={`VIN: ${v.vin}`}> · 🪪</span> : null}
                 </td>
                 <td className="px-4 py-3">{v.driver?.name ?? '—'}</td>
+                <td className="px-4 py-3">
+                  <ExpiryPill label="Reg" date={v.registrationExpiry} status={v.registrationExpiryStatus} />
+                  <ExpiryPill label="Insurance" date={v.insuranceExpiry} status={v.insuranceExpiryStatus} />
+                </td>
                 <td className="px-4 py-3"><Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge></td>
                 {canManage && (
                   <td className="px-4 py-3 text-right whitespace-nowrap">
@@ -1101,6 +1164,8 @@ export default function Fleet() {
                         setVForm({
                           vehicleNo: v.vehicleNo, vehicleType: v.vehicleType, brandModel: v.brandModel, capacity: v.capacity, driverId: v.driverId ?? '', status: v.status,
                           vin: v.vin ?? '', fuelType: v.fuelType ?? '', engineNo: v.engineNo ?? '', chassisNo: v.chassisNo ?? '', make: v.make ?? '', model: v.model ?? '', year: v.year ? String(v.year) : '',
+                          registrationExpiry: v.registrationExpiry ? v.registrationExpiry.slice(0, 10) : '',
+                          insuranceExpiry: v.insuranceExpiry ? v.insuranceExpiry.slice(0, 10) : '',
                         });
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
@@ -1139,7 +1204,10 @@ export default function Fleet() {
               <tr key={d.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">{d.name}</td>
                 <td className="px-4 py-3">{d.phone ?? '—'}</td>
-                <td className="px-4 py-3">{d.licenseNo ?? '—'}</td>
+                <td className="px-4 py-3">
+                  <div>{d.licenseNo ?? '—'}</div>
+                  <ExpiryPill label="Expires" date={d.licenseExpiry} status={d.licenseExpiryStatus} />
+                </td>
                 <td className="px-4 py-3 text-gray-500">{d.vehicles?.map((v) => v.vehicleNo).join(', ') || '—'}</td>
                 <td className="px-4 py-3 whitespace-nowrap">
                   {d.employee ? (
@@ -1221,7 +1289,7 @@ export default function Fleet() {
                         setEditingV(null);
                         setShowV(false);
                         setShowD(false);
-                        setDForm({ name: d.name, phone: d.phone ?? '', licenseNo: d.licenseNo ?? '', status: d.status });
+                        setDForm({ name: d.name, phone: d.phone ?? '', licenseNo: d.licenseNo ?? '', licenseExpiry: d.licenseExpiry ? d.licenseExpiry.slice(0, 10) : '', status: d.status });
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
                     >
