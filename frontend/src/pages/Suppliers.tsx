@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, hasPermission } from '../api';
+import { api, ApiError, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
@@ -71,12 +71,25 @@ export default function Suppliers() {
   // item picker for PO draft lines (catalog read is allowed for suppliers viewers)
   const [itemsCache, setItemsCache] = useState<{ id: string; code: string; name: string }[] | null>(null);
   const canManage = hasPermission('inventory.manage') || hasPermission('suppliers.manage');
-  // mirrors the backend OR-gate: page content needs suppliers.read; users who
-  // only hold inventory.read (store staff) get the alias link instead
+  // mirrors the backend gates: page content needs suppliers.read; without it the
+  // user gets the lock card instead of the list
   const canViewSuppliers = hasPermission('suppliers.read');
+  // a 403 on the list call means the server now enforces a revocation the stored
+  // session has not caught up with yet (stale tab) — show the lock card, not an
+  // empty "no suppliers" table
+  const [listDenied, setListDenied] = useState(false);
+  const showSuppliers = canViewSuppliers && !listDenied;
 
   const load = useCallback(() => {
-    api<Supplier[]>(`/suppliers${showInactive ? '?all=1' : ''}`).then(setSuppliers).catch(() => setSuppliers([]));
+    api<Supplier[]>(`/suppliers${showInactive ? '?all=1' : ''}`)
+      .then((rows) => {
+        setSuppliers(rows);
+        setListDenied(false);
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.status === 403) setListDenied(true);
+        setSuppliers([]);
+      });
   }, [showInactive]);
   useEffect(load, [load]);
 
@@ -231,8 +244,8 @@ export default function Suppliers() {
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
-      {/* suppliers.read gate — mirrors the backend OR-gate (see /suppliers list). */}
-      {!canViewSuppliers && (
+      {/* suppliers.read gate — mirrors the backend gates (see /suppliers list). */}
+      {!showSuppliers && (
         <Card className="mb-5 p-8 text-center">
           <div className="text-3xl mb-2">🔒</div>
           <p className="text-sm text-gray-700 font-medium">You do not have permission to view suppliers.</p>
@@ -246,7 +259,7 @@ export default function Suppliers() {
         </Card>
       )}
 
-      {canViewSuppliers && (
+      {showSuppliers && (
         <Card className="mb-5 p-5">
           <div className="flex items-center justify-between mb-3">
             <label className="flex items-center gap-2 text-sm text-gray-600">
@@ -298,7 +311,7 @@ export default function Suppliers() {
       </Card>
       )}
 
-      {canViewSuppliers && form && (
+      {showSuppliers && form && (
         <Modal title={form.id ? `Edit supplier — ${form.name}` : 'New supplier'} error={modalError && !nameFieldError ? modalError : null} onClose={() => { setForm(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
@@ -331,7 +344,7 @@ export default function Suppliers() {
         </Modal>
       )}
 
-      {canViewSuppliers && deleting && (
+      {showSuppliers && deleting && (
         <ConfirmDialog
           title={`Delete supplier ${deleting.name}?`}
           description="Suppliers with purchase history cannot be deleted (deactivate instead). This cannot be undone."
@@ -342,7 +355,7 @@ export default function Suppliers() {
         />
       )}
 
-      {canViewSuppliers && historyFor && (
+      {showSuppliers && historyFor && (
         <Modal title={`Purchase history — ${historyFor.name}`} onClose={() => setHistoryFor(null)}>
           {!history ? (
             <div className="text-sm text-gray-400 py-4">Loading…</div>
@@ -416,7 +429,7 @@ export default function Suppliers() {
       )}
 
       {/* vendor management — contacts + PO drafts */}
-      {canViewSuppliers && vendorFor && (
+      {showSuppliers && vendorFor && (
         <Modal
           title={`Manage vendor — ${vendorFor.name}`}
           error={modalError}

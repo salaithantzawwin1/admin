@@ -241,7 +241,11 @@ export class InventoryController {
   }
 
   // ---------- suppliers master (delegates to the standalone Suppliers module) ----------
-  @RequirePermissions(PERMISSIONS.INVENTORY_READ)
+  // Restock dropdown + item screens use this alias, so inventory.manage alone
+  // suffices. Deliberately NOT gated by plain inventory.read (which every role
+  // holds by default): otherwise an RBAC-matrix revocation of suppliers.read
+  // for FINANCE/EMPLOYEE leaks the full vendor master through this alias.
+  @AnyPermission([PERMISSIONS.INVENTORY_MANAGE], [PERMISSIONS.SUPPLIERS_READ], [PERMISSIONS.SUPPLIERS_MANAGE])
   @Get('suppliers')
   listSuppliersAlias(@Query('all') all?: string) {
     return this.suppliers.list(all === '1');

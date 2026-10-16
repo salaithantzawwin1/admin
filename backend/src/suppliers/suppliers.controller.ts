@@ -53,9 +53,10 @@ export class SuppliersController {
   }
 
   /** Supplier master list — active only by default, ?all=1 includes deactivated. */
-  // Standalone Suppliers module → dedicated suppliers.read. Store staff reach the
-  // same master through /inventory/suppliers (inventory.read alias); keeping
-  // inventory.read out of this gate is what makes an RBAC-matrix revocation of
+  // Standalone Suppliers module → dedicated suppliers.read. Inventory managers
+  // reach the same master through /inventory/suppliers (alias gated by
+  // inventory.manage / suppliers.* — NOT plain inventory.read); keeping
+  // inventory.read out of both gates is what makes an RBAC-matrix revocation of
   // "View suppliers" actually stick for roles like FINANCE.
   @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
   @Get()
