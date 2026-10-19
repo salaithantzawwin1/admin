@@ -81,6 +81,8 @@ model User {
   quotationItemsCreated  QuotationItem[]         @relation("QuotationItemCreatedBy")
   comparisonsCreated     QuotationComparison[]   @relation("ComparisonCreatedBy")
   monthlyBudgetsCreated  MonthlyBudget[]         @relation("BudgetCreatedBy")
+  assetMovementsCreated  AssetMovement[]         @relation("AssetMovements")
+  pettyCashCreated       PettyCashTransaction[]  @relation("PettyCashTransactions")
   telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
   telegramBindCode       String?                 @unique
   telegramUsername       String?
@@ -1358,6 +1360,7 @@ model Account {
   poItems        PurchaseOrderItem[]
   invoiceItems   InvoiceItem[]         @relation("InvoiceItems")
   monthlyBudgets MonthlyBudget[]       @relation("BudgetAccount")
+  pettyCashTx    PettyCashTransaction[]
 
   @@index([categoryId])
   @@map("accounts")
@@ -1380,6 +1383,8 @@ model Location {
 
   assets        Asset[]
   goodsReceipts GoodsReceipt[]
+  fromMovements AssetMovement[] @relation("FromAssetMovements")
+  toMovements   AssetMovement[] @relation("ToAssetMovements")
 
   @@map("locations")
 }
@@ -1392,10 +1397,11 @@ model Asset {
   brand        String?
   model        String?
   serialNumber String?
+  custodian    String? // current responsible person/department (§40 custody)
   locationId   String?   @db.Uuid
   purchaseDate DateTime?
   purchaseCost Decimal?  @db.Decimal(12, 2)
-  status       String    @default("ACTIVE") // ACTIVE / DISPOSED / IN_STORAGE
+  status       String    @default("ACTIVE") // ACTIVE / DISPOSED / IN_STORAGE / MAINTENANCE
   description  String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -1404,10 +1410,58 @@ model Asset {
   location     Location?             @relation(fields: [locationId], references: [id])
   prItems      PurchaseRequestItem[]
   invoiceItems InvoiceItem[]         @relation("InvoiceItems")
+  poItems      PurchaseOrderItem[]   @relation("PoItemAsset") // PO lines this asset was registered from (§39)
+  movements    AssetMovement[]
 
   @@index([categoryId])
   @@index([locationId])
+  @@index([status])
   @@map("assets")
+}
+
+// Asset lifecycle history (§16/§40) — every REGISTER / TRANSFER / DISPOSE /
+// RESTORE / MAINTENANCE event is a row; the list is the asset's history
+// feed. Locations carry custody per movement; from/to both nullable.
+model AssetMovement {
+  id             String    @id @default(uuid()) @db.Uuid
+  assetId        String    @db.Uuid
+  type           String // REGISTER / TRANSFER / DISPOSE / RESTORE / MAINTENANCE
+  fromLocationId String?   @db.Uuid
+  toLocationId   String?   @db.Uuid
+  note           String?
+  createdById    String    @db.Uuid
+  createdAt      DateTime  @default(now())
+
+  asset        Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  fromLocation Location? @relation("FromAssetMovements", fields: [fromLocationId], references: [id])
+  toLocation   Location? @relation("ToAssetMovements", fields: [toLocationId], references: [id])
+  createdBy    User      @relation("AssetMovements", fields: [createdById], references: [id])
+
+  @@index([assetId, createdAt])
+  @@map("asset_movements")
+}
+
+// Petty cash (§21/§36) — append-only ledger of TOPUP/EXPENSE rows; the balance
+// is always Σ TOPUP − Σ EXPENSE (spec §23: transactions are the source of
+// truth, never a denormalized balance column). PC-… numbers via DocumentSequence.
+model PettyCashTransaction {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique // PC-… via DocumentSequence
+  date        DateTime
+  type        String   // TOPUP / EXPENSE
+  amount      Decimal  @db.Decimal(12, 2)
+  payee       String? // paid to (expense) / drawn from (top-up)
+  accountId   String?  @db.Uuid // optional account classification (§17)
+  description String?
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  account   Account? @relation(fields: [accountId], references: [id])
+  createdBy User     @relation("PettyCashTransactions", fields: [createdById], references: [id])
+
+  @@index([date])
+  @@index([type])
+  @@map("petty_cash_transactions")
 }
 
 // PR as a first-class document: the workflow side lives on RequestDocument
@@ -1495,14 +1549,19 @@ model PurchaseOrderItem {
   // no longer asks requesters for it). API requires it for every new PO line;
   // the column stays nullable so lines created before this phase remain valid.
   accountId       String? @db.Uuid
+  // §39 — fixed-asset purchases register an Asset; this nullable link records
+  // which PO line the registered asset came from (cost/serial provenance).
+  assetId         String? @db.Uuid
 
   purchaseOrder PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
   inventoryItem InventoryItem?     @relation("PoItems", fields: [inventoryItemId], references: [id])
   account       Account?           @relation(fields: [accountId], references: [id])
+  asset         Asset?             @relation("PoItemAsset", fields: [assetId], references: [id])
   grnItems      GoodsReceiptItem[]
 
   @@index([purchaseOrderId])
   @@index([accountId])
+  @@index([assetId])
   @@map("purchase_order_items")
 }
 

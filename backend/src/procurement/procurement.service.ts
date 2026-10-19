@@ -59,6 +59,15 @@ export class ProcurementService {
     return this.prisma.accountCategory.findMany({ orderBy: { name: 'asc' } });
   }
 
+  /** §39 asset-registration pickers (Register asset from a PO line). */
+  listAssetCategories() {
+    return this.prisma.assetCategory.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  listAssetLocations() {
+    return this.prisma.location.findMany({ orderBy: { name: 'asc' } });
+  }
+
   async createAccount(
     data: { code?: string; name: string; categoryId?: string; active?: boolean },
     actor: Actor,

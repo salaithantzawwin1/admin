@@ -132,6 +132,17 @@ export class ProcurementController {
     return this.procurement.listAccountCategories();
   }
 
+  /** §39 asset-registration pickers — categories + stock locations. */
+  @Get('asset-categories')
+  assetCategories() {
+    return this.procurement.listAssetCategories();
+  }
+
+  @Get('asset-locations')
+  assetLocations() {
+    return this.procurement.listAssetLocations();
+  }
+
   // ---------- chart of accounts CRUD (Settings → Accounts) ----------
   @Post('accounts')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)

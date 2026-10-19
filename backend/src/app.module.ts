@@ -26,6 +26,8 @@ import { ProcurementModule } from './procurement/procurement.module';
 import { PurchaseOrdersModule } from './procurement/purchase-orders.module';
 import { InvoicesModule } from './procurement/invoices.module';
 import { BudgetModule, BudgetService } from './budget/budget.module';
+import { AssetsModule } from './assets/assets.module';
+import { PettyCashModule } from './pettycash/pettycash.module';
 import { ReportsModule } from './reports/reports.module';
 import { SettingsModule } from './settings/settings.module';
 import { HealthController } from './health/health.controller';
@@ -57,6 +59,8 @@ import { HealthController } from './health/health.controller';
     PurchaseOrdersModule,
     InvoicesModule,
     BudgetModule,
+    AssetsModule,
+    PettyCashModule,
     ReportsModule,
     TelegramModule,
   ],

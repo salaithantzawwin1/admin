@@ -23,6 +23,9 @@ interface PoItem {
   unitPrice: string;
   inventoryItemId?: string | null;
   inventoryItem?: { code: string; name: string; unit: string; balance: number } | null;
+  /** §39 — registered asset for non-stock lines (null until registered). */
+  assetId?: string | null;
+  asset?: { id: string; assetCode: string; name: string } | null;
   grnItems?: { receivedQty: number; acceptedQty: number; rejectedQty: number }[];
 }
 
@@ -127,6 +130,15 @@ export default function PurchaseOrders() {
   const [grnLines, setGrnLines] = useState<Record<string, { received: string; accepted: string; rejected: string; condition: string }>>({});
   const [grnRemarks, setGrnRemarks] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // §39 — register a fixed asset from a non-stock PO line
+  const canRegisterAssets = hasPermission('assets.manage');
+  const [regAsset, setRegAsset] = useState<{
+    poItemId: string; description: string; name: string; categoryId: string;
+    locationId: string; serialNumber: string; custodian: string;
+  } | null>(null);
+  const [assetCats, setAssetCats] = useState<{ id: string; name: string }[]>([]);
+  const [assetLocs, setAssetLocs] = useState<{ id: string; name: string }[]>([]);
 
   const PAGE_SIZE = 20;
 
@@ -243,6 +255,40 @@ export default function PurchaseOrders() {
       setDetail(r);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not load the PO', 'error');
+    }
+  };
+
+  const openRegisterAsset = async (it: PoItem) => {
+    setRegAsset({ poItemId: it.id, description: it.description, name: it.description, categoryId: '', locationId: '', serialNumber: '', custodian: '' });
+    if (assetCats.length === 0) {
+      api<{ id: string; name: string }[]>('/procurement/asset-categories').then(setAssetCats).catch(() => undefined);
+      api<{ id: string; name: string }[]>('/procurement/asset-locations').then(setAssetLocs).catch(() => undefined);
+    }
+  };
+
+  const submitRegisterAsset = async () => {
+    if (!regAsset || !detail) return;
+    setBusy(true);
+    try {
+      const a = await api<{ assetCode: string }>(`/assets/register-from-po/${regAsset.poItemId}`, {
+        method: 'POST',
+        body: {
+          name: regAsset.name || regAsset.description,
+          categoryId: regAsset.categoryId || undefined,
+          locationId: regAsset.locationId || undefined,
+          serialNumber: regAsset.serialNumber || undefined,
+          custodian: regAsset.custodian || undefined,
+        },
+      });
+      toast(`${a.assetCode} registered from ${detail.poNumber}`);
+      setRegAsset(null);
+      const refreshed = await api<PoDetail>(`/purchase-orders/${detail.id}`);
+      setDetail(refreshed);
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not register the asset', 'error');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -491,6 +537,7 @@ export default function PurchaseOrders() {
                   <th className="py-1 pr-2 text-right">Ordered</th>
                   <th className="py-1 pr-2 text-right">Received</th>
                   <th className="py-1 pr-2 text-right">Unit price</th>
+                  <th className="py-1 pr-2">Asset</th>
                 </tr>
               </thead>
               <tbody>
@@ -503,6 +550,15 @@ export default function PurchaseOrders() {
                       <td className="py-1 pr-2 text-right">{it.quantity}{it.unit ? ` ${it.unit}` : ''}</td>
                       <td className={`py-1 pr-2 text-right ${rec >= it.quantity ? 'text-green-600' : rec > 0 ? 'text-orange-600' : ''}`}>{rec}</td>
                       <td className="py-1 pr-2 text-right">{money(it.unitPrice)}</td>
+                      <td className="py-1 pr-2">
+                        {it.asset ? (
+                          <span className="text-green-700 font-medium" title={it.asset.name}>🏷 {it.asset.assetCode}</span>
+                        ) : !it.inventoryItem && canRegisterAssets ? (
+                          <Button variant="ghost" onClick={() => void openRegisterAsset(it)}>🏷 Register asset</Button>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
                     </tr>
                   );
                 })}
@@ -591,6 +647,47 @@ export default function PurchaseOrders() {
       )}
 
       {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
+
+      {/* ---------------- register asset from a PO line (§39) ---------------- */}
+      {regAsset && (
+        <Modal onClose={() => setRegAsset(null)} title={`Register asset — ${regAsset.description}`} wide>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Asset name *</label>
+              <Input value={regAsset.name} onChange={(e) => setRegAsset({ ...regAsset, name: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Serial number</label>
+              <Input value={regAsset.serialNumber} onChange={(e) => setRegAsset({ ...regAsset, serialNumber: e.target.value })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Category</label>
+              <Select value={regAsset.categoryId} onChange={(e) => setRegAsset({ ...regAsset, categoryId: e.target.value })}>
+                <option value="">— none —</option>
+                {assetCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </Select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Location</label>
+              <Select value={regAsset.locationId} onChange={(e) => setRegAsset({ ...regAsset, locationId: e.target.value })}>
+                <option value="">— none —</option>
+                {assetLocs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </Select>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs text-gray-500 mb-1">Custodian</label>
+              <Input value={regAsset.custodian} onChange={(e) => setRegAsset({ ...regAsset, custodian: e.target.value })} placeholder="Person / department" />
+            </div>
+            <div className="sm:col-span-2 text-xs text-gray-400">
+              Cost and purchase date are taken from this PO line (accepted quantity × unit price, first GRN date).
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setRegAsset(null)}>Cancel</Button>
+            <Button disabled={busy || !regAsset.name.trim()} onClick={() => void submitRegisterAsset()}>Register asset</Button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

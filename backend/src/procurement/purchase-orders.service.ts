@@ -107,7 +107,7 @@ export class PurchaseOrdersService {
       include: {
         supplier: true,
         purchaseRequest: { select: { request: { select: { id: true, docNumber: true, status: true } } } },
-        items: { orderBy: { id: 'asc' }, include: { inventoryItem: { select: { id: true, code: true, name: true, unit: true, balance: true } }, grnItems: true } },
+        items: { orderBy: { id: 'asc' }, include: { inventoryItem: { select: { id: true, code: true, name: true, unit: true, balance: true } }, asset: { select: { id: true, assetCode: true, name: true } }, grnItems: true } },
         goodsReceipts: { orderBy: { receivedAt: 'desc' }, include: { items: true, receivedBy: { select: { fullName: true } } } },
       },
     });

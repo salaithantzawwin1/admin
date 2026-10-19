@@ -110,9 +110,29 @@ export class SuppliersService {
   async remove(id: string, actor: Actor) {
     const supplier = await this.prisma.supplier.findUnique({ where: { id } });
     if (!supplier) throw new NotFoundException('Supplier not found');
-    const txCount = await this.prisma.stockTransaction.count({ where: { supplierId: id } });
-    if (txCount > 0) {
-      throw new ConflictException(`Supplier has ${txCount} purchase record(s) — deactivate it instead`);
+    // §66 soft-delete policy — a supplier tied to procurement history keeps the
+    // audit chain alive: hard delete is refused with the full reference list;
+    // isActive=false is the retire path (pickers hide it, rows stay).
+    const [txCount, poCount, invCount, quoteCount, rfqCount, draftCount, logCount] = await Promise.all([
+      this.prisma.stockTransaction.count({ where: { supplierId: id } }),
+      this.prisma.purchaseOrder.count({ where: { supplierId: id } }),
+      this.prisma.invoice.count({ where: { supplierId: id } }),
+      this.prisma.quotation.count({ where: { supplierId: id } }),
+      this.prisma.rfqVendor.count({ where: { supplierId: id } }),
+      this.prisma.supplierPurchaseDraft.count({ where: { supplierId: id } }),
+      this.prisma.supplierContactLog.count({ where: { supplierId: id } }),
+    ]);
+    const refs: string[] = [];
+    if (poCount) refs.push(`${poCount} PO(s)`);
+    if (invCount) refs.push(`${invCount} invoice(s)`);
+    if (quoteCount) refs.push(`${quoteCount} quotation(s)`);
+    if (rfqCount) refs.push(`${rfqCount} RFQ invite(s)`);
+    if (draftCount) refs.push(`${draftCount} purchase draft(s)`);
+    if (logCount) refs.push(`${logCount} contact log(s)`);
+    if (txCount || refs.length) {
+      throw new ConflictException(
+        `Supplier is referenced by ${[...(txCount ? [`${txCount} stock transaction(s)`] : []), ...refs].join(', ')} — set it inactive instead of deleting`,
+      );
     }
     await this.prisma.supplier.delete({ where: { id } });
     await this.audit.log({

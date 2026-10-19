@@ -29,6 +29,8 @@ const PurchaseOrders = lazy(() => import('./pages/PurchaseOrders'));
 const Rfqs = lazy(() => import('./pages/Rfqs'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const Reports = lazy(() => import('./pages/Reports'));
+const Assets = lazy(() => import('./pages/Assets'));
+const PettyCash = lazy(() => import('./pages/PettyCash'));
 const RbacMatrix = lazy(() => import('./pages/RbacMatrix'));
 const Settings = lazy(() => import('./pages/Settings'));
 
@@ -64,6 +66,8 @@ export default function App() {
           <Route path="rfqs" element={<Rfqs />} />
           <Route path="invoices" element={<Invoices />} />
           <Route path="purchase-reports" element={<Reports />} />
+          <Route path="assets" element={<Assets />} />
+          <Route path="petty-cash" element={<PettyCash />} />
           <Route path="users" element={<Users />} />
           <Route path="departments" element={<Departments />} />
           <Route path="employees" element={<Employees />} />
