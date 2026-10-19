@@ -476,13 +476,14 @@ export class FleetService {
    * states kept, everything else AVAILABLE (future bookings stay listed as
    * booked windows elsewhere, they don't make the car "in use").
    */
-  async listVehicles(status?: VehicleStatus) {
+  /** `now` is injectable for tests (list statuses are stamped against it;
+   *  production callers omit it for the real clock). */
+  async listVehicles(status?: VehicleStatus, now: Date = new Date()) {
     const rows = await this.prisma.vehicle.findMany({
       where: status ? { status } : undefined,
       orderBy: { vehicleNo: 'asc' },
       include: { driver: true },
     });
-    const now = new Date();
     const live = await this.prisma.carRequest.findMany({
       // same filter as requesterFleetOverview: base document status is the
       // single source of truth (CarRequest.status can stay DRAFT forever)

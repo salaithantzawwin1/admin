@@ -118,7 +118,7 @@ async function main() {
 
   console.log('== computed list fields ==');
   await test('listVehicles carries registration/insurance expiry status', async () => {
-    const rows = await fleet.listVehicles();
+    const rows = await fleet.listVehicles(undefined, NOW);
     const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
     assert.strictEqual(byId['v-expired'].registrationExpiryStatus, 'EXPIRED');
     assert.strictEqual(byId['v-expired'].insuranceExpiryStatus, 'VALID');
