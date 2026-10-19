@@ -19,7 +19,9 @@ const nav = [
   { to: '/rfqs', label: 'RFQ / Quotations', icon: '📨', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
   { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') || hasPermission('inventory.read') },
   { to: '/purchase-reports', label: 'Purchase Reports', icon: '📊', show: () => hasPermission('procurement.read') },
-  { to: '/assets', label: 'Assets', icon: '🏷️', show: () => hasPermission('assets.read') },
+  // NOTE: route must NOT be '/assets' — that path is Vite's static chunk
+  // directory; nginx 301s it into /assets/ (403) and the page never loads.
+  { to: '/asset-register', label: 'Assets', icon: '🏷️', show: () => hasPermission('assets.read') },
   { to: '/petty-cash', label: 'Petty Cash', icon: '💵', show: () => hasPermission('pettycash.read') },
   { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
   { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },

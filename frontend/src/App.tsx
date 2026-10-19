@@ -66,7 +66,7 @@ export default function App() {
           <Route path="rfqs" element={<Rfqs />} />
           <Route path="invoices" element={<Invoices />} />
           <Route path="purchase-reports" element={<Reports />} />
-          <Route path="assets" element={<Assets />} />
+          <Route path="asset-register" element={<Assets />} />
           <Route path="petty-cash" element={<PettyCash />} />
           <Route path="users" element={<Users />} />
           <Route path="departments" element={<Departments />} />
