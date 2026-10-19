@@ -39,8 +39,10 @@ docker exec ams-db-1 pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner \
 mv "$TARGET.tmp" "$TARGET"
 
 # integrity check: the gzip stream must decode cleanly and end with the
-# complete-dump marker pg_dump writes last
-if gzip -t "$TARGET" && gzip -cd "$TARGET" | tail -1 | grep -q "PostgreSQL database dump complete"; then
+# complete-dump marker pg_dump writes near the end (PG 16 writes a final
+# "\\unrestrict …" line / blank line after the marker — checked over the tail,
+# not the literal last line).
+if gzip -t "$TARGET" && gzip -cd "$TARGET" | tail -10 | grep -q "PostgreSQL database dump complete"; then
   SIZE="$(du -h "$TARGET" | cut -f1)"
   echo "[$(date '+%F %T')] backup OK ($SIZE)"
 else
