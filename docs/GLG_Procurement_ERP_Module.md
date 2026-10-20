@@ -1,7 +1,7 @@
 # GLG Procurement ERP Module
 ## Gap-Closure Specification — Draft v0.1 (FOR APPROVAL)
 
-**Status:** DRAFT — awaiting approval before implementation
+**Status:** APPROVED 2026-10-20 — W1–W5 IMPLEMENTED (Testing :8030 live-verified; Production pending approval). See `AMS_Design_vs_Implementation_Gap_Analysis.md` log rows 24–28.
 **Date:** 2026-10-20
 **Basis:**
 - `docs/AMS_Procurement_Management_Complete_Design.md` (complete lifecycle design, 45 sections)
@@ -173,4 +173,4 @@ deploy via `deploy-prod.sh` with pre-deploy backup. Spec→impl rows appended to
 
 ---
 
-*Draft ends — approve as-is, edit scope, or ask for changes before implementation begins.*
+*Approved 2026-10-20 and implemented same day (commits `c824e98` + docs commit). All five workstreams live-verified on Testing; §4 acceptance criteria met (W1 e2e PAID lifecycle, W2 tiles traceable to list pages, W3 totals reconcile, W4 reason validation 400/201, W5 numbers match GRN manual count).*
