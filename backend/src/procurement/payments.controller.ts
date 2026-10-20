@@ -1,5 +1,6 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsDateString, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -43,6 +44,16 @@ export class PaymentsController {
   @RequirePermissions(PERMISSIONS.PAYMENTS_READ)
   payables(@Query('from') from?: string, @Query('to') to?: string, @Query('supplierId') supplierId?: string) {
     return this.payments.payables({ from, to, supplierId });
+  }
+
+  /** CSV export of the register (§41-style) — must be declared BEFORE ':id'. */
+  @Get('csv')
+  @RequirePermissions(PERMISSIONS.PAYMENTS_READ)
+  async csv(@Query('from') from?: string, @Query('to') to?: string, @Res() res: Response = undefined as never) {
+    const body = await this.payments.csv({ from, to });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="payments-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(body);
   }
 
   @Get(':id')

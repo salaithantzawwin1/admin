@@ -226,4 +226,28 @@ export class PaymentsService {
     const paymentStatus = paid <= 0 ? 'UNPAID' : paid >= total - TOLERANCE ? 'PAID' : 'PARTIALLY_PAID';
     return tx.invoice.update({ where: { id: invoiceId }, data: { paidAmount: paid, paymentStatus } });
   }
+
+  /** §41-style CSV export of the register (respects from/to filters). */
+  async csv(filters: { from?: string; to?: string }) {
+    const { items } = await this.list({ page: 1, pageSize: 100000, from: filters.from, to: filters.to });
+    const esc = (v: unknown) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = ['Payment code,Date,Invoice,Supplier,Amount MMK,Method,Reference,Note,Recorded by'];
+    let total = 0;
+    for (const p of items) {
+      total += Number(p.amount);
+      lines.push([
+        p.paymentNumber, new Date(p.date).toISOString().slice(0, 10),
+        p.invoice.invoiceNumber, p.invoice.supplier.name,
+        Number(p.amount).toFixed(2), p.method,
+        p.reference ?? '', p.note ?? '',
+        p.createdBy?.fullName ?? p.createdBy?.username ?? '',
+      ].map(esc).join(','));
+    }
+    lines.push('');
+    lines.push(`Totals,COUNT=${items.length},AMOUNT=${total.toFixed(2)}`);
+    return lines.join('\n');
+  }
 }

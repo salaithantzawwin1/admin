@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, hasPermission } from '../api';
+import { api, getToken, hasPermission } from '../api';
 import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -103,17 +103,39 @@ export default function Payments() {
 
   const overdueCount = payables.filter((p) => p.daysOverdue > 0).length;
 
+  const downloadCsv = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const res = await fetch(`/api/payments/csv?${params.toString()}`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `payments-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    }
+  };
+
   return (
     <div>
       <PageHeader
         title="Payments"
         subtitle="Finance records money against APPROVED/POSTED invoices — an invoice flips UNPAID → PARTIALLY_PAID → PAID as its balance is settled (§26)"
         actions={
-          canManage && (
-            <Button onClick={() => setForm({ ...emptyForm })} disabled={payables.length === 0}>
-              + Record payment
-            </Button>
-          )
+          <>
+            <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
+            {canManage && (
+              <Button onClick={() => setForm({ ...emptyForm })} disabled={payables.length === 0}>
+                + Record payment
+              </Button>
+            )}
+          </>
         }
       />
 

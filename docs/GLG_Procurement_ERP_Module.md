@@ -165,7 +165,7 @@ deploy via `deploy-prod.sh` with pre-deploy backup. Spec→impl rows appended to
 
 ## 5. Explicitly out of scope (this draft)
 
-- Contract purchase / framework agreements, recurring/scheduled purchases (§44 advanced)
+- Contract purchase / framework agreements → **spun out to `GLG_Vendor_Contracts_Module.md` (draft v0.1)**; recurring/scheduled purchases (§44 advanced)
 - Multi-currency (schema stays MMK DECIMAL(12,2))
 - General-ledger posting / journal export (accounting remains future per Plan §9)
 - PETTY_CASH flow linkage beyond classification (W4 display-only)

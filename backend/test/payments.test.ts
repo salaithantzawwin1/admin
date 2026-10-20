@@ -259,6 +259,30 @@ async function main() {
     await assert.rejects(() => svc.list({ page: 1, pageSize: 20, status: 'BOGUS' }), /Unknown payment status/);
   });
 
+  console.log('\n== csv export ==');
+
+  await test('header + escaped rows + totals line', async () => {
+    const { svc, env } = makeSvc();
+    env.seedInvoice('inv-1', { total: 50000 });
+    await svc.record({ invoiceId: 'inv-1', amount: 50000, method: 'CASH', reference: 'REF, with "comma"', note: 'Line one' }, ACTOR);
+    const csv = await svc.csv({});
+    const lines = csv.split('\n');
+    assert.ok(lines[0].startsWith('Payment code,Date,Invoice,Supplier,Amount MMK'), `header, got: ${lines[0]}`);
+    assert.ok(csv.includes('"REF, with ""comma"""'), 'comma+quote escaping');
+    assert.ok(csv.includes('Line one'));
+    assert.ok(csv.includes('AMOUNT=50000.00'), `totals line, got: ${lines.at(-1)}`);
+  });
+
+  await test('csv respects the from/to filter', async () => {
+    const { svc, env } = makeSvc();
+    env.seedInvoice('inv-1', { total: 20000 });
+    await svc.record({ invoiceId: 'inv-1', amount: 10000, method: 'CASH', date: '2026-01-05' }, ACTOR);
+    await svc.record({ invoiceId: 'inv-1', amount: 10000, method: 'CASH', date: '2026-10-05' }, ACTOR);
+    const csv = await svc.csv({ from: '2026-10-01', to: '2026-10-31' });
+    assert.ok(csv.includes('2026-10-05'), 'october row included');
+    assert.ok(!csv.includes('2026-01-05'), 'january row filtered out');
+  });
+
   const summary = failures.length ? `\nFAILED (${failures.length}): ${failures.join(' | ')}` : `\n${passed} passed, 0 failed`;
   console.log(summary);
   process.exitCode = failures.length ? 1 : 0;

@@ -190,6 +190,30 @@ async function main() {
   console.log('Roles seeded:', ROLES.length);
   await seedWorkflows();
   await seedProcurementMasterData();
+
+  // GLG ERP §W1 — FINANCE user for the payments e2e (finance1 owns payments.*
+  // via DEFAULT_GRANTS). Non-prod only (prod keeps sysadmin alone), and placed
+  // BEFORE the demo block so a demo-seeded database still gets it on next boot.
+  if (!IS_PROD) {
+    const financeUser = { username: 'finance1', fullName: 'Finance Officer (Demo)', roles: ['FINANCE'] };
+    const existingFinance = await prisma.user.findUnique({ where: { username: financeUser.username } });
+    if (existingFinance) {
+      console.log('User exists, skip:', financeUser.username);
+    } else {
+      await prisma.user.create({
+        data: {
+          username: financeUser.username,
+          fullName: financeUser.fullName,
+          passwordHash: hash,
+          userRoles: {
+            create: financeUser.roles.map((name) => ({ role: { connect: { name } } })),
+          },
+        },
+      });
+      console.log('User created:', financeUser.username, '(', financeUser.roles.join('+'), ')');
+    }
+  }
+
   if (IS_PROD) {
     console.log('Production mode — skipping demo data seed (only sysadmin + roles + workflows).');
     await prisma.$disconnect();
