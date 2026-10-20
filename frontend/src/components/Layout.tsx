@@ -1,41 +1,81 @@
 import { Suspense, useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { api, getUser, hasPermission, clearSession, AuthUser } from '../api';
 import { NotificationBell } from './NotificationBell';
 import { PageLoader } from './ui';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { ToastHost } from './Toast';
 
-const nav = [
-  { to: '/', label: 'Dashboard', icon: '🏠', show: () => true },
-  { to: '/requests', label: 'My Requests', icon: '📄', show: () => hasPermission('requests.read.own') },
-  { to: '/car-requests', label: 'Car Requests', icon: '🚗', show: () => hasPermission('requests.create') },
-  { to: '/meeting-rooms', label: 'Meeting Rooms', icon: '🏢', show: () => hasPermission('requests.create') },
-  { to: '/inventory', label: 'Inventory', icon: '📦', show: () => hasPermission('inventory.read') },
-  { to: '/announcements', label: 'Announcements', icon: '📢', show: () => hasPermission('announcements.read') },
-  { to: '/suppliers', label: 'Suppliers', icon: '🚛', show: () => hasPermission('suppliers.read') },
-  { to: '/procurement', label: 'Procurement', icon: '🛒', show: () => hasPermission('requests.create') },
-  { to: '/purchase-orders', label: 'Purchase Orders', icon: '🧾', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
-  { to: '/rfqs', label: 'RFQ / Quotations', icon: '📨', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
-  { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') || hasPermission('inventory.read') },
-  { to: '/purchase-reports', label: 'Purchase Reports', icon: '📊', show: () => hasPermission('procurement.read') },
-  // NOTE: route must NOT be '/assets' — that path is Vite's static chunk
-  // directory; nginx 301s it into /assets/ (403) and the page never loads.
-  { to: '/asset-register', label: 'Assets', icon: '🏷️', show: () => hasPermission('assets.read') },
-  { to: '/petty-cash', label: 'Petty Cash', icon: '💵', show: () => hasPermission('pettycash.read') },
-  { to: '/payments', label: 'Payments', icon: '🏦', show: () => hasPermission('payments.read') },
-  { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
-  { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
-  { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },
-  { to: '/users', label: 'Users', icon: '👥', show: () => hasPermission('users.read') },
-  { to: '/departments', label: 'Departments', icon: '🏢', show: () => hasPermission('departments.read') },
-  { to: '/employees', label: 'Employees', icon: '🧑‍💼', show: () => hasPermission('employees.read') },
-  { to: '/rbac', label: 'Permissions', icon: '🔐', show: () => hasPermission('users.manage') },
-  { to: '/settings', label: 'Settings', icon: '⚙️', show: () => hasPermission('users.manage') },
-  { to: '/audit-logs', label: 'Audit Logs', icon: '📋', show: () => hasPermission('audit.read') },
+/**
+ * Sidebar groups, in display order. Each item keeps the same permission gate
+ * it had in the flat list — a group whose items are ALL hidden disappears
+ * entirely (empty-group auto-hide, applied in visibleGroups below).
+ */
+const navGroups = [
+  {
+    title: 'General',
+    items: [
+      { to: '/', label: 'Dashboard', icon: '🏠', show: () => true },
+      { to: '/requests', label: 'My Requests', icon: '📄', show: () => hasPermission('requests.read.own') },
+      { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
+      { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
+      { to: '/announcements', label: 'Announcements', icon: '📢', show: () => hasPermission('announcements.read') },
+    ],
+  },
+  {
+    title: 'Office',
+    items: [
+      // Car Requests is the fleet dispatch desk — list/queue need cars.assign
+      // (backend cars.controller.ts); creating one just needs requests.create.
+      { to: '/car-requests', label: 'Car Requests', icon: '🚗', show: () => hasPermission('cars.assign') || hasPermission('requests.create') },
+      { to: '/meeting-rooms', label: 'Meeting Rooms', icon: '🏢', show: () => hasPermission('requests.create') || hasPermission('meeting-rooms.assign') },
+    ],
+  },
+  {
+    title: 'Procurement',
+    items: [
+      { to: '/suppliers', label: 'Suppliers', icon: '🚛', show: () => hasPermission('suppliers.read') },
+      // Procurement list is gated by procurement.read/manage in the backend
+      // (procurement.controller.ts) — requests.create alone is not the real gate.
+      { to: '/procurement', label: 'Procurement', icon: '🛒', show: () => hasPermission('procurement.read') || hasPermission('procurement.manage') || hasPermission('requests.create') },
+      { to: '/purchase-orders', label: 'Purchase Orders', icon: '🧾', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
+      { to: '/rfqs', label: 'RFQ / Quotations', icon: '📨', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
+      { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') || hasPermission('inventory.read') },
+      { to: '/purchase-reports', label: 'Purchase Reports', icon: '📊', show: () => hasPermission('procurement.read') },
+    ],
+  },
+  {
+    title: 'Finance',
+    items: [
+      { to: '/petty-cash', label: 'Petty Cash', icon: '💵', show: () => hasPermission('pettycash.read') },
+      { to: '/payments', label: 'Payments', icon: '🏦', show: () => hasPermission('payments.read') },
+    ],
+  },
+  {
+    title: 'Resources',
+    items: [
+      { to: '/inventory', label: 'Inventory', icon: '📦', show: () => hasPermission('inventory.read') },
+      // NOTE: route must NOT be '/assets' — that path is Vite's static chunk
+      // directory; nginx 301s it into /assets/ (403) and the page never loads.
+      { to: '/asset-register', label: 'Assets', icon: '🏷️', show: () => hasPermission('assets.read') },
+      { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },
+    ],
+  },
+  {
+    title: 'Administration',
+    items: [
+      { to: '/users', label: 'Users', icon: '👥', show: () => hasPermission('users.read') },
+      { to: '/departments', label: 'Departments', icon: '🏢', show: () => hasPermission('departments.read') },
+      { to: '/employees', label: 'Employees', icon: '🧑‍💼', show: () => hasPermission('employees.read') },
+      { to: '/rbac', label: 'Permissions', icon: '🔐', show: () => hasPermission('users.manage') },
+      { to: '/settings', label: 'Settings', icon: '⚙️', show: () => hasPermission('users.manage') },
+      { to: '/audit-logs', label: 'Audit Logs', icon: '📋', show: () => hasPermission('audit.read') },
+    ],
+  },
 ];
 
 const SIDEBAR_KEY = 'ams_sidebar';
+const GROUPS_KEY = 'ams_sidebar_groups';
 
 // Environment badge in the header — injected at build time by the Dockerfiles
 // (VITE_ENV_LABEL=Production on the :80 stack, Testing on the :8030 stack).
@@ -55,9 +95,27 @@ export function Layout() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // collapsed group titles → persisted so the layout survives reload
+  const [collapsedGroups, setCollapsedGroups] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem(GROUPS_KEY);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
   // pending Telegram join requests → badge on the Settings nav item
   const [pendingJoins, setPendingJoins] = useState(0);
   const canSeeSettings = hasPermission('users.manage');
+  const location = useLocation();
+  const activePath = location.pathname;
+
+  const toggleGroup = (title: string) => {
+    setCollapsedGroups((prev) =>
+      prev.includes(title) ? prev.filter((t) => t !== title) : [...prev, title],
+    );
+  };
 
   useEffect(() => {
     if (!canSeeSettings) return;
@@ -103,10 +161,28 @@ export function Layout() {
     localStorage.setItem(SIDEBAR_KEY, collapsed ? 'collapsed' : 'open');
   }, [collapsed]);
 
+  useEffect(() => {
+    localStorage.setItem(GROUPS_KEY, JSON.stringify(collapsedGroups));
+  }, [collapsedGroups]);
+
   const logout = () => {
     clearSession();
     navigate('/login');
   };
+
+  // permission filter + empty-group auto-hide; recomputed every render so the
+  // ams_session / storage listeners above refresh the menu after login/logout
+  const visibleGroups = navGroups
+    .map((g) => ({ ...g, items: g.items.filter((item) => item.show()) }))
+    .filter((g) => g.items.length > 0);
+
+  // A group holding the active route is forced open for visibility, but only
+  // for THIS render — the stored collapsedGroups preference is untouched, so
+  // navigating away restores the user's own collapse choice.
+  const groups = visibleGroups.map((g) => ({
+    ...g,
+    isCollapsed: collapsedGroups.includes(g.title) && !g.items.some((i) => activePath === i.to),
+  }));
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -178,35 +254,60 @@ export function Layout() {
           </button>
 
           <nav className={`space-y-1 ${collapsed ? 'px-2' : 'px-3'}`}>
-            {nav
-              .filter((item) => item.show())
-              .map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.to === '/'}
-                  title={collapsed ? item.label : undefined}
-                  className={({ isActive }) =>
-                    `${collapsed ? 'flex justify-center px-2 py-2.5' : 'flex items-center gap-2.5 px-3 py-2'} rounded-lg text-sm transition-colors ${
-                      isActive
-                        ? 'bg-gold/10 text-gold-dark font-medium ring-1 ring-inset ring-gold/30'
-                        : 'text-gray-600 hover:bg-gray-50'
-                    }`
-                  }
-                >
-                  {/* collapsed rail: the icon is the only identifier — make it larger */}
-                  <span className={`leading-none text-center ${collapsed ? 'text-xl w-6' : 'text-base w-5'}`}>{item.icon}</span>
-                  {!collapsed && <span>{item.label}</span>}
-                  {item.to === '/settings' && pendingJoins > 0 && (
+            {groups.map((group, gi) => (
+              <div key={group.title}>
+                {collapsed ? (
+                  // collapsed rail: no room for group titles — a divider is enough
+                  gi > 0 && <div className="border-t border-gray-100 my-1.5" />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.title)}
+                    aria-expanded={!group.isCollapsed}
+                    className={`w-full flex items-center justify-between gap-1 px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400 hover:text-gray-600 transition-colors ${gi > 0 ? 'pt-3' : 'pt-1'}`}
+                  >
+                    <span>{group.title}</span>
                     <span
-                      className={`ml-auto inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ${collapsed ? 'absolute translate-x-3 -translate-y-3' : 'min-w-[18px] h-[18px] px-1'}`}
-                      title={`${pendingJoins} pending Telegram join request(s)`}
+                      aria-hidden="true"
+                      className={`text-[9px] text-gray-300 transition-transform duration-150 ${group.isCollapsed ? '-rotate-90' : ''}`}
                     >
-                      {pendingJoins}
+                      ▼
                     </span>
-                  )}
-                </NavLink>
-              ))}
+                  </button>
+                )}
+                {(!collapsed && !group.isCollapsed) && (
+                <div className="space-y-1">
+                  {group.items.map((item) => (
+                    <NavLink
+                      key={item.to}
+                      to={item.to}
+                      end={item.to === '/'}
+                      title={collapsed ? item.label : undefined}
+                      className={({ isActive }) =>
+                        `${collapsed ? 'flex justify-center px-2 py-2.5' : 'flex items-center gap-2.5 px-3 py-2'} rounded-lg text-sm transition-colors ${
+                          isActive
+                            ? 'bg-gold/10 text-gold-dark font-medium ring-1 ring-inset ring-gold/30'
+                            : 'text-gray-600 hover:bg-gray-50'
+                        }`
+                      }
+                    >
+                      {/* collapsed rail: the icon is the only identifier — make it larger */}
+                      <span className={`leading-none text-center ${collapsed ? 'text-xl w-6' : 'text-base w-5'}`}>{item.icon}</span>
+                      {!collapsed && <span>{item.label}</span>}
+                      {item.to === '/settings' && pendingJoins > 0 && (
+                        <span
+                          className={`ml-auto inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ${collapsed ? 'absolute translate-x-3 -translate-y-3' : 'min-w-[18px] h-[18px] px-1'}`}
+                          title={`${pendingJoins} pending Telegram join request(s)`}
+                        >
+                          {pendingJoins}
+                        </span>
+                      )}
+                    </NavLink>
+                  ))}
+                </div>
+                )}
+              </div>
+            ))}
           </nav>
 
           <div className={`mt-auto pt-3 border-t border-gray-100 ${collapsed ? 'px-2 text-center' : 'px-4'}`}>
