@@ -4,12 +4,13 @@
 > **Purpose:** Identify what is implemented, what is missing, and recommend an achievable path to close the gaps.
 > **Verified against:** `backend/src/*` (23 modules incl. `budget` + `reports`), `backend/prisma/schema.prisma` (62 models), `frontend/src/pages/*`, `.github/workflows/ci.yml`.
 > **Last re-verified:** 2026-10-15 (main @ `5c8f0d5`) — §0–§3 and §6 refreshed to the current implementation; progress log rows 16–18 added.
+> **2026-10-20 re-verify:** main @ `3695268` — Asset Register + Petty Cash shipped (log rows 22–23); §0/§1/§2/§3/§5/§6 refreshed.
 
 ---
 
 ## 0. Executive Summary (အကျဉ်းချုပ်)
 
-- **ဒီဇိုင်းစာတမ်းနှစ်ခုစလုံးသည် လက်ရှိ codebase နှင့် များစွာ ကွာဟနေပါသည်** — စာတမ်းများက Asset / Account / Invoice / Petty Cash / Procurement အပြည့်အစုံကို ဖော်ပြထားသော်လည်း လက်ရှိတွင် **မည်သည့် model မှ မရှိသေးပါ** (schema.prisma တွင် 43 model ရှိသည့်အနက် ဝန်ဆောင်မှု workflow များသာ အဓိက)။ *(နောက်ဆုံးရအခြေအနေ — 2026-10-15: Procurement P1–P7 + RFQ (P3/P4) + §9 budget + reports + Account CRUD အားလုံး ရောက်ပြီးဖြစ်သဖြင့် အောက်ရှိ Implementation Progress Log ကို ကြည့်ပါ။)*
+- **ဒီဇိုင်းစာတမ်းနှစ်ခုစလုံးသည် လက်ရှိ codebase နှင့် များစွာ ကွာဟနေပါသည်** — စာတမ်းများက Asset / Account / Invoice / Petty Cash / Procurement အပြည့်အစုံကို ဖော်ပြထားသော်လည်း လက်ရှိတွင် **မည်သည့် model မှ မရှိသေးပါ** (စာတမ်းရေးစဉ်ကတည်းက 43 model — 2026-10-20 တွင် **66 model** အထိ ရှိပြီ)။ *(နောက်ဆုံးရအခြေအနေ — 2026-10-20: Procurement P1–P7 + RFQ + §9 budget + reports + Account CRUD + **Asset Register** + **Petty Cash** အားလုံး ရောက်ပြီးဖြစ်သဖြင့် အောက်ရှိ Implementation Progress Log ကို ကြည့်ပါ။)*
 - **အားသာချက်**: Approval framework (Procurement §31 တောင်းဆိုချက်)၊ Audit trail (§32)၊ Vendor master၊ Stock ledger၊ Document numbering — အားလုံး **ရှိပြီးသား** ဖြစ်သဖြင့် Procurement phases P3–P10 သည် အခြေခံကောင်းပေါ်တွင် တည်ဆောက်နိုင်သည်။
 - **အကြံပြုချက်**: Procurement §44 ရဲ့ P1 (Purchase Request) ကို ပထမဦးစွာ first-class entity အဖြစ် တည်ဆောက်ပါ — ✅ **2026-10-08 တွင် အကောင်အထည်ဖော်ပြီး** (testing stack တွင် deploy + live e2e စစ်ဆေးပြီး၊ production deploy သည် ခွင့်ပြုချက်စောင့်နေဆဲ)။ `SupplierPurchaseDraft → PURCHASE_REQUEST` ယာယီ bridge ကိုလည်း real PR entity ဖြင့် အစားထိုးပြီး ဖြစ်ပါသည်။
 
@@ -75,6 +76,13 @@
 | 20 | **VMS Phase B — document types + register + compliance (Vehicle spec §6.1/§6.2/§6.5)** — configurable document types with per-type `warningDays`, per-vehicle document register with renewal lineage (renew = new row supersedes old), attachment reference, `mandatoryForDispatch` policy + dispatch/assign blocking via new `FleetComplianceService`, per-type thresholds in the sweep, register records suppress their legacy Phase-A column (no double alerts), Fleet page **Docs** modal (+ ⚙ Setup tab for type CRUD), `/vehicles/:id/compliance` endpoint. Migration **53** (seed of 10 spec default types + backfill of legacy expiry dates). Manual sweep trigger `prisma/fleet-expiry-manual.js`. Live-verified: migration in a scratch Postgres first, test-DB sweep produced 3 real notifications (dedupe-keyed, idempotent rerun silent), UI exercised in a browser on testing AND production. See commits `02d3fec`/`96c18c8`..`77c2256` (incl. `listVehicles` injectable-now test fix). | ✅ **testing (:8030) + production (:80), live-verified 2026-10-19** | VMS gap analysis: §6.1/§6.2 → ✅, §6.5 dispatch block → ✅ (UI badges verified); at-a-glance §6 → mostly done |
 | 21 | **Automated PostgreSQL backups (spec §50, R8)** — `scripts/server/backup-db.sh`: nightly pg_dump of the prod DB inside the `ams-db-1` container (credentials never leave the container env), gzip → `/opt/admin/backups/ams-prod_YYYY-MM-DD_*.sql.gz`, integrity-checked (gzip -t + “dump complete” marker found in the tail — PG 16 ends the file with a `\unrestrict …` line after the marker), 14-day retention; `scripts/server/restore-db.sh` refuses to run without the literal word RESTORE. Cron installed on the VM: `30 2 * * *` = 02:30 Asia/Yangon daily, logging to `backups/backup.log`. Verified end-to-end: backup ran (184K) and a scratch-DB restore returned the prod data (vehicles 5 / users 11 / audit_logs 1597), safety refuse-check exercised. | ✅ **cron live on the VM** (`626b711`) | §48–51 backup row → ✅; R8 backup item → done. Remaining R8: soft-delete policy decision (§66), TLS before any external exposure (§52) |
 
+### 2026-10-20
+
+| # | Fix / Feature | Deployed | Doc status affected |
+|---|---|---|---|
+| 22 | **Asset Register (spec §14/§15–16/§22/§34/§39–40)** — migration **54**: `asset_movements` append-only history (REGISTER/TRANSFER/DISPOSE/RESTORE/MAINTENANCE), `assets.custodian` + status index, `purchase_order_items.assetId`; new `backend/src/assets/` module: CRUD + `AST-YYYYMM-NNNN` numbering + CSV, an edit that changes location auto-writes a TRANSFER movement, §40 transfer (location + custody in one audited move, disposed guard), detail view with movement history, §66 delete guard, **§39 `POST /assets/register-from-po/:poItemId`** (register the fixed asset bought on a PO line — cost = unit price × accepted GRN qty, linked on the PO line; consumable lines and double registration refused 409); RBAC `assets.read`/`assets.manage` (catalog + DEFAULT_GRANTS + RbacMatrix labels); frontend **`/asset-register`** page (category/location/status filters, CSV, create/edit/view/transfer/delete + "register asset" on the PO page; route renamed from `/assets` in `3695268` — it collided with the Vite static chunk directory so refresh/404'd). Test suite `assets.test.ts` wired into `npm test`. | ✅ **testing (:8030)** — live E2E: `AST-202610-0001` created → transferred → movement history shows REGISTER + TRANSFER; **production pending approval (migration 54 not on the prod DB)** | §2 asset row ❌→✅; §3 §37–39 registration flow → ✅ |
+| 23 | **Petty cash ledger (spec §14/§21/§36, design §37) + §66 delete guards** — migration **54**: `petty_cash_transactions` (unique `PC-YYYYMM-NNNN`, `Decimal(12,2)`, optional account, recorder; append-only); `backend/src/pettycash/` module: TOPUP/EXPENSE create (type/amount/account validation), list with **computed** `{topup, expense, balance}` totals (ΣTOPUP − ΣEXPENSE — never a stored column, §23 principle), from/to/type filters, **no edit** — a wrong row is an audited delete + re-enter, §41 CSV export; RBAC `pettycash.read`/`pettycash.manage` (FINANCE: manage; ADMINISTRATION/MANAGEMENT: read); frontend **`/petty-cash`** page (summary tiles, filters, record modal + delete gated on `pettycash.manage`); **§66 supplier delete guard** — PO history / invoice / quotation / RFQ / drafts / contact logs / stock transactions all refuse hard delete naming the counts (deactivate path), unused suppliers delete with a WARNING audit. Tests: `petty-cash.test.ts` + `suppliers-guard.test.ts` → **`npm test` now 17 suites, all green**; backend + frontend tsc clean; vite build clean. | ✅ **testing (:8030)** — live E2E: admin1 POST → **403** (RBAC), sysadmin TOPUP 100,000 + EXPENSE 25,000 → balance **75,000** ✓, CSV ✓, UI tiles/record-button/RBAC ✓; **production pending approval** | §2 §14/§21/§36 → ✅ (Maintenance remains); §3 §36/§37–39 updated; R8 soft-delete → guarded-hard-delete pattern shipped |
+
 ---
 
 ## 1. What Exists Today (verified)
@@ -88,10 +96,12 @@
 | `users` | User accounts, passwords, status |
 | `workflow` | **Generic approval engine** — `ApprovalWorkflow`/`ApprovalStep`/`RequestDocument`/`ApprovalAction`, multi-level, delegations, escalation, return, cancel-approved |
 | `inventory` | Items, stock ledger (`StockTransaction`), supply requests (cart → fulfill/reject/admin-cancel), restock, low-stock alerts, reorder suggestions, spending/purchase-totals/ledger CSV, movement summary, item images |
-| `suppliers` | Vendor master, contact logs, **PO drafts** (`SupplierPurchaseDraft` + lines) → submit now creates a **real PR entity** via the procurement module (2026-10-08) |
+| `suppliers` | Vendor master, contact logs, **PO drafts** (`SupplierPurchaseDraft` + lines) → submit now creates a **real PR entity** via the procurement module (2026-10-08); **§66 delete guard** since 2026-10-20 (history refuses hard delete) |
 | `procurement` | PR/RFQ/quotation/comparison (Phases 1+5), **purchase orders + GRN** (2026-10-09), **invoices + 3-way match** (2026-10-12), account & asset lookups, **account CRUD** (2026-10-15, row 17), supplier-draft → PR bridge |
 | `budget` | **NEW 2026-10-13 (R7/§9)** — per-account monthly budgets (upsert/list/CSV), real-spend rollup from APPROVED/POSTED invoice lines, §9 validation hook at PR submit + PO create |
 | `reports` | **NEW 2026-10-13** — procurement dashboard tiles, vendor purchase report, purchase-by-account/asset, budget-vs-actual |
+| `assets` | **NEW 2026-10-20 (§15–16/§39–40)** — asset register CRUD, AST-… numbering, movement history (REGISTER/TRANSFER/DISPOSE/…), transfer, CSV, register-from-PO-line (§39) |
+| `pettycash` | **NEW 2026-10-20 (§21/§36)** — append-only TOPUP/EXPENSE ledger, computed balance, filters, §41 CSV, audited delete-only (no edit) |
 | `cars`, `fleet` | Full vehicle request lifecycle + Telegram bot approvals |
 | `meeting-rooms` | Rooms, facility master, availability, assignment queue |
 | `announcements` | Rich text, targeting, read/ack |
@@ -103,11 +113,11 @@
 | `telegram` | Join requests, bot bindings |
 | `events`, `health`, `prisma`, `util` | Infrastructure |
 
-### 1.2 Prisma schema (62 models — re-counted 2026-10-15)
+### 1.2 Prisma schema (66 models — re-counted 2026-10-20)
 
-Present: User/Role/Permission/RolePermission(+Denied), Branch/Department/Employee, AuditLog, ApprovalWorkflow/Step/Action/Delegation, RequestDocument, Notification, Announcement(+Target/Read), DocumentSequence, Attachment, MeetingRoom(+Request), Vehicle/Driver/CarRequest/CarAssignment/CarTrip/CarExpense, VehicleTypeMaster, FacilityMaster, InventoryItem, StockTransaction, Supplier(+ContactLog, PurchaseDraft+Lines), OfficeSupplyRequest, SupplyRequestLine, TelegramJoinRequest, SystemSetting, Account/AccountCategory, Asset/AssetCategory, Location, PurchaseRequest/PurchaseRequestItem *(m44)*, **PurchaseOrder/PurchaseOrderItem + GoodsReceipt/GoodsReceiptItem (m46), Invoice/InvoiceItem (m47), Rfq/RfqVendor/Quotation/QuotationItem/QuotationComparison (m48/49), MonthlyBudget (m50)**.
+Present: User/Role/Permission/RolePermission(+Denied), Branch/Department/Employee, AuditLog, ApprovalWorkflow/Step/Action/Delegation, RequestDocument, Notification, Announcement(+Target/Read), DocumentSequence, Attachment, MeetingRoom(+Request), Vehicle/Driver/CarRequest/CarAssignment/CarTrip/CarExpense, VehicleTypeMaster, FacilityMaster, InventoryItem, StockTransaction, Supplier(+ContactLog, PurchaseDraft+Lines), OfficeSupplyRequest, SupplyRequestLine, TelegramJoinRequest, SystemSetting, Account/AccountCategory, Asset/AssetCategory, Location, PurchaseRequest/PurchaseRequestItem *(m44)*, **PurchaseOrder/PurchaseOrderItem + GoodsReceipt/GoodsReceiptItem (m46), Invoice/InvoiceItem (m47), Rfq/RfqVendor/Quotation/QuotationItem/QuotationComparison (m48/49), MonthlyBudget (m50)**, **AssetMovement + PettyCashTransaction (m54, 2026-10-20)** — plus `purchase_order_items.assetId`.
 
-**Absent (from both design docs):** `PettyCashTransaction`, `MaintenanceRecord`, `Payment`. *(2026-10-15 re-check: everything else on the old absent list — Invoice/InvoiceItem, RFQ/Quotation/QuotationComparison, PurchaseOrder, GoodsReceipt, Budget (MonthlyBudget) — now exists via migrations 46–50; Account CRUD shipped 2026-10-15, row 17.)*
+**Absent (from both design docs):** `MaintenanceRecord`, `Payment`. *(2026-10-20: `PettyCashTransaction` shipped with migration 54.)* *(2026-10-15 re-check: everything else on the old absent list — Invoice/InvoiceItem, RFQ/Quotation/QuotationComparison, PurchaseOrder, GoodsReceipt, Budget (MonthlyBudget) — now exists via migrations 46–50; Account CRUD shipped 2026-10-15, row 17.)*
 
 Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasing, assets, maintenance...)"* — the deferral is deliberate, and the `RequestDocType` enum already reserves `PURCHASE_REQUEST`, `TRAVEL_REQUEST`, `MAINTENANCE_REQUEST`.
 
@@ -121,18 +131,18 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 | §5 | Repository structure | ✅ | Matches (backend/, frontend/, docs/, scripts/). |
 | §6 | Dev / Staging / Production | ⚠️ Partial | Dev + Testing + Production share **one VM** (documented, deliberate). No separate staging. |
 | §9–12 | NestJS, REST standards, validation | ✅ | Followed (NestJS + class-validator DTOs). |
-| §14 | Core entities: Asset, Account, Invoice, PettyCash, Maintenance | ⚠️ Partial | `Account`/`AccountCategory`, `Asset`/`AssetCategory`/`Location` (m44) and `Invoice`/`InvoiceItem` (m47, 2026-10-12) now exist; PettyCash + Maintenance still missing. |
-| §15–16, §22, §34, §39–40 | Asset model, categories, history, UI, lifecycle, transfer | ❌ Missing | Greenfield. Vehicles exist as their own domain (CarRequest/Fleet) — decide whether vehicles join the Asset model or stay separate. |
+| §14 | Core entities: Asset, Account, Invoice, PettyCash, Maintenance | ⚠️ Partial | `Account`/`AccountCategory`, `Asset`/`AssetCategory`/`Location` (m44), `Invoice`/`InvoiceItem` (m47) and now `PettyCashTransaction` (m54, 2026-10-20) exist — **Maintenance is the only core entity still missing.** |
+| §15–16, §22, §34, §39–40 | Asset model, categories, history, UI, lifecycle, transfer | ✅ **Implemented (2026-10-20)** | `Asset`/`AssetCategory`/`Location` (m44) + `asset_movements` history, custodian, AST-… numbering, lifecycle moves, transfer, CSV, `/asset-register` UI, and §39 register-from-PO-line — migration 54, log row 22. Vehicles deliberately stay in their own Fleet domain; an `assetId` back-reference can come later. |
 | §17–19, §30 | Accounting concept (account_id + optional asset_id), transaction status | ⚠️ Partial | Account references are real on PO/invoice lines (+ monthly budgets, purchase-by-account reports); no standalone accounting-transaction entity yet. |
 | §20, §35 | Invoice design + UI | ✅ Implemented (2026-10-12) | `Invoice`/`InvoiceItem` (m47), `/invoices` page, lifecycle DRAFT→SUBMITTED→APPROVED→POSTED, 3-way match + Controls 3/4/5 — log row 13. |
-| §21, §36 | Petty cash | ❌ Missing | — |
+| §21, §36 | Petty cash | ✅ **Implemented (2026-10-20)** | `PettyCashTransaction` ledger (m54) + `/petty-cash` UI, computed balance, append-only, §41 CSV — log row 23. |
 | §23 | Avoid duplicate data (transactions = source of truth) | ✅ Followed | StockTransaction / CarExpense / spending CSV aggregate instead of denormalized totals. Keep this principle for procurement. |
 | §25 | Money as Decimal | ✅ / ⚠️ | Decimal used (`Decimal(12,2)`); spec illustrative schema says `Decimal(18,2)`. 12,2 caps at ~9.9 billion MMK — acceptable, but align the convention in one place. |
 | §26 | Dates & time | ✅ | Asia/Yangon handling (`util/yangonTime`, TZ in compose). |
 | §27–28 | Auth + RBAC | ✅ Exceeded | Permission Matrix, deny-memory, per-module codes, delegations. |
 | §29 | Audit log | ✅ | Implemented incl. severity + old/new values. |
 | §37 | Attachments (metadata + storage) | ⚠️ Minor deviation | Generic `Attachment` exists but links via `requestId`/`announcementId` columns instead of spec's `entityType`/`entityId`. Works; each new owner type needs a migration. Consider switching to entityType/entityId when procurement lands. |
-| §41 | Reporting (asset register, cost history, expense, petty cash, vendor reports) | ⚠️ Partial | `/reports/procurement` (2026-10-13): dashboard tiles, vendor purchase report, purchase-by-account/asset, budget-vs-actual + CSV exports. Asset-register / petty-cash reports await their modules. |
+| §41 | Reporting (asset register, cost history, expense, petty cash, vendor reports) | ⚠️ Partial | `/reports/procurement` (2026-10-13): dashboard tiles, vendor purchase report, purchase-by-account/asset, budget-vs-actual + CSV exports. Asset + petty-cash now ship their own CSV/summary views with their modules (2026-10-20); register/dashboard tiles for them inside the reports module still to add. |
 | §43 | Pagination | ✅ | `pageSize` used across list endpoints. |
 | §44–45 | Search, filtering, indexing | ⚠️ Partial | Indexes exist where needed; no global search. |
 | §47 | Seed data | ✅ | Seeded roles/users (sysadmin, admin1, …). |
@@ -140,7 +150,7 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 | §52 | HTTPS | ❌ Not implemented | Production UI serves plain HTTP on :80 (internal LAN). Acceptable short-term; plan TLS termination on Nginx before any external exposure. |
 | §53–59 | CI/CD, versioning, tagging, rollback, health | ✅ / ⚠️ | GitHub Actions CI (typecheck + suites) exists; deploy scripts with health checks exist. Image tagging/registry per §57 not used (local builds) — acceptable for single-VM. |
 | §60–61 | Logging, error handling | ✅ | Structured backend logging; ApiError pattern on frontend. |
-| §62–64 | Testing strategy, critical business tests | ✅ / ⚠️ | 12 backend suites + 1 e2e script (`npm test`, all green 2026-10-15): PR (11 cases), amount routing (8), PO/GRN incl. account + budget-on-create (14), invoices/3-way match (16), budgets (6), accounts CRUD (11), plus cars/telegram/rbac/delegations. E2E coverage still script-based. |
+| §62–64 | Testing strategy, critical business tests | ✅ / ⚠️ | **17 backend suites** + 1 e2e script (`npm test`, all green 2026-10-20): PR (11), amount routing (8), PO/GRN incl. account + budget-on-create (14), invoices/3-way match (16), budgets (6), accounts CRUD (12), fleet expiry + documents, **assets, petty cash, suppliers §66 guard**, plus cars/telegram/rbac/delegations. E2E coverage still script-based. |
 | §65–66 | Data integrity, soft delete | ⚠️ Partial | Integrity rules followed; **soft delete not used** — entities use status flags (UserStatus, ItemCategory) or hard deletes (e.g. suppliers DELETE endpoint). Decide per spec §66 which entities need `deletedAt`. |
 | §67 | Security checklist | ✅ / ⚠️ | JWT, RBAC, upload auth-token; secrets out of git. Password hashing policy worth auditing once. |
 | §83–85 | Long-term architecture | — | The "design data model first" principle was followed for each shipped module. |
@@ -161,8 +171,8 @@ Note — `schema.prisma` line 2 says: *"(later phases extend this file: purchasi
 | **P8** Payment | §26 | Payment integration (explicitly a *future* module) | ❌ Missing | By design — out of scope until Finance area exists. |
 | **P9** Reports / Dashboard | §33–34 | PR/PO/invoice dashboards, vendor purchase report, purchase by account/asset | ✅ **Implemented (2026-10-13)** | `/reports/procurement` module + `/purchase-reports` page on real rows: flow tiles + match badges, vendor purchase report, purchase-by-account/asset, budget-vs-actual (log row 14). |
 | **P10** Advanced controls | §35 | Control 1 no-approval-no-PO; Control 2 PO-required receiving; Control 3 invoice-without-GRN hold; Control 4 invoice ≤ PO amount; Control 5 duplicate invoice (vendor + invoice no.) | ✅ **Implemented** | Controls 1/2 service-level in `purchase-orders` (2026-10-09); Controls 3/4/5 + persisted match status in `invoices` (2026-10-12) — log rows 11, 13. |
-| — | §36 | Emergency / direct / petty-cash purchase types | ⚠️ Partial | Direct/ad-hoc purchases exist (PO without a PR — no workflow approval needed); explicit emergency-purchase type + petty cash still missing. |
-| — | §37–39 | Petty cash integration; fixed-asset purchase → asset registration | ❌ Missing | `Asset`/`AssetCategory` models exist (m44) but no registration flow yet — GRN does not create assets; petty cash module absent. |
+| — | §36 | Emergency / direct / petty-cash purchase types | ⚠️ Partial | Direct/ad-hoc purchases exist (PO without a PR — no workflow approval needed); **petty cash shipped 2026-10-20** (log row 23); only the explicit emergency-purchase bypass type is still missing (receiving stays PO-gated). |
+| — | §37–39 | Petty cash integration; fixed-asset purchase → asset registration | ✅ **Implemented (2026-10-20)** | Petty cash module shipped (log row 23); fixed-asset purchases register via `POST /assets/register-from-po/:poItemId` from the PO page — cost = unit price × accepted GRN qty, persisted on `purchase_order_items.assetId`; consumable PO lines are refused (stock items never become assets). |
 | — | §9 | Budget check | ✅ **Done (2026-10-13/14)** | `MonthlyBudget` (m50) + `/budgets` API + Settings **Budgets** tab; §9 enforcement at PR submit AND PO create (structured `BUDGET_EXCEEDED`, real spend from invoice lines); m50/m51 applied to both DBs — log rows 14, 16. |
 | — | §41 | Permission design (procurement codes) | ✅ Implemented | `procurement.read` / `procurement.manage` added to the catalog + DEFAULT_GRANTS (ADMINISTRATION & PURCHASING: read+manage; FINANCE: read) + RbacMatrix labels (2026-10-08), per the docs/DEPLOYMENT.md §3b checklist. |
 | — | §32 | Audit trail | ✅ Implemented | AuditLog used consistently (suppliers/inventory/workflow all log). |
@@ -215,7 +225,7 @@ Only after P1–P7 entities exist: procurement dashboard tiles (mirror the Inven
 
 ### R8 — Operational hardening (parallel track)
 - ✅ **Automated PostgreSQL backups — DONE 2026-10-19 (log row 21)**: nightly 02:30 Yangon `pg_dump` (gzip, integrity-verified, 14-day retention, restore-tested into a scratch DB). Remaining gap: backups still live on the same VM — an offsite copy (or at least a copy onto a second disk) is the next step.
-- Decide soft-delete policy (spec §66) before procurement entities ship — hard-deleting a Supplier with PO/GRN history would break the audit chain; prefer `status: DISABLED` like users.
+- Decide soft-delete policy (spec §66) before procurement entities ship — hard-deleting a Supplier with PO/GRN history would break the audit chain; prefer `status: DISABLED` like users. **2026-10-20 (log row 23): the guarded-hard-delete pattern now ships** for Suppliers (PO/invoice/RFQ/quotation/draft/contact-log/stock history refuses, naming counts), Assets (movement history blocks) and Petty Cash (append-only — no edit, audited delete + re-enter). `deletedAt` soft delete is still unused; remaining entities can follow the status/guard pattern instead.
 - Add backend test suites per spec §63 for each new phase (approval gating, 3-way match, partial delivery math) — CI already runs `npm test`.
 - Plan TLS termination (spec §52) before the UI leaves the LAN.
 
@@ -233,6 +243,8 @@ Phase 4  Invoice + 3-way match + controls (R6)                — ✅ done 2026-
 Phase 5  RFQ/Quotation/Comparison (P3/P4)                     — ✅ done (migrations 48/49 applied to both DBs — verified 2026-10-14 at m51)
 Phase 6  Budget integration + reports/dashboard (R7)          — ✅ done 2026-10-13/14 (reports UI; §9 budget at PR submit + PO create; Budgets tab)
 Phase 6b Chart-of-Accounts CRUD (Settings → Accounts tab)     — ✅ done 2026-10-15 (log row 17)
+Phase 6c Asset register + §39 register-from-PO (§15–16/§39–40) — ✅ done 2026-10-20 (testing; prod pending — log row 22)
+Phase 6d Petty cash ledger + §66 delete guards (§21/§36/§37)    — ✅ done 2026-10-20 (testing; prod pending — log row 23)
 Phase 7  Payment integration (P8 — with Finance)              — future
 ```
 
