@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { BudgetService } from '../budget/budget.service';
 import { Actor } from '../org/org.service';
+import { normalizePurchaseType } from './purchase-types';
 
 export interface PoItemInput {
   description: string;
@@ -24,6 +25,9 @@ export interface CreatePoInput {
   paymentTerms?: string;
   deliveryTerms?: string;
   note?: string;
+  /** §W4 — NORMAL / EMERGENCY / DIRECT / PETTY_CASH (+ reason for the exceptions). */
+  purchaseType?: string;
+  purchaseReason?: string;
   items: PoItemInput[];
 }
 
@@ -140,6 +144,8 @@ export class PurchaseOrdersService {
     }
 
     const items = data.items.map((it, idx) => this.normalizePoItem(it, idx));
+    // §W4 — purchase classification (EMERGENCY/DIRECT require a written reason)
+    const purchase = normalizePurchaseType(data.purchaseType, data.purchaseReason);
 
     // §17 — the account on each line must exist (it drives the §9 budget check
     // below and the invoice/ledger classification later)
@@ -178,6 +184,8 @@ export class PurchaseOrdersService {
         paymentTerms: data.paymentTerms?.trim() || undefined,
         deliveryTerms: data.deliveryTerms?.trim() || undefined,
         note: data.note?.trim() || undefined,
+        purchaseType: purchase.purchaseType,
+        purchaseReason: purchase.purchaseReason,
         createdById: actor.userId,
         items: { create: items },
       },
@@ -187,7 +195,7 @@ export class PurchaseOrdersService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'PO_CREATED', module: 'PROCUREMENT', recordId: po.id,
-      newValue: { poNumber: po.poNumber, supplier: supplier.name, items: items.length },
+      newValue: { poNumber: po.poNumber, supplier: supplier.name, items: items.length, purchaseType: purchase.purchaseType, purchaseReason: purchase.purchaseReason ?? null },
     });
     return po;
   }

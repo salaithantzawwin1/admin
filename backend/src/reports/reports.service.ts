@@ -37,6 +37,56 @@ export class ReportsService {
       purchaseOrders: toMap(poByStatus as never, 'status'),
       invoices: toMap(invoiceByStatus as never, 'status'),
       invoiceMatches: toMap(invoiceByMatch as never, 'matchStatus'),
+      // GLG ERP §W2 — purchasing summary: real money + queue numbers (§33)
+      summary: await this.purchasingSummary(),
+    };
+  }
+
+  /** §W2 purchasing summary — this-month spend, open queues, payables outstandings. */
+  private async purchasingSummary() {
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const [monthAgg, openPos, pendingInvoiceCount, payAgg, overdueCount, prPendingCount] = await this.prisma.$transaction([
+      // this-month purchase: real AP spend (APPROVED/POSTED invoices dated this month)
+      this.prisma.invoice.aggregate({
+        where: { status: { in: ACTIVE_INVOICE }, invoiceDate: { gte: monthStart } },
+        _sum: { total: true },
+      }),
+      // outstanding PO value: every PO still in flight (not CLOSED/CANCELLED)
+      this.prisma.purchaseOrder.findMany({
+        where: { status: { notIn: ['CLOSED', 'CANCELLED'] } },
+        include: { items: { select: { quantity: true, unitPrice: true } } },
+      }),
+      // pending invoices: vendor bills not yet approved/posted
+      this.prisma.invoice.count({ where: { status: { in: ['DRAFT', 'SUBMITTED'] } } }),
+      // payables: Σ balance of approved/posted invoices (rollup maintained by W1)
+      this.prisma.invoice.aggregate({
+        where: { status: { in: ACTIVE_INVOICE } },
+        _sum: { total: true, paidAmount: true },
+      }),
+      this.prisma.invoice.count({
+        where: { status: { in: ACTIVE_INVOICE }, dueDate: { lt: now } },
+      }),
+      this.prisma.requestDocument.count({ where: { docType: 'PURCHASE_REQUEST', status: 'PENDING_APPROVAL' } }),
+    ]);
+    const outstandingPoValue = openPos.reduce(
+      (s, po) => s + po.items.reduce((si, i) => si + Number(i.unitPrice) * i.quantity, 0),
+      0,
+    );
+    // POs still expecting goods → the receiving (GRN) queue
+    const pendingGrnCount = openPos.filter((po) =>
+      ['APPROVED', 'SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(po.status),
+    ).length;
+    const invoiced = Number(payAgg._sum.total ?? 0);
+    const paid = Number(payAgg._sum.paidAmount ?? 0);
+    return {
+      thisMonthPurchase: round2(Number(monthAgg._sum.total ?? 0)),
+      prPendingCount,
+      outstandingPoValue: round2(outstandingPoValue),
+      pendingGrnCount,
+      pendingInvoiceCount,
+      pendingPayment: round2(invoiced - paid),
+      overdueInvoiceCount: overdueCount,
     };
   }
 
@@ -80,21 +130,102 @@ export class ReportsService {
     return [...byAccount.values()].sort((a, b) => b.total - a.total);
   }
 
+  /** §34/W3: purchase by asset — acquisition cost (PO lines, migration-54
+   *  provenance link) + later related spend (invoice items tagged to the asset). */
   async purchaseByAsset(from?: string, to?: string) {
     const items = await this.prisma.invoiceItem.findMany({
       where: { invoice: { status: { in: ACTIVE_INVOICE }, ...(this.period(from, to)) } },
       include: { asset: { select: { id: true, assetCode: true, name: true } } },
     });
-    const byAsset = new Map<string, { assetId: string; assetCode: string | null; asset: string | null; lineCount: number; total: number }>();
+    type Row = {
+      assetId: string; assetCode: string | null; asset: string | null;
+      poLineCount: number; purchaseCost: number;
+      invoiceLineCount: number; invoiceCost: number; total: number;
+    };
+    const byAsset = new Map<string, Row>();
+    const rowFor = (assetId: string, assetCode: string | null, name: string | null): Row => {
+      let row = byAsset.get(assetId);
+      if (!row) {
+        row = { assetId, assetCode, asset: name, poLineCount: 0, purchaseCost: 0, invoiceLineCount: 0, invoiceCost: 0, total: 0 };
+        byAsset.set(assetId, row);
+      }
+      return row;
+    };
     for (const it of items) {
       if (!it.asset) continue;
-      const key = it.asset.id;
-      const row = byAsset.get(key) ?? { assetId: key, assetCode: it.asset.assetCode, asset: it.asset.name, lineCount: 0, total: 0 };
-      row.lineCount += 1;
-      row.total = round2(row.total + Number(it.unitPrice) * it.quantity);
-      byAsset.set(key, row);
+      const row = rowFor(it.asset.id, it.asset.assetCode, it.asset.name);
+      row.invoiceLineCount += 1;
+      row.invoiceCost = round2(row.invoiceCost + Number(it.unitPrice) * it.quantity);
+      row.total = round2(row.purchaseCost + row.invoiceCost);
+    }
+    // acquisition side: PO lines that registered the asset (§39 provenance)
+    const poItems = await this.prisma.purchaseOrderItem.findMany({
+      where: {
+        assetId: { not: null },
+        purchaseOrder: { orderDate: this.poPeriod(from, to) },
+      },
+      include: { asset: { select: { id: true, assetCode: true, name: true } } },
+    });
+    for (const it of poItems) {
+      if (!it.asset || !it.assetId) continue;
+      const row = rowFor(it.assetId, it.asset.assetCode, it.asset.name);
+      row.poLineCount += 1;
+      row.purchaseCost = round2(row.purchaseCost + Number(it.unitPrice) * it.quantity);
+      row.total = round2(row.purchaseCost + row.invoiceCost);
     }
     return [...byAsset.values()].sort((a, b) => b.total - a.total);
+  }
+
+  /** §W5 vendor performance — derived from live documents (no manual rating):
+   *  PO count/value, average delivery lateness (expected delivery vs GRN),
+   *  reject rate from GRN lines. */
+  async vendorPerformance(from?: string, to?: string) {
+    const pos = await this.prisma.purchaseOrder.findMany({
+      where: { orderDate: this.poPeriod(from, to) },
+      include: {
+        supplier: { select: { id: true, name: true } },
+        items: { select: { quantity: true, unitPrice: true } },
+        goodsReceipts: { select: { receivedAt: true, items: { select: { orderedQty: true, rejectedQty: true } } } },
+      },
+    });
+    type Perf = {
+      supplierId: string; supplier: string;
+      poCount: number; poValue: number;
+      grnCount: number; lateDaysTotal: number; lateCount: number;
+      orderedQty: number; rejectedQty: number;
+      avgDaysLate: number | null; rejectRatePercent: number;
+    };
+    const bySup = new Map<string, Perf>();
+    for (const po of pos) {
+      let row = bySup.get(po.supplier.id);
+      if (!row) {
+        row = { supplierId: po.supplier.id, supplier: po.supplier.name, poCount: 0, poValue: 0, grnCount: 0, lateDaysTotal: 0, lateCount: 0, orderedQty: 0, rejectedQty: 0, avgDaysLate: null, rejectRatePercent: 0 };
+        bySup.set(po.supplier.id, row);
+      }
+      row.poCount += 1;
+      row.poValue = round2(row.poValue + po.items.reduce((s, i) => s + Number(i.unitPrice) * i.quantity, 0));
+      for (const grn of po.goodsReceipts) {
+        row.grnCount += 1;
+        // lateness only measurable when the PO promised a delivery date
+        if (po.expectedDelivery) {
+          const lateMs = grn.receivedAt.getTime() - po.expectedDelivery.getTime();
+          row.lateDaysTotal += Math.max(0, Math.round(lateMs / 86400000));
+          row.lateCount += 1;
+        }
+        for (const gi of grn.items) {
+          row.orderedQty += gi.orderedQty;
+          row.rejectedQty += gi.rejectedQty;
+        }
+      }
+    }
+    return [...bySup.values()]
+      .map((r) => ({
+        supplierId: r.supplierId, supplier: r.supplier,
+        poCount: r.poCount, poValue: r.poValue, grnCount: r.grnCount,
+        avgDaysLate: r.lateCount > 0 ? round2(r.lateDaysTotal / r.lateCount) : null,
+        rejectRatePercent: r.orderedQty > 0 ? round2((r.rejectedQty / r.orderedQty) * 100) : 0,
+      }))
+      .sort((a, b) => b.poValue - a.poValue);
   }
 
   /** §9: budget vs actual for one month across all budgeted accounts. */
@@ -115,6 +246,13 @@ export class ReportsService {
     const gte = from && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : undefined;
     const lt = to && !Number.isNaN(new Date(to).getTime()) ? new Date(new Date(to).getTime() + 24 * 3600 * 1000) : undefined;
     return gte || lt ? { invoiceDate: { ...(gte ? { gte } : {}), ...(lt ? { lt } : {}) } } : {};
+  }
+
+  /** orderDate period for PO-side reports (W3/W5). */
+  private poPeriod(from?: string, to?: string): { gte?: Date; lt?: Date } {
+    const gte = from && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : undefined;
+    const lt = to && !Number.isNaN(new Date(to).getTime()) ? new Date(new Date(to).getTime() + 24 * 3600 * 1000) : undefined;
+    return gte || lt ? { ...(gte ? { gte } : {}), ...(lt ? { lt } : {}) } : {};
   }
 }
 

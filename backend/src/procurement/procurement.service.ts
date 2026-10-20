@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
+import { normalizePurchaseType } from './purchase-types';
 
 export interface PrItemInput {
   description: string;
@@ -19,6 +20,9 @@ export interface CreatePrInput {
   requiredDate?: string;
   priority?: string;
   budgetCode?: string;
+  /** §W4 — NORMAL / EMERGENCY / DIRECT / PETTY_CASH (+ reason for the exceptions). */
+  purchaseType?: string;
+  purchaseReason?: string;
   items: PrItemInput[];
 }
 
@@ -227,6 +231,8 @@ export class ProcurementService {
     const priority = data.priority === 'URGENT' ? 'URGENT' : 'NORMAL';
     const requiredDate = data.requiredDate ? new Date(data.requiredDate) : undefined;
     if (requiredDate && Number.isNaN(requiredDate.getTime())) throw new BadRequestException('Invalid requiredDate');
+    // §W4 — purchase classification (EMERGENCY/DIRECT require a written reason)
+    const purchase = normalizePurchaseType(data.purchaseType, data.purchaseReason);
 
     const request = await this.prisma.requestDocument.create({
       data: {
@@ -246,6 +252,8 @@ export class ProcurementService {
         priority: priority as never,
         justification: data.justification?.trim() || undefined,
         budgetCode: data.budgetCode?.trim() || undefined,
+        purchaseType: purchase.purchaseType,
+        purchaseReason: purchase.purchaseReason,
         items: {
           create: items.map((it) => ({
             description: it.description,
@@ -263,7 +271,7 @@ export class ProcurementService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'PURCHASE_REQUEST_CREATED', module: 'PROCUREMENT', recordId: request.id,
-      newValue: { docNumber: request.docNumber, items: items.length, estimatedTotal: total, priority },
+      newValue: { docNumber: request.docNumber, items: items.length, estimatedTotal: total, priority, purchaseType: purchase.purchaseType, purchaseReason: purchase.purchaseReason ?? null },
     });
 
     return { ...request, purchaseRequest: pr };
@@ -283,6 +291,7 @@ export class ProcurementService {
     const priority = data.priority === 'URGENT' ? 'URGENT' : 'NORMAL';
     const requiredDate = data.requiredDate ? new Date(data.requiredDate) : null;
     if (data.requiredDate && Number.isNaN(requiredDate!.getTime())) throw new BadRequestException('Invalid requiredDate');
+    const purchase = normalizePurchaseType(data.purchaseType, data.purchaseReason);
 
     await this.prisma.$transaction([
       this.prisma.purchaseRequestItem.deleteMany({ where: { purchaseRequestId: pr.id } }),
@@ -293,6 +302,8 @@ export class ProcurementService {
           priority: priority as never,
           justification: data.justification?.trim() || null,
           budgetCode: data.budgetCode?.trim() || null,
+          purchaseType: purchase.purchaseType,
+          purchaseReason: purchase.purchaseReason ?? null,
           items: {
             create: items.map((it) => ({
               description: it.description,

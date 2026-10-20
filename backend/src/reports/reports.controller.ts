@@ -33,11 +33,18 @@ export class ReportsController {
     return this.reports.purchaseByAccount(from, to);
   }
 
-  /** Purchase by asset — cost history feeding — §33/§34. */
+  /** Purchase by asset — acquisition + related cost per asset — §34/W3. */
   @Get('assets')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)
   assets(@Query('from') from?: string, @Query('to') to?: string) {
     return this.reports.purchaseByAsset(from, to);
+  }
+
+  /** Vendor performance — lateness/reject rate derived from live docs — §W5. */
+  @Get('vendor-performance')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)
+  vendorPerformance(@Query('from') from?: string, @Query('to') to?: string) {
+    return this.reports.vendorPerformance(from, to);
   }
 
   /** Budget vs actual, one month — §9. */

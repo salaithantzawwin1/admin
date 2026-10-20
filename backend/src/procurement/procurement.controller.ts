@@ -24,6 +24,8 @@ export class CreatePurchaseRequestDto {
   @IsOptional() @IsString() @MaxLength(32) requiredDate?: string;
   @IsOptional() @IsIn(['NORMAL', 'URGENT']) priority?: string;
   @IsOptional() @IsString() @MaxLength(64) budgetCode?: string;
+  @IsOptional() @IsIn(['NORMAL', 'EMERGENCY', 'DIRECT', 'PETTY_CASH']) purchaseType?: string; // §W4
+  @IsOptional() @IsString() @MaxLength(1000) purchaseReason?: string; // mandatory for EMERGENCY/DIRECT (service-validated)
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => PrItemDto)
   items!: PrItemDto[];
 }

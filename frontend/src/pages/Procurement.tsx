@@ -38,6 +38,8 @@ interface PrRow {
   department?: { name: string } | null;
   purchaseRequest?: {
     priority: string;
+    purchaseType?: string;
+    purchaseReason?: string | null;
     requiredDate?: string | null;
     budgetCode?: string | null;
     items: PrItem[];
@@ -134,6 +136,11 @@ export default function Procurement() {
                   <td className="px-4 py-3 text-gray-500">{items.length}</td>
                   <td className="px-4 py-3">
                     {r.purchaseRequest?.priority === 'URGENT' ? <Badge color="red">URGENT</Badge> : <span className="text-gray-400">Normal</span>}
+                    {r.purchaseRequest?.purchaseType && r.purchaseRequest.purchaseType !== 'NORMAL' && (
+                      <div className="mt-1" title={r.purchaseRequest.purchaseReason ?? undefined}>
+                        <Badge color={r.purchaseRequest.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{r.purchaseRequest.purchaseType}</Badge>
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
@@ -170,6 +177,8 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [priority, setPriority] = useState('NORMAL');
+  const [purchaseType, setPurchaseType] = useState('NORMAL');
+  const [purchaseReason, setPurchaseReason] = useState('');
   const [requiredDate, setRequiredDate] = useState('');
   const [budgetCode, setBudgetCode] = useState('');
   const [justification, setJustification] = useState('');
@@ -181,7 +190,8 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
 
   const total = items.reduce((sum, it) => sum + (Number(it.estimatedUnitPrice) || 0) * (Number(it.quantity) || 0), 0);
-  const valid = items.length > 0 && items.every((it) => it.description.trim() && Number(it.quantity) >= 1);
+  const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
+  const valid = items.length > 0 && items.every((it) => it.description.trim() && Number(it.quantity) >= 1) && (!reasonNeeded || purchaseReason.trim());
 
   const submit = async (thenSubmitForApproval: boolean) => {
     setError('');
@@ -191,6 +201,8 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
         method: 'POST',
         body: {
           priority,
+          purchaseType,
+          purchaseReason: reasonNeeded ? purchaseReason.trim() : undefined,
           requiredDate: requiredDate || undefined,
           budgetCode: budgetCode.trim() || undefined,
           justification: justification.trim() || undefined,
@@ -276,6 +288,15 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             </Select>
           </div>
           <div>
+            <label htmlFor="pr-type" className="text-xs text-gray-500 block mb-1">Purchase type (§36)</label>
+            <Select id="pr-type" value={purchaseType} onChange={(e) => setPurchaseType(e.target.value)}>
+              <option value="NORMAL">Normal</option>
+              <option value="EMERGENCY">Emergency — reason required</option>
+              <option value="DIRECT">Direct — reason required</option>
+              <option value="PETTY_CASH">Petty cash</option>
+            </Select>
+          </div>
+          <div>
             <label htmlFor="pr-required-date" className="text-xs text-gray-500 block mb-1">Required date (optional)</label>
             <Input id="pr-required-date" type="date" value={requiredDate} onChange={(e) => setRequiredDate(e.target.value)} />
           </div>
@@ -283,6 +304,12 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             <label htmlFor="pr-budget-code" className="text-xs text-gray-500 block mb-1">Budget code (optional)</label>
             <Input id="pr-budget-code" placeholder="Budget code" value={budgetCode} onChange={(e) => setBudgetCode(e.target.value)} />
           </div>
+          {reasonNeeded && (
+            <div className="sm:col-span-2">
+              <label htmlFor="pr-type-reason" className="text-xs text-gray-500 block mb-1">Reason for {purchaseType} purchase * (audited exception path)</label>
+              <Textarea id="pr-type-reason" rows={2} placeholder="Why is the normal approval chain bypassed?" value={purchaseReason} onChange={(e) => setPurchaseReason(e.target.value)} />
+            </div>
+          )}
         </div>
         <div>
           <label htmlFor="pr-justification" className="text-xs text-gray-500 block mb-1">Purpose / justification (optional)</label>

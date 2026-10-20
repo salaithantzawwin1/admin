@@ -25,6 +25,7 @@ import { SuppliersModule } from './suppliers/suppliers.module';
 import { ProcurementModule } from './procurement/procurement.module';
 import { PurchaseOrdersModule } from './procurement/purchase-orders.module';
 import { InvoicesModule } from './procurement/invoices.module';
+import { PaymentsModule } from './procurement/payments.module';
 import { BudgetModule, BudgetService } from './budget/budget.module';
 import { AssetsModule } from './assets/assets.module';
 import { PettyCashModule } from './pettycash/pettycash.module';
@@ -58,6 +59,7 @@ import { HealthController } from './health/health.controller';
     ProcurementModule,
     PurchaseOrdersModule,
     InvoicesModule,
+    PaymentsModule,
     BudgetModule,
     AssetsModule,
     PettyCashModule,

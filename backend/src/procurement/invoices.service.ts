@@ -299,6 +299,15 @@ export class InvoicesService {
       await this.recomputeMatch(id);
     }
 
+    // GLG ERP §W1 — an invoice with recorded money cannot be cancelled out from
+    // under the payments: delete the payments (audited) first, then cancel.
+    if (action === 'cancel') {
+      const payCount = await this.prisma.payment.count({ where: { invoiceId: id } });
+      if (payCount > 0) {
+        throw new ConflictException(`Invoice has ${payCount} recorded payment(s) — delete them first (Payments page) before cancelling`);
+      }
+    }
+
     // §25 approval gate: only MATCHED / PARTIAL_MATCH invoices may be approved.
     // MISMATCH routes to review (Reject → resolve → redraft → resubmit).
     if (action === 'approve') {

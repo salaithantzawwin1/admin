@@ -13,6 +13,16 @@ interface TileData {
   purchaseOrders: Record<string, number>;
   invoices: Record<string, number>;
   invoiceMatches: Record<string, number>;
+  // §W2 purchasing summary — real money + queue numbers
+  summary?: {
+    thisMonthPurchase: number;
+    prPendingCount: number;
+    outstandingPoValue: number;
+    pendingGrnCount: number;
+    pendingInvoiceCount: number;
+    pendingPayment: number;
+    overdueInvoiceCount: number;
+  };
 }
 
 interface VendorRow {
@@ -28,6 +38,27 @@ interface AccountRow {
   account: string;
   lineCount: number;
   total: number;
+}
+
+interface AssetRow {
+  assetId: string;
+  assetCode: string | null;
+  asset: string | null;
+  poLineCount: number;
+  purchaseCost: number;
+  invoiceLineCount: number;
+  invoiceCost: number;
+  total: number;
+}
+
+interface PerfRow {
+  supplierId: string;
+  supplier: string;
+  poCount: number;
+  poValue: number;
+  grnCount: number;
+  avgDaysLate: number | null;
+  rejectRatePercent: number;
 }
 
 interface BudgetRow {
@@ -82,6 +113,8 @@ export default function Reports() {
   const [to, setTo] = useState('');
   const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [accounts, setAccounts] = useState<AccountRow[]>([]);
+  const [assets, setAssets] = useState<AssetRow[]>([]);
+  const [perf, setPerf] = useState<PerfRow[]>([]);
 
   // budget month
   const [budgetYear, setBudgetYear] = useState(String(now.getUTCFullYear()));
@@ -97,6 +130,8 @@ export default function Reports() {
     api<TileData>('/reports/procurement/dashboard').then(setTiles).catch((e) => setError(e.message));
     api<VendorRow[]>(`/reports/procurement/vendors${rangeQs(from, to)}`).then(setVendors).catch(() => setVendors([]));
     api<AccountRow[]>(`/reports/procurement/accounts${rangeQs(from, to)}`).then(setAccounts).catch(() => setAccounts([]));
+    api<AssetRow[]>(`/reports/procurement/assets${rangeQs(from, to)}`).then(setAssets).catch(() => setAssets([]));
+    api<PerfRow[]>(`/reports/procurement/vendor-performance${rangeQs(from, to)}`).then(setPerf).catch(() => setPerf([]));
     api<BudgetRow[]>(`/reports/procurement/budget?year=${budgetYear}&month=${budgetMonth}`).then(setBudget).catch(() => setBudget([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rangeQs, from, to, budgetYear, budgetMonth]);
@@ -145,6 +180,20 @@ export default function Reports() {
         </div>
       </section>
 
+      {/* ---------- purchasing summary (§33 / W2) ---------- */}
+      <section>
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Purchasing summary — real money &amp; queues (§33)</div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
+          <Tile label="This month purchase" value={fmtMoney(tiles?.summary?.thisMonthPurchase)} tone="green" />
+          <Tile label="PR pending approval" value={tiles?.summary?.prPendingCount ?? 0} tone="yellow" />
+          <Tile label="Outstanding PO" value={fmtMoney(tiles?.summary?.outstandingPoValue)} tone="blue" />
+          <Tile label="Pending GRN" value={tiles?.summary?.pendingGrnCount ?? 0} tone="orange" />
+          <Tile label="Pending invoices" value={tiles?.summary?.pendingInvoiceCount ?? 0} tone="yellow" />
+          <Tile label="Pending payment" value={fmtMoney(tiles?.summary?.pendingPayment)} tone="orange" />
+          <Tile label="Overdue invoices" value={tiles?.summary?.overdueInvoiceCount ?? 0} tone="red" />
+        </div>
+      </section>
+
       {/* ---------- vendor purchase report (§34) ---------- */}
       <section>
         <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Vendor purchase report — invoice counts are real bills; totals include tax (APPROVED+POSTED)</div>
@@ -179,6 +228,56 @@ export default function Reports() {
         </Card>
       </section>
 
+      {/* ---------- vendor performance (§W5) ---------- */}
+      <section>
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Vendor performance — lateness vs promised delivery, GRN reject rate (derived from live documents)</div>
+        <Card>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
+                <th className="px-4 py-3 font-semibold first:pl-5">Vendor</th>
+                <th className="px-4 py-3 font-semibold">POs</th>
+                <th className="px-4 py-3 font-semibold">PO value (Ks)</th>
+                <th className="px-4 py-3 font-semibold">GRNs</th>
+                <th className="px-4 py-3 font-semibold">Avg days late</th>
+                <th className="px-4 py-3 font-semibold">Reject rate</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {perf.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <Empty label={from || to ? 'No purchase orders in this period' : 'No purchase orders yet'} />
+                  </td>
+                </tr>
+              )}
+              {perf.map((r) => (
+                <tr key={r.supplierId} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 first:pl-5 font-medium text-gray-800">{r.supplier}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.poCount}</td>
+                  <td className="px-4 py-2.5 font-medium">{fmtMoney(r.poValue)}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.grnCount}</td>
+                  <td className="px-4 py-2.5">
+                    {r.avgDaysLate === null ? (
+                      <span className="text-gray-400">— no promise date</span>
+                    ) : (
+                      <Badge color={r.avgDaysLate === 0 ? 'green' : r.avgDaysLate <= 3 ? 'yellow' : 'red'}>
+                        {r.avgDaysLate}d
+                      </Badge>
+                    )}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <Badge color={r.rejectRatePercent === 0 ? 'green' : r.rejectRatePercent <= 5 ? 'yellow' : 'red'}>
+                      {r.rejectRatePercent}%
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </section>
+
       {/* ---------- purchase by account (§33/§34) ---------- */}
       <section>
         <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Purchase by account (same period as vendors — what the money was spent on)</div>
@@ -206,6 +305,46 @@ export default function Reports() {
                   <td className="px-4 py-2.5 text-gray-500">{r.accountCode ?? '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500">{r.lineCount}</td>
                   <td className="px-4 py-2.5 font-medium">{fmtMoney(r.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      </section>
+
+      {/* ---------- purchase by asset (§34/W3) ---------- */}
+      <section>
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Purchase by asset — acquisition cost (PO lines that registered the asset) + related invoice spend</div>
+        <Card>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
+                <th className="px-4 py-3 font-semibold first:pl-5">Asset</th>
+                <th className="px-4 py-3 font-semibold">Code</th>
+                <th className="px-4 py-3 font-semibold">PO lines</th>
+                <th className="px-4 py-3 font-semibold">Purchase cost (Ks)</th>
+                <th className="px-4 py-3 font-semibold">Invoice lines</th>
+                <th className="px-4 py-3 font-semibold">Related spend (Ks)</th>
+                <th className="px-4 py-3 font-semibold">Total (Ks)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {assets.length === 0 && (
+                <tr>
+                  <td colSpan={7}>
+                    <Empty label={from || to ? 'No asset-attributed purchases in this period' : 'No asset-attributed purchases yet'} />
+                  </td>
+                </tr>
+              )}
+              {assets.map((r) => (
+                <tr key={r.assetId} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 first:pl-5 font-medium text-gray-800">{r.asset ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.assetCode ?? '—'}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.poLineCount}</td>
+                  <td className="px-4 py-2.5 font-medium">{fmtMoney(r.purchaseCost)}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.invoiceLineCount}</td>
+                  <td className="px-4 py-2.5 font-medium">{fmtMoney(r.invoiceCost)}</td>
+                  <td className="px-4 py-2.5 font-semibold">{fmtMoney(r.total)}</td>
                 </tr>
               ))}
             </tbody>

@@ -30,6 +30,8 @@ export const PERMISSIONS = {
   ASSETS_MANAGE: 'assets.manage',
   PETTYCASH_READ: 'pettycash.read',
   PETTYCASH_MANAGE: 'pettycash.manage',
+  PAYMENTS_READ: 'payments.read',
+  PAYMENTS_MANAGE: 'payments.manage',
   ANNOUNCEMENTS_READ: 'announcements.read',
   ANNOUNCEMENTS_MANAGE: 'announcements.manage',
   AUDIT_READ: 'audit.read',

@@ -25,6 +25,8 @@ class CreatePoDto {
   @IsOptional() @IsString() @MaxLength(200) paymentTerms?: string;
   @IsOptional() @IsString() @MaxLength(200) deliveryTerms?: string;
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
+  @IsOptional() @IsString() @MaxLength(16) purchaseType?: string; // §W4 NORMAL/EMERGENCY/DIRECT/PETTY_CASH
+  @IsOptional() @IsString() @MaxLength(1000) purchaseReason?: string; // mandatory for EMERGENCY/DIRECT (service-validated)
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => PoItemDto)
   items!: PoItemDto[];
 }

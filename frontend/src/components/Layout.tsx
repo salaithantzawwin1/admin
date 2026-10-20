@@ -23,6 +23,7 @@ const nav = [
   // directory; nginx 301s it into /assets/ (403) and the page never loads.
   { to: '/asset-register', label: 'Assets', icon: '🏷️', show: () => hasPermission('assets.read') },
   { to: '/petty-cash', label: 'Petty Cash', icon: '💵', show: () => hasPermission('pettycash.read') },
+  { to: '/payments', label: 'Payments', icon: '🏦', show: () => hasPermission('payments.read') },
   { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
   { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
   { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },

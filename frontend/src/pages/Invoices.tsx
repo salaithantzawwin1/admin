@@ -46,6 +46,8 @@ interface Invoice {
   subtotal: string | number;
   tax: string | number;
   total: string | number;
+  paidAmount: string | number; // W1 rollup — Σ payments (maintained with every payment write)
+  paymentStatus: 'UNPAID' | 'PARTIALLY_PAID' | 'PAID';
   matchStatus?: string | null;
   matchDetail?: { lines?: MatchLine[] } | null;
   note?: string | null;
@@ -88,6 +90,12 @@ const MATCH_COLORS: Record<string, 'gray' | 'green' | 'red' | 'orange'> = {
   PARTIAL_MATCH: 'orange',
   MISMATCH: 'red',
   NO_MATCH: 'gray',
+};
+
+const PAY_COLORS: Record<string, 'gray' | 'yellow' | 'green'> = {
+  UNPAID: 'gray',
+  PARTIALLY_PAID: 'yellow',
+  PAID: 'green',
 };
 
 const money = (v: string | number) =>
@@ -198,6 +206,7 @@ export default function Invoices() {
                 <th className="px-4 py-3 font-medium">PO</th>
                 <th className="px-4 py-3 font-medium">Total</th>
                 <th className="px-4 py-3 font-medium">Match</th>
+                <th className="px-4 py-3 font-medium">Payment</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="px-4 py-3 font-medium">Date</th>
               </tr>
@@ -215,6 +224,12 @@ export default function Invoices() {
                       <Badge color={MATCH_COLORS[inv.matchStatus] ?? 'gray'}>{inv.matchStatus.replace(/_/g, ' ')}</Badge>
                     ) : (
                       <span className="text-gray-400">—</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Badge color={PAY_COLORS[inv.paymentStatus] ?? 'gray'}>{(inv.paymentStatus ?? 'UNPAID').replace(/_/g, ' ')}</Badge>
+                    {Number(inv.paidAmount ?? 0) > 0 && inv.paymentStatus !== 'PAID' && (
+                      <div className="text-xs text-gray-400 mt-0.5 tabular-nums">bal {money(Number(inv.total) - Number(inv.paidAmount))}</div>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -250,6 +265,9 @@ export default function Invoices() {
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge color={STATUS_COLORS[detail.status] ?? 'gray'}>{detail.status}</Badge>
+              <Badge color={PAY_COLORS[detail.paymentStatus] ?? 'gray'}>
+                Payment: {(detail.paymentStatus ?? 'UNPAID').replace(/_/g, ' ')}{Number(detail.paidAmount ?? 0) > 0 ? ` — ${money(detail.paidAmount)} paid` : ''}
+              </Badge>
               {detail.matchStatus && (
                 <Badge color={MATCH_COLORS[detail.matchStatus] ?? 'gray'}>Match: {detail.matchStatus.replace(/_/g, ' ')}</Badge>
               )}

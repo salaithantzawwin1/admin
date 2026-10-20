@@ -48,6 +48,8 @@ interface PoRow {
   id: string;
   poNumber: string;
   status: string;
+  purchaseType?: string; // §W4 NORMAL/EMERGENCY/DIRECT/PETTY_CASH
+  purchaseReason?: string | null;
   orderDate: string;
   expectedDelivery?: string | null;
   supplier: { id: string; name: string };
@@ -122,6 +124,8 @@ export default function PurchaseOrders() {
   const [supplierId, setSupplierId] = useState('');
   const [prId, setPrId] = useState('');
   const [expectedDelivery, setExpectedDelivery] = useState('');
+  const [purchaseType, setPurchaseType] = useState('NORMAL');
+  const [purchaseReason, setPurchaseReason] = useState('');
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
 
@@ -171,6 +175,8 @@ export default function PurchaseOrders() {
     setSupplierId('');
     setPrId('');
     setExpectedDelivery('');
+    setPurchaseType('NORMAL');
+    setPurchaseReason('');
     setNote('');
     setLines([emptyLine()]);
     setCreateOpen(true);
@@ -210,6 +216,8 @@ export default function PurchaseOrders() {
     if (items.length === 0) { toast('At least one item is required', 'error'); return; }
     if (items.some((i) => !i.quantity || i.unitPrice < 0)) { toast('Check quantities and prices', 'error'); return; }
     if (items.some((i) => !i.accountId)) { toast('Pick an account for every line — it drives the budget check', 'error'); return; }
+    const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
+    if (reasonNeeded && !purchaseReason.trim()) { toast(`A reason is required for a ${purchaseType} purchase (§36)`, 'error'); return; }
     setBusy(true);
     try {
       await api('/purchase-orders', {
@@ -218,6 +226,8 @@ export default function PurchaseOrders() {
           supplierId,
           purchaseRequestId: prId || undefined,
           expectedDelivery: expectedDelivery || undefined,
+          purchaseType,
+          purchaseReason: reasonNeeded ? purchaseReason.trim() : undefined,
           note: note.trim() || undefined,
           items,
         },
@@ -402,7 +412,14 @@ export default function PurchaseOrders() {
                     <td className="py-2 pr-2">{po.purchaseRequest ? po.purchaseRequest.request.docNumber : '—'}</td>
                     <td className="py-2 pr-2">{po.items.length}</td>
                     <td className="py-2 pr-2">{money(tot)}</td>
-                    <td className="py-2 pr-2"><Badge color={PO_STATUS[po.status] ?? 'gray'}>{po.status.replace(/_/g, ' ')}</Badge></td>
+                    <td className="py-2 pr-2">
+                      <Badge color={PO_STATUS[po.status] ?? 'gray'}>{po.status.replace(/_/g, ' ')}</Badge>
+                      {po.purchaseType && po.purchaseType !== 'NORMAL' && (
+                        <div className="mt-1" title={po.purchaseReason ?? undefined}>
+                          <Badge color={po.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{po.purchaseType}</Badge>
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2 pr-2">{fmtDate(po.orderDate)}</td>
                     <td className="py-2 pr-2 text-right" onClick={(e) => e.stopPropagation()}>
                       {quality && canManage && (
@@ -447,6 +464,21 @@ export default function PurchaseOrders() {
                   {approvedPrs.map((p) => <option key={p.id} value={p.id}>{p.docNumber}{p.title ? ` — ${p.title}` : ''}</option>)}
                 </Select>
               </div>
+              <div>
+                <label htmlFor="po-type" className="text-xs text-gray-500 block mb-1">Purchase type (§36)</label>
+                <Select id="po-type" value={purchaseType} onChange={(e) => setPurchaseType(e.target.value)}>
+                  <option value="NORMAL">Normal</option>
+                  <option value="EMERGENCY">Emergency — reason required</option>
+                  <option value="DIRECT">Direct — reason required</option>
+                  <option value="PETTY_CASH">Petty cash</option>
+                </Select>
+              </div>
+              {(purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT') && (
+                <div className="sm:col-span-2">
+                  <label htmlFor="po-type-reason" className="text-xs text-gray-500 block mb-1">Reason for {purchaseType} purchase * (audited exception path)</label>
+                  <Textarea id="po-type-reason" rows={2} placeholder="Why is the normal approval chain bypassed?" value={purchaseReason} onChange={(e) => setPurchaseReason(e.target.value)} />
+                </div>
+              )}
             </div>
 
         {/* line items — pick an inventory item only for stock (consumable) goods */}
@@ -523,6 +555,12 @@ export default function PurchaseOrders() {
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               <Badge color={PO_STATUS[detail.status] ?? 'gray'}>{detail.status.replace(/_/g, ' ')}</Badge>
+              {detail.purchaseType && detail.purchaseType !== 'NORMAL' && (
+                <Badge color={detail.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{detail.purchaseType}</Badge>
+              )}
+              {detail.purchaseReason && (
+                <span className="text-sm text-gray-500" title="Reason for the exception path (§36)">Reason: {detail.purchaseReason}</span>
+              )}
               {detail.purchaseRequest && (
                 <span className="text-sm text-gray-500">PR: {detail.purchaseRequest.request.docNumber}</span>
               )}

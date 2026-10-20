@@ -83,6 +83,7 @@ model User {
   monthlyBudgetsCreated  MonthlyBudget[]         @relation("BudgetCreatedBy")
   assetMovementsCreated  AssetMovement[]         @relation("AssetMovements")
   pettyCashCreated       PettyCashTransaction[]  @relation("PettyCashTransactions")
+  paymentsCreated        Payment[]               @relation("PaymentCreatedBy")
   telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
   telegramBindCode       String?                 @unique
   telegramUsername       String?
@@ -1475,6 +1476,11 @@ model PurchaseRequest {
   priority      PurchasePriority @default(NORMAL)
   justification String?
   budgetCode    String?
+  // GLG ERP §W4 (design §36) — purchase classification. EMERGENCY/DIRECT
+  // carry a mandatory reason (audited exception path); PETTY_CASH is a
+  // display classification — money movement lives in the petty-cash ledger.
+  purchaseType  String           @default("NORMAL") // NORMAL / EMERGENCY / DIRECT / PETTY_CASH
+  purchaseReason String?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
@@ -1521,6 +1527,9 @@ model PurchaseOrder {
   sentToVendorAt    DateTime?
   closedAt          DateTime?
   cancelledAt       DateTime?
+  // GLG ERP §W4 (design §36) — see PurchaseRequest.purchaseType
+  purchaseType      String    @default("NORMAL") // NORMAL / EMERGENCY / DIRECT / PETTY_CASH
+  purchaseReason    String?
   createdById       String    @db.Uuid
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -1628,6 +1637,10 @@ model Invoice {
   note                  String?
   matchStatus           String? // 3-way match result: MATCHED / PARTIAL_MATCH / MISMATCH / NO_MATCH (null = not yet run)
   matchDetail           Json? // per-line match breakdown for the review UI
+  // §26 payments rollup — maintained inside the same transaction as every
+  // payment write (never hand-edited): UNPAID / PARTIALLY_PAID / PAID
+  paidAmount            Decimal   @default(0) @db.Decimal(12, 2)
+  paymentStatus         String    @default("UNPAID")
   submittedAt           DateTime?
   approvedAt            DateTime?
   postedAt              DateTime?
@@ -1637,6 +1650,7 @@ model Invoice {
   updatedAt             DateTime  @updatedAt
 
   supplier      Supplier       @relation("InvoiceSupplier", fields: [supplierId], references: [id])
+  payments      Payment[]
   purchaseOrder PurchaseOrder? @relation("InvoicePurchaseOrder", fields: [purchaseOrderId], references: [id])
   goodsReceipt  GoodsReceipt?  @relation("InvoiceGoodsReceipt", fields: [goodsReceiptId], references: [id])
   createdBy     User           @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
@@ -1667,4 +1681,29 @@ model InvoiceItem {
   @@index([accountId])
   @@index([assetId])
   @@map("invoice_items")
+}
+
+// ---------- GLG Procurement ERP W1 — vendor payments (design §26, Plan §9) ----------
+// Append-only payment register against invoices. The invoice row carries the
+// rollup (paidAmount + paymentStatus), recomputed inside the same transaction
+// as every payment write — a wrong payment is deleted (audited) and re-entered,
+// never edited, matching the petty-cash ledger convention.
+model Payment {
+  id            String   @id @default(uuid()) @db.Uuid
+  paymentNumber String   @unique // PY-… via DocumentSequence
+  invoiceId     String   @db.Uuid
+  date          DateTime
+  amount        Decimal  @db.Decimal(12, 2)
+  method        String   @default("BANK_TRANSFER") // BANK_TRANSFER / CASH / CHEQUE / OTHER
+  reference     String? // transaction ref / cheque no.
+  note          String?
+  createdById   String   @db.Uuid
+  createdAt     DateTime @default(now())
+
+  invoice    Invoice @relation(fields: [invoiceId], references: [id])
+  createdBy  User    @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+
+  @@index([invoiceId])
+  @@index([date])
+  @@map("payments")
 }
