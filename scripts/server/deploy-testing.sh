@@ -32,6 +32,10 @@ else
 fi
 NEW_HEAD="$(git rev-parse --short HEAD)"
 [ "$OLD_HEAD" = "$NEW_HEAD" ] && echo "   checkout unchanged ($NEW_HEAD)" || echo "   updated: $OLD_HEAD -> $NEW_HEAD"
+# Stamped into BOTH images at build time (compose.yaml build args) — step 5
+# asserts the running containers still carry it, so a cache-lie/stale image
+# fails the deploy loudly instead of silently shipping older code.
+export BUILD_COMMIT="$NEW_HEAD"
 
 echo "== 2. Rebuild + restart stack =="
 $COMPOSE up -d --build
@@ -59,6 +63,18 @@ else
   echo "   NOTE: frontend code changed in this pull — if the hash equals the previous"
   echo "         deploy's hash, the image did NOT rebuild (run with DOCKER_BUILDKIT=0 or --no-cache)"
 fi
+
+echo
+echo "== 5. Build provenance (stale-image guard) =="
+BACK_STAMP="$($COMPOSE exec -T backend cat /app/dist/BUILD_COMMIT 2>/dev/null || echo MISSING)"
+FRONT_STAMP="$($COMPOSE exec -T frontend cat /BUILD_COMMIT 2>/dev/null || echo MISSING)"
+echo "   checkout: $NEW_HEAD   backend image: $BACK_STAMP   frontend image: $FRONT_STAMP"
+if [ "$BACK_STAMP" != "$NEW_HEAD" ] || [ "$FRONT_STAMP" != "$NEW_HEAD" ]; then
+  echo "ERROR: running artifacts were NOT built from checkout $NEW_HEAD — stale image detected!"
+  echo "       rebuild with: $COMPOSE build --no-cache && $COMPOSE up -d"
+  exit 1
+fi
+echo "   OK — both images built from this checkout"
 
 echo
 echo "DONE — TESTING UI: http://192.168.100.110:8030  (PRODUCTION on :80; Ctrl+Shift+R in the browser after deploys!)"

@@ -12,6 +12,11 @@ RUN npm ci
 COPY . .
 RUN npx prisma generate
 RUN npm run build
+# Deploy provenance: the deploy scripts stamp the checkout HEAD (BUILD_COMMIT)
+# into the image and assert the RUNNING container still carries it — a stale or
+# cache-lied build then fails the deploy loudly instead of shipping old code.
+ARG BUILD_COMMIT=unknown
+RUN echo "$BUILD_COMMIT" > /app/dist/BUILD_COMMIT
 
 # ---------- runtime stage ----------
 FROM node:20-bookworm

@@ -32,6 +32,9 @@ services:
         # npm mirror override for networks that block registry.npmjs.org
         # (set NPM_REGISTRY in .env.test / .env.prod; no-op default)
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        # deploy provenance stamp — deploy scripts assert the running
+        # container's /app/dist/BUILD_COMMIT equals the checkout HEAD
+        BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
     restart: unless-stopped
     depends_on:
       db:
@@ -59,6 +62,9 @@ services:
       args:
         VITE_ENV_LABEL: ${VITE_ENV_LABEL:-Production}
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+        # deploy provenance stamp (checked from the running container's
+        # /BUILD_COMMIT by the deploy scripts — stale builds fail loudly)
+        BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
     restart: unless-stopped
     depends_on:
       - backend

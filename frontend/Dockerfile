@@ -12,9 +12,14 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
+# Deploy provenance stamp (see backend/Dockerfile) — written outside /app/dist
+# so it is NOT served publicly; deploy scripts assert it via docker exec.
+ARG BUILD_COMMIT=unknown
+RUN echo "$BUILD_COMMIT" > /app/BUILD_COMMIT
 
 # ---------- runtime stage ----------
 FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=build /app/BUILD_COMMIT /BUILD_COMMIT
 EXPOSE 80
