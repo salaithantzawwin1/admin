@@ -650,7 +650,7 @@ export class WorkflowService {
     return { success: true };
   }
 
-  /** Approvals inbox: pending requests whose resolved workflow step matches my roles (per docType). */
+  /** Approvals inbox: pending requests I can actually act on — my roles (per docType) match the resolved workflow step, plus the SYSTEM_ADMIN superuser bypass and active delegations. Own requests are excluded (approve() rejects them). */
   async inbox(actor: Actor, page = 1, pageSize = 20) {
     const roles = await this.userRoleNames(actor.userId);
     const now = new Date();
@@ -664,6 +664,13 @@ export class WorkflowService {
       effectiveRoleSets.push(await this.userRoleNames(d.fromUserId));
     }
     const allRoles = [...new Set(effectiveRoleSets.flat())];
+    // SYSTEM_ADMIN bypass — mirrors approve()'s superuser check and the
+    // approverUserIds `role in [step.roleName, 'SYSTEM_ADMIN']` fan-out: an admin
+    // may act at ANY level of ANY workflow, so their inbox must list every
+    // pending request. Workflow steps never name SYSTEM_ADMIN as a step role,
+    // so without this the admin's Pending Approvals list was always empty even
+    // though their approve() tap succeeds everywhere.
+    const isSuperadmin = allRoles.includes('SYSTEM_ADMIN');
 
     // resolve the applicable workflow per docType, then match (docType, level) pairs
     // by role — prevents cross-workflow level leakage (e.g. head seeing CAR requests)
@@ -679,7 +686,7 @@ export class WorkflowService {
       const wf = await this.workflowFor(docType as string);
       if (!wf || !wf.active) continue;
       for (const step of wf.steps) {
-        if (allRoles.includes(step.roleName as string)) {
+        if (isSuperadmin || allRoles.includes(step.roleName as string)) {
           or.push({ docType: docType as RequestDocType, currentLevel: step.level });
         }
       }
@@ -697,13 +704,13 @@ export class WorkflowService {
       for (const doc of amountRoutedPending) {
         const wf = await this.workflowFor(doc.docType as string, await this.amountFor(doc.id, doc.docType as string));
         const step = wf?.steps.find((s) => s.level === doc.currentLevel);
-        if (step && allRoles.includes(step.roleName as string)) or.push({ id: doc.id });
+        if (step && (isSuperadmin || allRoles.includes(step.roleName as string))) or.push({ id: doc.id });
       }
     }
 
     const where: Prisma.RequestDocumentWhereInput = or.length > 0
-      ? { status: 'PENDING_APPROVAL', OR: or }
-      : { status: 'PENDING_APPROVAL', id: { in: [] } };
+      ? { status: 'PENDING_APPROVAL', requesterId: { not: actor.userId }, OR: or }
+      : { status: 'PENDING_APPROVAL', requesterId: { not: actor.userId }, id: { in: [] } };
 
     const [items, total] = await this.prisma.$transaction([
       this.prisma.requestDocument.findMany({
