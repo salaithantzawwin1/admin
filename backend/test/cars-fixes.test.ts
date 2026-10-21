@@ -447,6 +447,52 @@ async function main() {
     await svcWf.mirrorStatus('GENERIC_REQUEST', 'req-3', 'PENDING_APPROVAL', tx); // must not throw
   });
 
+  // ------------------------------------ 5b) approverUserIds — Telegram card audience
+  // The approval card must go to exactly the people approve() would accept:
+  // step-role holders + SYSTEM_ADMIN + their active delegates — minus the requester.
+  let approverDoc: any = { docType: 'CAR_REQUEST', currentLevel: 1, requesterId: 'u-requester' };
+  let delegationRows: any[] = [{ toUserId: 'u-delegate' }];
+  const prismaApprovers: any = {
+    requestDocument: { findUnique: async () => approverDoc },
+    approvalWorkflow: {
+      findMany: async () => [{
+        id: 'wf-car', module: 'CAR_REQUEST', active: true, minAmount: null, maxAmount: null,
+        steps: [{ level: 1, roleName: 'ADMINISTRATION' }],
+      }],
+    },
+    userRole: { findMany: async () => [{ userId: 'u-admin' }, { userId: 'u-sys' }] },
+    approvalDelegation: { findMany: async () => delegationRows },
+  };
+  const svcApprovers: any = new WorkflowService(prismaApprovers, {} as any, {} as any, {} as any);
+
+  await test('approverUserIds: step role + SYSTEM_ADMIN + active delegates, requester excluded', async () => {
+    const ids = await svcApprovers.approverUserIds('r1');
+    assert.deepStrictEqual([...ids].sort(), ['u-admin', 'u-delegate', 'u-sys']);
+  });
+
+  await test('approverUserIds: a step holder who is also the requester is excluded', async () => {
+    approverDoc = { docType: 'CAR_REQUEST', currentLevel: 1, requesterId: 'u-admin' };
+    const ids = await svcApprovers.approverUserIds('r1');
+    assert.ok(!ids.includes('u-admin'), 'self-approval ban must remove the requester from the card audience');
+    assert.ok(ids.includes('u-sys') && ids.includes('u-delegate'));
+    approverDoc = { docType: 'CAR_REQUEST', currentLevel: 1, requesterId: 'u-requester' };
+  });
+
+  await test('approverUserIds: no active delegations → only the direct holders', async () => {
+    delegationRows = [];
+    const ids = await svcApprovers.approverUserIds('r1');
+    assert.deepStrictEqual([...ids].sort(), ['u-admin', 'u-sys']);
+    delegationRows = [{ toUserId: 'u-delegate' }];
+  });
+
+  await test('approverUserIds: no step at the current level / unknown request → empty', async () => {
+    approverDoc = { docType: 'CAR_REQUEST', currentLevel: 9, requesterId: 'u-requester' };
+    assert.deepStrictEqual(await svcApprovers.approverUserIds('r1'), []);
+    approverDoc = null;
+    assert.deepStrictEqual(await svcApprovers.approverUserIds('r-missing'), []);
+    approverDoc = { docType: 'CAR_REQUEST', currentLevel: 1, requesterId: 'u-requester' };
+  });
+
   // ------------------------------------------------- 6) Telegram assign surface — mirror-safe busy query
   const { TelegramCarActionsService } = require('../src/cars/telegram-car-actions.service');
   const tgCaptured: any[] = [];

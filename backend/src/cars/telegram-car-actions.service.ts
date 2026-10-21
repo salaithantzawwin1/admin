@@ -302,8 +302,13 @@ export class TelegramCarActionsService {
         },
       });
       if (!request || request.status !== 'PENDING_APPROVAL' || !request.carRequest) return; // car flow only
-      // RBAC-native: the approve card goes to whoever can act on approvals
-      const approverIds = await this.permissions.usersWithPermissions(['approvals.act']);
+      // RBAC-native: the card goes ONLY to people whose tap can actually succeed —
+      // the resolved workflow step's role (Administration for cars), SYSTEM_ADMIN,
+      // and active delegates of those holders — and never to the requester
+      // (separation of duties). The old `approvals.act` broadcast also reached
+      // Management / Department Heads, whose [✅ Approve] always failed the
+      // step-role check with a 403 and destroyed their copy of the card.
+      const approverIds = await this.workflow.approverUserIds(requestId);
       const approvers = await this.prisma.user.findMany({
         where: { id: { in: approverIds }, status: 'ACTIVE', telegramChatId: { not: null } },
         select: { telegramChatId: true },
@@ -477,6 +482,17 @@ export class TelegramCarActionsService {
     const user = await this.boundUser(chatId);
     if (!user) {
       await this.telegram.answer(callbackId, 'Not authorized');
+      return;
+    }
+    // SAME gate as the web UI's PATCH /cars/requests/:id/admin-shift
+    // (@RequirePermissions(cars.assign) — CarPanel's "Administration — plan
+    // change" block is canAssign-only). The callback itself carries no
+    // credentials, so a bound chat WITHOUT the permission (stale/shared cards,
+    // a future wider card audience) must never be able to move a live trip
+    // window — before this check any bound chat could shift any pending request.
+    const perms = await this.permissions.forUser(user.id);
+    if (!perms.includes('cars.assign')) {
+      await this.telegram.answer(callbackId, '⛔ You need the car-assignment permission (cars.assign) to shift the time');
       return;
     }
     const doc = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { docNumber: true, status: true } });

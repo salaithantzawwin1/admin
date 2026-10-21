@@ -68,6 +68,9 @@ const prisma: any = {
       docs.filter((d) => d.docType === 'CAR_REQUEST' && d.status === 'APPROVED' && d.carRequest?.vehicleId === null),
   },
   driverAbsence: { findMany: async () => [] }, // no planned absences in the base fixture
+  // no Administration block windows in the base fixture (offerAssignVehicle/assign
+  // query these on every pick)
+  vehicleUnavailability: { findMany: async () => [], findFirst: async () => null },
   carRequest: { findMany: async () => [], findUnique: async () => null }, // no busy vehicles in-window; null endDate → expired-window pre-check skips
   vehicle: {
     findMany: async ({ where, take }: any) => {
@@ -96,6 +99,9 @@ const workflow: any = {
     if (d) d.status = 'REJECTED';
     rejectComments.push({ rid, comment });
   },
+  // approval-card audience = WorkflowService.approverUserIds (step role +
+  // SYSTEM_ADMIN + delegates, minus requester — unit-tested in cars-fixes.test.ts)
+  approverUserIds: async () => ['u1'],
 }; // enough of WorkflowService for the approve-stamp + reject paths
 const assignCalls: Array<{ requestId: string; payload: any; actor: any }> = [];
 const cars: any = {
@@ -388,7 +394,7 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
 
   // ---------------------------------------------------------- reject flow (❌ button + reason conversation)
   // approver roster for offerApprovalButtons: our bound admin chat
-  (prisma.userRole as any).findMany = async () => [{ user: { telegramChatId: CHAT_OK } }];
+  (prisma as any).user.findMany = async () => USERS.filter((u) => u.telegramChatId === CHAT_OK).map((u) => ({ telegramChatId: u.telegramChatId }));
   apiLog.length = 0;
 
   // 20. the approval mirror now carries a Reject button
@@ -575,7 +581,9 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
       requestDocument: { findUnique: async () => ({ id: 'rB', docNumber: 'CAR-202609-0051', status: 'APPROVED', requesterId: 'rqB', carRequest: { id: 'crB', requestId: 'rB', startDate: new Date(), endDate: new Date(), assignment: null } }), update: async () => undefined },
       vehicle: { findUnique: async () => ({ id: 'v1', vehicleNo: 'YC-1234', brandModel: 'Toyota Hiace', status: 'AVAILABLE' }), update: async () => undefined },
       driverAbsence: { findFirst: async () => null },
-      driver: { update: async () => undefined },
+      // assign() refuses vehicles blocked by an Administration unavailability window
+      vehicleUnavailability: { findFirst: async () => null },
+      driver: { update: async () => undefined, findUnique: async () => ({ name: 'Shared Driver' }) },
       carRequest: { findFirst: async () => ({ requestId: 'rA', sharedTripId: GROUP }), findUnique: async () => ({ sharedTripId: GROUP }), update: async () => undefined, findMany: async () => [] },
       carAssignment: { upsert: async () => ({ id: 'aB', requestId: 'rB' }), findUnique: async () => ({ id: 'aB' }), findMany: async () => [] },
       $transaction: async (fn: any) => fn({

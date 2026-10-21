@@ -181,6 +181,41 @@ export class WorkflowService {
     await this.notifications.notifyMany([...new Set(userIds)], { type, title, body, link: `/requests/${requestId}`, requestId });
   }
 
+  /**
+   * Users who could act on this request RIGHT NOW — the same authority
+   * approve()/reject() enforce: holders of the current workflow step's role,
+   * SYSTEM_ADMIN (the superuser bypass in approve()), and active delegates of
+   * those holders (the delegation branch in approve()). The requester is
+   * excluded — separation of duties, they can never act on their own request.
+   *
+   * Used by the Telegram approval-card fan-out so the [✅ Approve] / [❌ Reject]
+   * buttons only reach people whose tap can actually succeed. (The old
+   * `approvals.act` broadcast also reached Management / Department Heads, whose
+   * tap always failed the step-role check with a 403.)
+   */
+  async approverUserIds(requestId: string): Promise<string[]> {
+    const request = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      select: { docType: true, currentLevel: true, requesterId: true },
+    });
+    if (!request) return [];
+    const workflow = await this.workflowFor(request.docType as string, await this.amountFor(requestId, request.docType as string));
+    const step = workflow?.steps.find((s) => s.level === request.currentLevel);
+    if (!step) return [];
+    const holders = await this.prisma.userRole.findMany({
+      where: { role: { name: { in: [step.roleName, 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
+      select: { userId: true },
+    });
+    const holderIds = holders.map((h) => h.userId);
+    const delegates = holderIds.length
+      ? await this.prisma.approvalDelegation.findMany({
+          where: { status: 'ACTIVE', startAt: { lte: new Date() }, endAt: { gte: new Date() }, fromUserId: { in: holderIds } },
+          select: { toUserId: true },
+        })
+      : [];
+    return [...new Set([...holderIds, ...delegates.map((d) => d.toUserId)])].filter((id) => id !== request.requesterId);
+  }
+
   // ---------- CRUD ----------
 
   async create(data: { title: string; description?: string; docType?: string }, actor: Actor) {

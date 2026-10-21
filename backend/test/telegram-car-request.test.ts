@@ -81,6 +81,9 @@ const workflow: any = {
     cancelled.push({ id, via: 'cancelApproved', actor });
   },
   onSubmittedTelegram: () => undefined,
+  // approval-card audience — the REAL service resolves the step role + SYSTEM_ADMIN
+  // + delegates (WorkflowService.approverUserIds, unit-tested in cars-fixes.test.ts)
+  approverUserIds: async () => ['u2'],
 };
 const cancelled: Array<{ id: string; via: string; actor: any }> = [];
 const approvedIds: string[] = [];
@@ -92,7 +95,9 @@ const carRows: Record<string, { startDate: Date; endDate: Date }> = {
 const apiLog: Array<{ method: string; payload: any }> = [];
 const audit: any = { log: async () => ({}) };
 const permissions: any = {
-  forUser: async () => ['requests.create'],
+  // u1 (the bound CHAT user) holds cars.assign like a real Administration user —
+  // the Telegram time-shift now carries the same gate as the web endpoint
+  forUser: async (userId: string) => (userId === 'u1' ? ['requests.create', 'cars.assign'] : ['requests.create']),
   usersWithPermissions: async () => ['u2'],
 };
 
@@ -744,8 +749,12 @@ async function approvalCardTests() {
       passengers: 3,
     },
   });
-  permissions.usersWithPermissions = async () => ['u2'];
-  prisma.user.findMany = async () => [{ telegramChatId: 'admin-chat' }];
+  workflow.approverUserIds = async () => ['u2'];
+  // the roster lookup must honour the where-filter (id in roster ∩ bound chats),
+  // otherwise an empty approverUserIds would still "send" a card in the mock
+  const boundRoster: Record<string, { telegramChatId: string }> = { u2: { telegramChatId: 'admin-chat' } };
+  prisma.user.findMany = async ({ where }: any) =>
+    (where?.id?.in ?? Object.keys(boundRoster)).map((id: string) => boundRoster[id]).filter(Boolean);
   apiLog.length = 0;
   await svc.offerApprovalButtons('req-appr');
   const card = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
@@ -755,6 +764,14 @@ async function approvalCardTests() {
   check(card.includes('Chan Yin Factory'), 'approval card shows the pickup point');
   check(card.includes('👥 3'), 'approval card shows the passenger count');
   check(card.includes('Return trip — pickup from Chan Yin Factory'), 'approval card shows the purpose/notes line');
+
+  // 23a. audience — the roster comes from WorkflowService.approverUserIds (step
+  // role + SYSTEM_ADMIN + delegates, requester excluded). Empty roster ⇒ NO card.
+  workflow.approverUserIds = async () => [];
+  apiLog.length = 0;
+  await svc.offerApprovalButtons('req-appr');
+  check(apiLog.filter((l) => l.method === 'sendMessage').length === 0, 'nobody can act on the request → no approval card is broadcast');
+  workflow.approverUserIds = async () => ['u2'];
 
   // 23b. Special Request — requester instructions must reach the approver card
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
@@ -784,7 +801,7 @@ async function approvalCardTests() {
     status: 'PENDING_APPROVAL',
     requesterId: 'u1',
   });
-  permissions.usersWithPermissions = async () => ['u2'];
+  workflow.approverUserIds = async () => ['u2'];
   prisma.user.findMany = async () => [];
 
   // 23b. [＋30 မိနစ်]/[＋1 နာရီ] on the approval card — two-tap shift
@@ -815,6 +832,18 @@ async function approvalCardTests() {
   const asCard = apiLog.filter((l) => l.method === 'editMessageText').map((l) => String(l.payload?.text ?? '')).join('\n');
   check(asCard.includes('+30 min'), 'approval card repaints with the new window');
   check(asCard.includes('wfa:approve') || JSON.stringify(apiLog.map((l) => l.payload?.reply_markup ?? [])).includes('wfa:approve'), 'Approve button still present after the shift');
+
+  // 23b1. shift guard — a bound chat WITHOUT cars.assign is refused, exactly like
+  // the web endpoint (@RequirePermissions(cars.assign) on /admin-shift)
+  const realFindFirst = prisma.user.findFirst;
+  prisma.user.findFirst = async () => ({ id: 'u-noperm', username: 'noperm', fullName: 'No Perm' });
+  apiLog.length = 0;
+  await tap('wfa:ashift:req-appr-shift:30', 'cb-as-np-1');
+  await tap('wfa:ashift:req-appr-shift:30', 'cb-as-np-2');
+  check(shifted.length === 1, 'chat without cars.assign never reaches adminShiftTime');
+  check(apiLog.some((l) => l.method === 'answerCallbackQuery' && String(l.payload?.text ?? '').includes('car-assignment permission')), 'shift tap without cars.assign → permission toast');
+  prisma.user.findFirst = realFindFirst;
+
   // restore generic mocks
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
     id: where.id,
