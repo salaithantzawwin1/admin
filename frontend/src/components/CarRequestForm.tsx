@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { fmtDateTime } from '../util/yangonTime';
 import { Button, Input, Select, Textarea } from './ui';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const EMPTY = {
   destination: '', purpose: '', startDate: '', endDate: '',
@@ -51,6 +52,9 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
   // hand-back buffer (minutes) — "likely free from ~end+buffer" on the clash hint
   const [bufferMin, setBufferMin] = useState<number | null>(null);
   const [forceSubmit, setForceSubmit] = useState(false);
+  // ⌛ backdated trip window → one-shot confirm before creating (same guard
+  // philosophy as the approve/assign "Trip window already ended" dialogs)
+  const [confirmPast, setConfirmPast] = useState<{ start: string; end: string } | null>(null);
   // blur-tracking so "required" hints only appear once the user has been in the field
   const [touched, setTouched] = useState<{ destination?: boolean; startDate?: boolean; endDate?: boolean }>({});
   const touch = (k: 'destination' | 'startDate' | 'endDate') => setTouched((t) => ({ ...t, [k]: true }));
@@ -156,7 +160,7 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.startDate, form.endDate, form.timeSlot, valid]);
 
-  const submit = async () => {
+  const doSubmit = async () => {
     setError('');
     setBusy(true);
     try {
@@ -185,6 +189,17 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
       setError(e instanceof Error ? e.message : 'Failed');
       setBusy(false);
     }
+  };
+
+  // ⌛ Submit gate: the effective window (End, or the server-side 17:00 same-day
+  // default) has already passed — warn first; retroactive claims still allowed.
+  const submit = async () => {
+    const endLocal = form.endDate || `${form.startDate.slice(0, 10)}T17:00`;
+    if (new Date(endLocal).getTime() < Date.now()) {
+      setConfirmPast({ start: form.startDate, end: endLocal });
+      return;
+    }
+    await doSubmit();
   };
 
   const hasClash = clashes.length > 0 && !forceSubmit;
@@ -317,6 +332,25 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
             Submit anyway
           </button>
         </div>
+      )}
+
+      {confirmPast && (
+        <ConfirmDialog
+          title="Trip window already ended"
+          description={
+            <>
+              The trip window <b>{fmtDateTime(new Date(confirmPast.start))} → {fmtDateTime(new Date(confirmPast.end))}</b>{' '}
+              is already in the past. Submit anyway only if the ride really happened (retroactive claim for the
+              record) — otherwise fix the dates first.
+            </>
+          }
+          confirmLabel="Submit anyway"
+          onConfirm={async () => {
+            setConfirmPast(null);
+            await doSubmit();
+          }}
+          onClose={() => setConfirmPast(null)}
+        />
       )}
 
       <Button onClick={submit} disabled={!valid || busy}>
