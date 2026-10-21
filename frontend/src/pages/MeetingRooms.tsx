@@ -77,13 +77,13 @@ interface FacilityRow {
   roomCount?: number; // rooms using this facility (backend computes)
 }
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
+const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
   DRAFT: 'gray',
   PENDING_APPROVAL: 'yellow',
   APPROVED: 'green',
   REJECTED: 'red',
   IN_PROGRESS: 'blue',
-  COMPLETED: 'green',
+  COMPLETED: 'teal',
   CLOSED: 'gray',
   CANCELLED: 'gray',
 };

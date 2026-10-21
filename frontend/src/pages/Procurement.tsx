@@ -46,14 +46,14 @@ interface PrRow {
   } | null;
 }
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
+const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange' | 'teal'> = {
   DRAFT: 'gray',
   PENDING_APPROVAL: 'yellow',
   SUBMITTED: 'yellow',
   APPROVED: 'green',
   REJECTED: 'red',
   CANCELLED: 'gray',
-  COMPLETED: 'green',
+  COMPLETED: 'teal',
   CLOSED: 'gray',
   ON_HOLD: 'orange',
   IN_PROGRESS: 'blue',

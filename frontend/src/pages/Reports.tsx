@@ -73,7 +73,7 @@ interface BudgetRow {
 
 const fmtMoney = (n: number | null | undefined) => (n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
+const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange' | 'teal'> = {
   DRAFT: 'gray',
   SUBMITTED: 'yellow',
   PENDING_APPROVAL: 'yellow',
@@ -87,7 +87,7 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   CLOSED: 'gray',
   CANCELLED: 'gray',
   POSTED: 'green',
-  COMPLETED: 'green',
+  COMPLETED: 'teal',
 };
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

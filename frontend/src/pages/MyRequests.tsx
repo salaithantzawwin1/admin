@@ -21,13 +21,14 @@ interface RequestRow {
   _count?: { attachments: number };
 }
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
+const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
   DRAFT: 'gray',
   PENDING_APPROVAL: 'yellow',
   APPROVED: 'green',
+  IN_PROGRESS: 'blue', // assigned / on the road — was missing, so it fell back to gray
   REJECTED: 'red',
   CANCELLED: 'gray',
-  COMPLETED: 'green',
+  COMPLETED: 'teal', // teal ≠ APPROVED green — finished and approved are visually distinct
   CLOSED: 'gray',
 };
 

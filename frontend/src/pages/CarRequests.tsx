@@ -333,6 +333,7 @@ export default function CarRequests() {
                     : r.status === 'REJECTED' ? 'bg-red-100 text-red-700'
                     : r.status === 'PENDING_APPROVAL' ? 'bg-yellow-100 text-yellow-700'
                     : r.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700'
+                    : r.status === 'COMPLETED' ? 'bg-teal-100 text-teal-700'
                     : 'bg-gray-100 text-gray-600'
                   }`}>{r.status}</span>
                   {r.status === 'IN_PROGRESS' && r.carRequest?.assignment && (

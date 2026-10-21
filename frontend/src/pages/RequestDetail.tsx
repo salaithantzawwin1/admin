@@ -8,7 +8,7 @@ import { PurchaseRequestPanel } from '../components/PurchaseRequestPanel';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDateTime } from '../util/yangonTime';
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
+const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
   DRAFT: 'gray',
   SUBMITTED: 'yellow',
   PENDING_APPROVAL: 'yellow',
@@ -17,7 +17,7 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   CANCELLED: 'gray',
   ON_HOLD: 'yellow',
   IN_PROGRESS: 'blue',
-  COMPLETED: 'green',
+  COMPLETED: 'teal', // distinct from APPROVED green
   CLOSED: 'gray',
 };
 

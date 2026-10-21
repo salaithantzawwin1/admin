@@ -83,13 +83,13 @@ interface Txn {
 
 const ITEM_CATEGORIES = ['STATIONERY', 'BOOKS', 'PAPER', 'ELECTRONICS', 'CLEANING', 'KITCHEN', 'FURNITURE', 'IT_SUPPLIES', 'OTHER'];
 
-const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'> = {
+const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
   PENDING: 'yellow',
   APPROVED: 'green',
   REJECTED: 'red',
   FULFILLED: 'green',
   PARTIAL: 'blue',
-  COMPLETED: 'green',
+  COMPLETED: 'teal',
   CANCELLED: 'gray',
 };
 
