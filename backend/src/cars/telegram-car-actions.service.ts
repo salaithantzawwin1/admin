@@ -321,7 +321,13 @@ export class TelegramCarActionsService {
       const dest = `\n🗺 ${cr.destination}${cr.pickupLocation ? ` (Pickup: ${cr.pickupLocation})` : ''}${cr.passengers ? ` · 👥 ${cr.passengers}` : ''}`;
       const why = request.description ? `\n📝 ${escapeHtml(request.description)}` : '';
       const special = cr.specialRequest ? `\n⭐ Special: ${escapeHtml(cr.specialRequest)}` : '';
-      const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${dest}${special}${why}`;
+      // ⌛ decision-time warning: the trip window is already in the past — approving
+      // a dead window only makes sense for rides that actually happened, otherwise
+      // the request should be rejected/cancelled (stale windows auto-expire >24h)
+      const pastWarn = new Date(cr.endDate).getTime() < Date.now()
+        ? '\n⌛ <b>Window already passed</b> — approve only if this trip still happened; otherwise reject it (stale windows auto-expire after 24h).'
+        : '';
+      const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${pastWarn}${dest}${special}${why}`;
       for (const a of approvers) {
         if (!a.telegramChatId) continue;
         await this.telegram.sendRaw(a.telegramChatId, text, {
@@ -710,19 +716,24 @@ export class TelegramCarActionsService {
       select: { id: true, vehicleNo: true, brandModel: true },
     });
     const when = `\n📅 ${yangonShort(new Date(cr.startDate))} → ${yangonShort(new Date(cr.endDate))}`;
+    // ⌛ assigning a trip whose window already ended (same warning the web panel
+    // shows before its Assign button) — keep it visible at the decision point
+    const pastWarn = new Date(cr.endDate).getTime() < Date.now()
+      ? '\n⌛ <b>Window already passed</b> — you are assigning a trip that has already ended.'
+      : '';
     const special = cr.specialRequest ? `\n⭐ Special: ${escapeHtml(cr.specialRequest)}` : '';
     const dest = cr.destination ? `\n🗺 ${escapeHtml(cr.destination)}` : '';
     const who = `\n👤 ${escapeHtml(request.requester.fullName)}`;
     if (vehicles.length === 0) {
       await this.telegram.sendRaw(
         chatId,
-        `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${special}\n\n⚠️ No AVAILABLE vehicles for this window right now — free one up or retry later with <b>/assign ${escapeHtml(request.docNumber)}</b>`,
+        `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${pastWarn}${special}\n\n⚠️ No AVAILABLE vehicles for this window right now — free one up or retry later with <b>/assign ${escapeHtml(request.docNumber)}</b>`,
       );
       return;
     }
     await this.telegram.sendRaw(
       chatId,
-      `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${special}`,
+      `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${pastWarn}${special}`,
       {
         reply_markup: {
           inline_keyboard: vehicles.map((v) => [{ text: `${v.vehicleNo} — ${v.brandModel}`, callback_data: `wfa:pv:${this.newToken({ requestId: request.id, vehicleId: v.id })}` }]),

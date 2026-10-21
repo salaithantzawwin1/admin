@@ -94,6 +94,9 @@ export function CarPanel({
   // in-app dialogs (replace browser confirm/prompt)
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmShift, setConfirmShift] = useState(false);
+  // ⌛ past-window guard: assigning a trip whose window already ended gets an
+  // explicit warning (approval/assign of stale windows is allowed but must be deliberate)
+  const [confirmAssign, setConfirmAssign] = useState(false);
   // change vehicle/driver of a live assignment (fleet plan change)
   const [reassignForm, setReassignForm] = useState({ vehicleId: '', driverId: '' });
   const [confirmReassign, setConfirmReassign] = useState(false);
@@ -423,7 +426,15 @@ export function CarPanel({
             </Select>
             <Button
               disabled={!assignForm.vehicleId}
-              onClick={() => act(() => api(`/cars/requests/${requestId}/assign`, { method: 'POST', body: { ...assignForm, share, driverId: assignForm.driverId || undefined } }))}
+              onClick={() => {
+                // ⌛ window already ended → warn first (the ride must have happened,
+                // otherwise the request should be cancelled/expired, not assigned)
+                if (tripEnd.getTime() < Date.now()) {
+                  setConfirmAssign(true);
+                  return;
+                }
+                void act(() => api(`/cars/requests/${requestId}/assign`, { method: 'POST', body: { ...assignForm, share, driverId: assignForm.driverId || undefined } }));
+              }}
             >
               Assign
             </Button>
@@ -443,6 +454,25 @@ export function CarPanel({
         </div>
         );
       })()}
+
+      {confirmAssign && (
+        <ConfirmDialog
+          title="Trip window already ended"
+          description={
+            <>
+              The trip window <b>{fmtDateTime(tripStart)} → {fmtDateTime(tripEnd)}</b> is already in the past.
+              Assign anyway only if the ride really happened (or will still happen as planned) — otherwise cancel it
+              or let the24-hour auto-expire close it.
+            </>
+          }
+          confirmLabel="Assign anyway"
+          onConfirm={async () => {
+            const ok = await act(() => api(`/cars/requests/${requestId}/assign`, { method: 'POST', body: { ...assignForm, share, driverId: assignForm.driverId || undefined } }));
+            if (ok) setConfirmAssign(false);
+          }}
+          onClose={() => setConfirmAssign(false)}
+        />
+      )}
 
       {canReassign && (() => {
         // tripStart/tripEnd/busyDrivers come from the unconditional top-level hook call

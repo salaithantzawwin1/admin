@@ -764,6 +764,7 @@ async function approvalCardTests() {
   check(card.includes('Chan Yin Factory'), 'approval card shows the pickup point');
   check(card.includes('👥 3'), 'approval card shows the passenger count');
   check(card.includes('Return trip — pickup from Chan Yin Factory'), 'approval card shows the purpose/notes line');
+  check(card.includes('Window already passed'), 'past-window approval card carries the ⌛ warning');
 
   // 23a. audience — the roster comes from WorkflowService.approverUserIds (step
   // role + SYSTEM_ADMIN + delegates, requester excluded). Empty roster ⇒ NO card.
@@ -793,6 +794,26 @@ async function approvalCardTests() {
   await svc.offerApprovalButtons('req-appr-special');
   const cardSpecial = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
   check(cardSpecial.includes('⭐ Special: စောင့်ပြီးခေါ်ပါ'), 'approval card carries the requester\'s special request verbatim');
+
+  // future window → the card must NOT warn (only dead windows do)
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: 'CAR-202609-0012',
+    title: 'Car to Head Office',
+    requester: { fullName: 'Salai Thant Zaw Win' },
+    requesterId: 'u1',
+    status: 'PENDING_APPROVAL',
+    carRequest: {
+      destination: 'Head Office',
+      startDate: new Date(Date.now() + 2 * 24 * 3600 * 1000),
+      endDate: new Date(Date.now() + 2 * 24 * 3600 * 1000 + 3600 * 1000),
+      passengers: 2,
+    },
+  });
+  apiLog.length = 0;
+  await svc.offerApprovalButtons('req-appr-future');
+  const cardFuture = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
+  check(cardFuture.includes('CAR-202609-0012') && !cardFuture.includes('Window already passed'), 'future-window approval card carries NO past-window warning');
 
   // restore
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
@@ -852,6 +873,40 @@ async function approvalCardTests() {
     requesterId: 'u1',
   });
   delete (svc as any).cars.adminShiftTime;
+
+  // 23d. ⌛ the assign picker warns on a dead window too (same rule as the web panel)
+  const prevCarFindMany = (prisma.carRequest as any).findMany;
+  (prisma.carRequest as any).findMany = async () => [];
+  prisma.vehicle = { findMany: async () => [{ id: 'v1', vehicleNo: 'YC-1', brandModel: 'Hiace' }] };
+  prisma.vehicleUnavailability = { findMany: async () => [] };
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: 'CAR-PAST-1',
+    status: 'APPROVED',
+    requester: { fullName: 'Salai Thant Zaw Win' },
+    carRequest: {
+      destination: 'Old trip',
+      startDate: new Date(Date.now() - 2 * 3600 * 1000),
+      endDate: new Date(Date.now() - 3600 * 1000),
+      specialRequest: null,
+      assignment: null,
+    },
+  });
+  apiLog.length = 0;
+  await (svc as any).offerAssignVehicle('req-past-pick', CHAT);
+  const pastPick = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
+  check(pastPick.includes('Assign a vehicle — CAR-PAST-1') && pastPick.includes('Window already passed'), 'past-window assign picker carries the ⌛ warning');
+  // restore
+  if (prevCarFindMany) (prisma.carRequest as any).findMany = prevCarFindMany;
+  else delete (prisma.carRequest as any).findMany;
+  delete prisma.vehicle;
+  delete prisma.vehicleUnavailability;
+  prisma.requestDocument.findUnique = async ({ where }: any) => ({
+    id: where.id,
+    docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,
+    status: 'PENDING_APPROVAL',
+    requesterId: 'u1',
+  });
 
   // 23c. /help card
   apiLog.length = 0;

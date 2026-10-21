@@ -6,6 +6,7 @@ import { CarPanel } from '../components/CarPanel';
 import { MeetingRoomPanel } from '../components/MeetingRoomPanel';
 import { PurchaseRequestPanel } from '../components/PurchaseRequestPanel';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { fmtDateTime } from '../util/yangonTime';
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
@@ -53,6 +54,9 @@ export default function RequestDetail() {
   const [file, setFile] = useState<File | null>(null);
   // §9 budget block — friendly explain modal instead of a raw 409 message
   const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
+  // ⌛ past-window guard: approving a car request whose trip window already ended
+  // gets an explicit warning first (allowed, but must be deliberate)
+  const [confirmPastApprove, setConfirmPastApprove] = useState<{ start: string; end: string } | null>(null);
 
   const load = useCallback(() => {
     if (!id) return;
@@ -69,12 +73,24 @@ export default function RequestDetail() {
     return () => clearInterval(t);
   }, [load]);
 
-  const act = async (action: 'submit' | 'approve' | 'reject' | 'return') => {
+  const act = async (action: 'submit' | 'approve' | 'reject' | 'return', force = false) => {
     setError('');
     // a comment is mandatory when rejecting — surface it without a server round-trip
     if (action === 'reject' && !comment.trim()) {
       setError('A comment is required to reject — please type a comment first.');
       return;
+    }
+    // ⌛ car requests: warn before approving a window that already ended (warn, not block)
+    if (action === 'approve' && !force && detail?.docType === 'CAR_REQUEST') {
+      try {
+        const car = await api<{ startDate?: string; endDate?: string } | null>(`/cars/requests/${id}`);
+        if (car?.endDate && new Date(car.endDate).getTime() < Date.now()) {
+          setConfirmPastApprove({ start: car.startDate ?? car.endDate, end: car.endDate });
+          return;
+        }
+      } catch {
+        // no car row / no access — fall through and approve exactly as before
+      }
     }
     try {
       await api(`/requests/${id}/${action}`, { method: 'POST', body: { comment: comment || undefined } });
@@ -127,6 +143,24 @@ export default function RequestDetail() {
         subtitle={detail.title}
       />
       {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
+      {confirmPastApprove && (
+        <ConfirmDialog
+          title="Trip window already ended"
+          description={
+            <>
+              The trip window <b>{fmtDateTime(new Date(confirmPastApprove.start))} → {fmtDateTime(new Date(confirmPastApprove.end))}</b>{' '}
+              has already passed. Approve anyway only if the ride really happened — otherwise reject it; stale
+              requests are auto-expired after24 hours anyway.
+            </>
+          }
+          confirmLabel="Approve anyway"
+          onConfirm={async () => {
+            setConfirmPastApprove(null);
+            await act('approve', true);
+          }}
+          onClose={() => setConfirmPastApprove(null)}
+        />
+      )}
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
