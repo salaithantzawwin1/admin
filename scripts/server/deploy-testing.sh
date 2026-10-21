@@ -8,8 +8,10 @@
 #   1. pulls the latest code first — a stale checkout silently re-deploys old
 #      bugs (this is how the CarPanel React #310 crash survived a "deploy")
 #   2. rebuilds both images
-#   3. verifies the served frontend bundle hash actually CHANGED when new code
-#      was pulled — fails loudly instead of "deploying" nothing
+#   3. stamps both images with the checkout commit (BUILD_COMMIT) and asserts
+#      the running containers carry it — a stale image fails loudly instead of
+#      silently shipping older code (the bundle-hash heuristic was dropped in
+#      favour of this provenance check)
 #
 # Usage:
 #   bash scripts/server/deploy-testing.sh
@@ -45,27 +47,7 @@ sleep 6
 curl -fsS "$UI_URL/api/health" && echo
 $COMPOSE ps
 
-echo "== 4. Frontend bundle freshness check =="
-SERVED="$(curl -fsS "$UI_URL/" | grep -o 'index-[^"]*\.js' | head -1 || true)"
-[ -n "$SERVED" ] || { echo "ERROR: could not read the served bundle name from $UI_URL/"; exit 1; }
-echo "   served bundle: $SERVED"
-if [ "$OLD_HEAD" != "$NEW_HEAD" ]; then
-  BEFORE="$(git log -1 --format=%H "$OLD_HEAD" -- frontend | head -1)"
-  AFTER="$(git log -1 --format=%H "$NEW_HEAD" -- frontend | head -1)"
-  if [ "$BEFORE" != "$AFTER" ] && [ -f "frontend/dist/$SERVED" ]; then
-    echo "   (frontend changed this pull — hash above should differ from the previous deploy)"
-  fi
-fi
-# catches the stale-image trap: same bundle after a frontend-code change means build cache lied
-if git diff --quiet "$OLD_HEAD" "$NEW_HEAD" -- frontend 2>/dev/null; then
-  echo "   frontend unchanged in this pull — hash staying the same is expected"
-else
-  echo "   NOTE: frontend code changed in this pull — if the hash equals the previous"
-  echo "         deploy's hash, the image did NOT rebuild (run with DOCKER_BUILDKIT=0 or --no-cache)"
-fi
-
-echo
-echo "== 5. Build provenance (stale-image guard) =="
+echo "== 4. Build provenance (stale-image guard) =="
 BACK_STAMP="$($COMPOSE exec -T backend cat /app/dist/BUILD_COMMIT 2>/dev/null || echo MISSING)"
 FRONT_STAMP="$($COMPOSE exec -T frontend cat /BUILD_COMMIT 2>/dev/null || echo MISSING)"
 echo "   checkout: $NEW_HEAD   backend image: $BACK_STAMP   frontend image: $FRONT_STAMP"
