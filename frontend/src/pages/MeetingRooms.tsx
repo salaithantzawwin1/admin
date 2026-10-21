@@ -110,6 +110,8 @@ export default function MeetingRooms() {
   const [error, setError] = useState('');
   const [modalError, setModalError] = useState(''); // submit errors show inside the dialog, not on the page
   const [busy, setBusy] = useState(false);
+  // ⏰ backdated-submit warning: open this when the chosen booking window already ended
+  const [confirmPast, setConfirmPast] = useState<{ start: string; end: string } | null>(null);
   const canAssign = hasPermission('meeting-rooms.assign');
 
   const [form, setForm] = useState({
@@ -213,7 +215,18 @@ export default function MeetingRooms() {
     setForm((f) => ({ ...f, startTime: slot.startLocal, endTime: slot.endLocal }));
   };
 
+  // ⏰ Warn before submitting a booking whose window is already over — the same
+  // "already ended" dialog as car requests. Past bookings are deliberate
+  // backdating (allowed, like past start dates), so this confirms, never blocks.
   const submit = async () => {
+    if (new Date(form.endTime).getTime() < Date.now()) {
+      setConfirmPast({ start: form.startTime, end: form.endTime });
+      return;
+    }
+    await doSubmit();
+  };
+
+  const doSubmit = async () => {
     setBusy(true);
     setError('');
     setFormError('');
@@ -871,6 +884,25 @@ export default function MeetingRooms() {
             />
           )}
         </>
+      )}
+      {/* ⏰ backdated-submit confirmation (submit()'s guard opens this for past windows) */}
+      {confirmPast && (
+        <ConfirmDialog
+          title="Booking window already ended"
+          description={
+            <>
+              This slot ({fmtDateTime(confirmPast.start)} → {fmtDateTime(confirmPast.end)}) is already in
+              the past — submitting records a retroactive booking for a meeting that already happened,
+              not a future reservation. Submit anyway?
+            </>
+          }
+          confirmLabel="Submit anyway"
+          onConfirm={async () => {
+            await doSubmit();
+            setConfirmPast(null);
+          }}
+          onClose={() => setConfirmPast(null)}
+        />
       )}
     </div>
   );
