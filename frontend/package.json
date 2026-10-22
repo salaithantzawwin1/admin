@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../scripts/dev/build-npm-guard.cjs build",
+    "build": "node build.cjs",
     "typecheck": "tsc -b",
     "preview": "vite preview"
   },

@@ -12,7 +12,9 @@
  *   3. chooseBuildCwd() builds in-place for a drive-letter cwd when Y: is
  *      missing (Docker/CI/local shells).
  *   4. The fail-fast message tells the user the exact remediation command.
- *   5. build-npm-guard.cjs forwards `build` and both files pass node --check.
+ *   5. frontend/package.json build -> build.cjs launcher, which delegates to
+ *      build-npm-guard.cjs when the repo layout exists (workstation) and runs
+ *      vite directly inside the Docker image where ../scripts is absent.
  */
 const assert = require('assert');
 const { spawnSync } = require('child_process');
@@ -82,11 +84,32 @@ check('both guard files pass node --check', () => {
   }
 });
 
-check('npm build script points at the guard', () => {
+check('npm build script points at the build.cjs launcher', () => {
   const pkg = require(path.join(__dirname, '..', '..', 'frontend', 'package.json'));
-  assert.ok(
-    pkg.scripts.build.includes('build-npm-guard.cjs'),
+  assert.strictEqual(
+    pkg.scripts.build,
+    'node build.cjs',
     `frontend build script is: ${pkg.scripts.build}`,
+  );
+});
+
+check('launcher delegates to the guard, vite-direct fallback for Docker', () => {
+  const launcher = require('fs').readFileSync(
+    path.join(__dirname, '..', '..', 'frontend', 'build.cjs'),
+    'utf8',
+  );
+  assert.ok(
+    launcher.includes('build-npm-guard.cjs'),
+    'launcher no longer references the UNC guard',
+  );
+  assert.ok(launcher.includes('vite'), 'launcher lost its vite fallback');
+  assert.strictEqual(
+    spawnSync(process.execPath, ['--check', 'build.cjs'], {
+      encoding: 'utf8',
+      cwd: path.join(__dirname, '..', '..', 'frontend'),
+    }).status,
+    0,
+    'frontend/build.cjs fails node --check',
   );
 });
 
