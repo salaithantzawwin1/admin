@@ -36,9 +36,12 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
  *
  * To re-grant a code later, delete its row here (and restart), or grant it
  * from the matrix — the matrix PATCH syncs this memory automatically.
+ *
+ * procurement.read was revoked the same way (2026-10-23, GLG requirement):
+ * FINANCE must not see supplier names in POs/RFQs/Invoices.
  */
 const DENIED_BY_ROLE: Record<string, string[]> = {
-  FINANCE: ['suppliers.read'],
+  FINANCE: ['suppliers.read', 'procurement.read'],
 };
 
 /**

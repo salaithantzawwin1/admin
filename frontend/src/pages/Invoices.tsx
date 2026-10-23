@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, hasPermission } from '../api';
+import { api, ApiError, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { fmtDate } from '../util/yangonTime';
@@ -113,6 +113,13 @@ const emptyLine = (): LineDraft => ({ description: '', quantity: '1', unit: '', 
 
 export default function Invoices() {
   const canManage = hasPermission('procurement.manage');
+  // mirrors the backend gate on GET /invoices (procurement.read | manage)
+  const canViewInvoices = hasPermission('procurement.read') || hasPermission('procurement.manage');
+  // a 403 on the list call means the server now enforces a revocation the
+  // stored session has not caught up with yet (stale tab) — lock card, not an
+  // empty "No invoices yet" table
+  const [listDenied, setListDenied] = useState(false);
+  const showInvoices = canViewInvoices && !listDenied;
   const [rows, setRows] = useState<Invoice[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -134,8 +141,10 @@ export default function Invoices() {
       const r = await api<{ items: Invoice[]; total: number }>(`/invoices?page=${page}&pageSize=${PAGE_SIZE}`);
       setRows(r.items);
       setTotal(r.total);
+      setListDenied(false);
     } catch (e) {
-      toast(e instanceof Error ? e.message : 'Could not load invoices', 'error');
+      if (e instanceof ApiError && e.status === 403) setListDenied(true);
+      else toast(e instanceof Error ? e.message : 'Could not load invoices', 'error');
     } finally {
       setLoading(false);
     }
@@ -191,6 +200,16 @@ export default function Invoices() {
         actions={canManage ? <Button onClick={() => setCreateOpen(true)}>+ New invoice</Button> : undefined}
       />
 
+      {/* procurement.read gate — mirrors the backend gates (see GET /invoices). */}
+      {!showInvoices && (
+        <Card className="mb-5 p-8 text-center">
+          <div className="text-3xl mb-2">🔒</div>
+          <p className="text-sm text-gray-700 font-medium">You do not have permission to view invoices.</p>
+          <p className="text-xs text-gray-400 mt-1">"View invoices" requires the Procurement permission, which was revoked from your role in the RBAC permission matrix.</p>
+        </Card>
+      )}
+
+      {showInvoices && (
       <Card>
         {loading ? (
           <Empty label="Loading…" />
@@ -249,6 +268,7 @@ export default function Invoices() {
           </div>
         )}
       </Card>
+      )}
 
       {createOpen && (
         <NewInvoiceModal

@@ -37,8 +37,13 @@ class CreateInvoiceDto {
 export class InvoicesController {
   constructor(private invoices: InvoicesService) {}
 
+  // The AP ledger carries supplier names + amounts, so the gate mirrors the
+  // sidebar exactly (procurement.read | procurement.manage). The inventory.read
+  // leg was the same bypass class as the /inventory/suppliers alias: every
+  // default role holds inventory.read, so revoking procurement.read for FINANCE
+  // in the matrix still leaked every invoice through this route.
   @Get()
-  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.PROCUREMENT_READ])
+  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   list(@Query('page') page = '1', @Query('pageSize') pageSize = '20', @Query('status') status?: string) {
     return this.invoices.list({ page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status });
   }
@@ -50,7 +55,7 @@ export class InvoicesController {
   }
 
   @Get(':id')
-  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.PROCUREMENT_READ])
+  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   detail(@Param('id') id: string) {
     return this.invoices.byId(id);
   }
