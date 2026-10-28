@@ -27,12 +27,21 @@ export class AssetDto {
 
 export class AssetUpdateDto {
   @IsOptional() @IsString() @MaxLength(160) name?: string;
-  @IsOptional() @IsString() categoryId?: string;
+  /**
+   * The Edit dialog always posts the row's existing code (every asset has one),
+   * so this must be ACCEPTED — under `forbidNonWhitelisted` the missing property
+   * made every single save fail with 400 "property assetCode should not exist".
+   * The service re-checks uniqueness when the code actually changes.
+   */
+  @IsOptional() @IsString() @MaxLength(32) assetCode?: string;
+  /** null clears the link; undefined leaves it unchanged (frontend sends null
+   *  for the "— none —" option). */
+  @IsOptional() @IsString() categoryId?: string | null;
   @IsOptional() @IsString() @MaxLength(120) brand?: string | null;
   @IsOptional() @IsString() @MaxLength(120) model?: string | null;
   @IsOptional() @IsString() @MaxLength(120) serialNumber?: string | null;
   @IsOptional() @IsString() @MaxLength(160) custodian?: string | null;
-  @IsOptional() @IsString() locationId?: string;
+  @IsOptional() @IsString() locationId?: string | null;
   @IsOptional() @IsDateString() purchaseDate?: string | null;
   /** null clears the cost; undefined leaves it unchanged. */
   @IsOptional() @IsNumber() @Min(0) purchaseCost?: number | null;

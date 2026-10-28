@@ -114,8 +114,8 @@ export class AssetsService {
    *  status transitions write DISPOSE/RESTORE/MAINTENANCE movements; a
    *  location change writes a TRANSFER movement automatically (§40). */
   async update(id: string, data: {
-    name?: string; categoryId?: string; brand?: string | null; model?: string | null;
-    serialNumber?: string | null; custodian?: string | null; locationId?: string;
+    name?: string; assetCode?: string; categoryId?: string | null; brand?: string | null; model?: string | null;
+    serialNumber?: string | null; custodian?: string | null; locationId?: string | null;
     purchaseDate?: string | null; purchaseCost?: number | null; description?: string | null; status?: string;
   }, actor: Actor) {
     const asset = await this.prisma.asset.findUnique({ where: { id } });
@@ -123,7 +123,14 @@ export class AssetsService {
     if (data.status && !ASSET_STATUSES.includes(data.status as never)) {
       throw new BadRequestException('Unknown asset status');
     }
-    await this.assertRefs(data.categoryId, data.locationId || undefined);
+    // editable asset code — the Edit dialog posts the row's own code, so only a
+    // genuinely CHANGED code is uniqueness-checked (same 409 wording as create)
+    const assetCode = data.assetCode?.trim();
+    if (assetCode && assetCode !== asset.assetCode) {
+      const taken = await this.prisma.asset.findUnique({ where: { assetCode } });
+      if (taken && taken.id !== id) throw new ConflictException(`Asset code "${assetCode}" already exists`);
+    }
+    await this.assertRefs(data.categoryId ?? undefined, data.locationId ?? undefined);
     if (data.purchaseCost != null && data.purchaseCost < 0) {
       throw new BadRequestException('Purchase cost must be non-negative');
     }
@@ -132,12 +139,15 @@ export class AssetsService {
       where: { id },
       data: {
         name: data.name?.trim() || asset.name,
-        categoryId: data.categoryId || asset.categoryId,
+        // code stays as-is when untouched/blank; a real change lands here
+        assetCode: assetCode || undefined,
+        // null clears the link ("— none —" in the form), undefined keeps it
+        categoryId: data.categoryId !== undefined ? (data.categoryId || null) : asset.categoryId,
         brand: data.brand !== undefined ? (data.brand?.trim() || null) : undefined,
         model: data.model !== undefined ? (data.model?.trim() || null) : undefined,
         serialNumber: data.serialNumber !== undefined ? (data.serialNumber?.trim() || null) : undefined,
         custodian: data.custodian !== undefined ? (data.custodian?.trim() || null) : undefined,
-        locationId: data.locationId || asset.locationId,
+        locationId: data.locationId !== undefined ? (data.locationId || null) : asset.locationId,
         purchaseDate: data.purchaseDate !== undefined ? (data.purchaseDate ? new Date(data.purchaseDate) : null) : undefined,
         purchaseCost: data.purchaseCost !== undefined ? data.purchaseCost : undefined,
         description: data.description !== undefined ? (data.description?.trim() || null) : undefined,
@@ -157,8 +167,8 @@ export class AssetsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ASSET_UPDATED', module: 'ASSETS', recordId: id,
-      oldValue: { status: asset.status, locationId: asset.locationId, name: asset.name },
-      newValue: { status: updated.status, locationId: updated.locationId, name: updated.name },
+      oldValue: { status: asset.status, locationId: asset.locationId, name: asset.name, assetCode: asset.assetCode },
+      newValue: { status: updated.status, locationId: updated.locationId, name: updated.name, assetCode: updated.assetCode },
     });
     return updated;
   }

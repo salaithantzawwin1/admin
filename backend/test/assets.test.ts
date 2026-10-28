@@ -254,6 +254,68 @@ async function main() {
     assert.strictEqual(rows.length, 1);
   });
 
+  console.log('\n== edit (PATCH) regression — "Edit does nothing" ==');
+
+  await test('DTO: the exact payload the Edit form posts is accepted (assetCode was rejected)', async () => {
+    const { validate } = require('class-validator');
+    const { plainToInstance } = require('class-transformer');
+    const { AssetUpdateDto } = require('../src/assets/assets.controller');
+    // verbatim body from frontend/src/pages/Assets.tsx submitForm() on Edit —
+    // main.ts runs ValidationPipe({ whitelist, forbidNonWhitelisted }), so any
+    // property missing from AssetUpdateDto answers 400 "should not exist" and
+    // the dialog silently failed to save
+    const payload = {
+      name: 'Dell OptiPlex 7090',
+      assetCode: 'AST-202610-0001',
+      categoryId: null,
+      brand: 'Dell', model: '', serialNumber: '', custodian: '',
+      locationId: null,
+      purchaseDate: '2026-01-05',
+      purchaseCost: 1500000,
+      description: '',
+      status: 'IN_STORAGE',
+    };
+    const errs = await validate(plainToInstance(AssetUpdateDto, payload), {
+      whitelist: true, forbidNonWhitelisted: true,
+    });
+    assert.strictEqual(
+      errs.length, 0,
+      `Edit payload must be accepted, rejected: ${errs.map((e: any) => `${e.property} ${JSON.stringify(e.constraints)}`).join('; ')}`,
+    );
+  });
+
+  await test('update: the row keeps its own code; a changed code applies; a taken code → 409', async () => {
+    const { svc, env } = makeSvc();
+    const a = await svc.create({ name: 'Laptop A', assetCode: 'AST-1' }, ACTOR);
+    const b = await svc.create({ name: 'Laptop B', assetCode: 'AST-2' }, ACTOR);
+    // the Edit form always posts the existing code — must be a no-op, not a 409
+    const same = await svc.update(a.id, { assetCode: 'AST-1', name: 'Laptop A v2' }, ACTOR);
+    assert.strictEqual(same.assetCode, 'AST-1');
+    assert.strictEqual(same.name, 'Laptop A v2');
+    // a real rename is honoured…
+    const renamed = await svc.update(a.id, { assetCode: 'AST-1-NEW' }, ACTOR);
+    assert.strictEqual(renamed.assetCode, 'AST-1-NEW');
+    // …but never onto another asset (same 409 wording as create)
+    await assert.rejects(() => svc.update(b.id, { assetCode: 'AST-1-NEW' }, ACTOR), /already exists/);
+    assert.strictEqual(env.assets.get(b.id).assetCode, 'AST-2', 'the losing row keeps its code');
+  });
+
+  await test('update: blank fields clear on edit, omitted fields stay untouched', async () => {
+    const { svc } = makeSvc();
+    const a = await svc.create({ name: 'Desk', categoryId: 'cat-1', locationId: 'loc-1', custodian: 'U Aung', description: 'old' }, ACTOR);
+    // null = "clear it" (what the form sends for "— none —" / emptied inputs)
+    const cleared = await svc.update(a.id, { custodian: null, categoryId: null, locationId: null, description: null }, ACTOR);
+    assert.strictEqual(cleared.custodian, null, 'custodian cleared');
+    assert.strictEqual(cleared.categoryId, null, 'category cleared');
+    assert.strictEqual(cleared.locationId, null, 'location cleared');
+    assert.strictEqual(cleared.description, null, 'description cleared');
+    // undefined = "leave it" (field absent from the payload)
+    const kept = await svc.update(a.id, { name: 'Desk 2' }, ACTOR);
+    assert.strictEqual(kept.name, 'Desk 2');
+    assert.strictEqual(kept.custodian, null, 'absent field must not resurrect a value');
+    assert.strictEqual(kept.categoryId, null);
+  });
+
   const summary = failures.length ? `\nFAILED (${failures.length}): ${failures.join(' | ')}` : `\n${passed} passed, 0 failed`;
   console.log(summary);
   process.exitCode = failures.length ? 1 : 0;

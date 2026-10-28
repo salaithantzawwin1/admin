@@ -45,6 +45,7 @@ const STATUS_COLORS: Record<string, 'green' | 'gray' | 'yellow' | 'red'> = {
 const emptyForm = {
   name: '', assetCode: '', categoryId: '', brand: '', model: '', serialNumber: '',
   custodian: '', locationId: '', purchaseDate: '', purchaseCost: '', description: '',
+  status: 'ACTIVE',
 };
 
 export default function Assets() {
@@ -111,40 +112,56 @@ export default function Assets() {
 
   const submitForm = async () => {
     if (!form) return;
+    setError(null);
+    // create: a blank field means "not set" (undefined → backend default).
+    // edit:  a blank field means "clear it" (null) — mapping '' to undefined
+    // made wiping a custodian/brand/category in the Edit dialog silently keep
+    // the old value, because the service reads undefined as "leave unchanged".
+    const blank = form.id ? null : undefined;
     const body: Record<string, unknown> = {
       name: form.name,
       assetCode: form.assetCode || undefined,
-      categoryId: form.categoryId || undefined,
-      brand: form.brand || undefined,
-      model: form.model || undefined,
-      serialNumber: form.serialNumber || undefined,
-      custodian: form.custodian || undefined,
-      locationId: form.locationId || undefined,
-      purchaseDate: form.purchaseDate || undefined,
-      purchaseCost: form.purchaseCost === '' ? undefined : Number(form.purchaseCost),
-      description: form.description || undefined,
+      categoryId: form.categoryId || blank,
+      brand: form.brand || blank,
+      model: form.model || blank,
+      serialNumber: form.serialNumber || blank,
+      custodian: form.custodian || blank,
+      locationId: form.locationId || blank,
+      purchaseDate: form.purchaseDate || blank,
+      purchaseCost: form.purchaseCost === '' ? blank : Number(form.purchaseCost),
+      description: form.description || blank,
+      // status is editable only on an existing row (create always starts ACTIVE)
+      ...(form.id ? { status: form.status } : {}),
     };
-    if (form.id) {
-      await api(`/assets/${form.id}`, { method: 'PATCH', body });
-    } else {
-      await api('/assets', { method: 'POST', body });
+    try {
+      if (form.id) await api(`/assets/${form.id}`, { method: 'PATCH', body });
+      else await api('/assets', { method: 'POST', body });
+      setForm(null);
+      await load();
+    } catch (e) {
+      // keep the dialog open and show WHY — a 409 (duplicate code) or 400 must
+      // never look like a silent no-op save
+      setError(e instanceof Error ? e.message : 'Failed to save asset');
     }
-    setForm(null);
-    await load();
   };
 
   const submitTransfer = async () => {
     if (!transfer) return;
-    await api(`/assets/${transfer.id}/transfer`, {
-      method: 'POST',
-      body: {
-        toLocationId: transfer.toLocationId || undefined,
-        custodian: transfer.custodian || undefined,
-        note: transfer.note || undefined,
-      },
-    });
-    setTransfer(null);
-    await load();
+    setError(null);
+    try {
+      await api(`/assets/${transfer.id}/transfer`, {
+        method: 'POST',
+        body: {
+          toLocationId: transfer.toLocationId || undefined,
+          custodian: transfer.custodian || undefined,
+          note: transfer.note || undefined,
+        },
+      });
+      setTransfer(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Transfer failed');
+    }
   };
 
   const downloadCsv = async () => {
@@ -237,7 +254,7 @@ export default function Assets() {
                       ...emptyForm, id: a.id, name: a.name, assetCode: a.assetCode,
                       categoryId: a.category?.id ?? '', brand: a.brand ?? '', model: a.model ?? '',
                       serialNumber: a.serialNumber ?? '', custodian: a.custodian ?? '',
-                      locationId: a.location?.id ?? '',
+                      locationId: a.location?.id ?? '', status: a.status,
                       purchaseDate: a.purchaseDate ? a.purchaseDate.slice(0, 10) : '',
                       purchaseCost: a.purchaseCost ?? '', description: a.description ?? '',
                     })}>Edit</Button>
@@ -276,6 +293,24 @@ export default function Assets() {
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </Select>
             </div>
+            {/* Status only exists on an existing row (create always starts ACTIVE).
+                Previously unreachable from the UI even though the API supports it —
+                so the delete dialog's "set DISPOSED instead" advice had no way to be
+                followed. Every change is recorded in the movement history. */}
+            {form.id && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Status</label>
+                <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="IN_STORAGE">IN STORAGE</option>
+                  <option value="MAINTENANCE">MAINTENANCE</option>
+                  <option value="DISPOSED">DISPOSED</option>
+                </Select>
+                <p className="text-[11px] text-gray-400 mt-1">
+                  Status changes are logged in the movement history. A DISPOSED asset cannot be transferred.
+                </p>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Brand</label>
               <Input value={form.brand} onChange={(e) => setForm({ ...form, brand: e.target.value })} />
