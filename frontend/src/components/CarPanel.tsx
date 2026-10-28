@@ -115,6 +115,10 @@ export function CarPanel({
     destination: string; purpose: string; passengers: string; pickupLocation: string; specialRequest: string;
   } | null>(null);
   const canAssign = hasPermission('cars.assign');
+  // fleet.read guards /fleet/vehicles + /fleet/drivers server-side. Without it,
+  // every employee opening a request fires two calls that only come back 403 —
+  // the selects are rendered for Administration only, so skip the fetch entirely.
+  const canSeeFleet = hasPermission('fleet.read');
 
   const load = useCallback(() => {
     api<CarRequest | null>(`/cars/requests/${requestId}`)
@@ -123,9 +127,11 @@ export function CarPanel({
         if (c?.assignment) api<Expense[]>(`/cars/requests/${requestId}/expenses`).then(setExpenses).catch(() => {});
       })
       .catch(() => setCar(null));
-    api<Vehicle[]>('/fleet/vehicles').then(setVehicles).catch(() => {});
-    api<Driver[]>('/fleet/drivers').then(setDrivers).catch(() => {});
-  }, [requestId]);
+    if (canSeeFleet) {
+      api<Vehicle[]>('/fleet/vehicles').then(setVehicles).catch(() => {});
+      api<Driver[]>('/fleet/drivers').then(setDrivers).catch(() => {});
+    }
+  }, [requestId, canSeeFleet]);
 
   useEffect(load, [load]);
 
