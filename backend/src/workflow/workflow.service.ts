@@ -74,6 +74,20 @@ export class WorkflowService {
   private statusMirrors = new Map<RequestDocType, (requestId: string, status: WorkflowStatus, tx: Prisma.TransactionClient) => Promise<void>>();
 
   /**
+   * Module "extra viewer" hooks: user ids allowed to OPEN a request they neither
+   * own nor approve — e.g. CAR_REQUEST lets the requester's department manager
+   * (the optional manager-ack role) read the request they are asked to
+   * acknowledge. Without this the ack was unreachable for every pure department
+   * head: they hold neither ownership nor the workflow step role, so detail()
+   * threw "No access" before the Car panel could render its Acknowledge button.
+   */
+  registerViewerHook(docType: RequestDocType, hook: (requestId: string) => Promise<string[]>) {
+    this.viewerHooks.set(docType, hook);
+  }
+
+  private viewerHooks = new Map<RequestDocType, (requestId: string) => Promise<string[]>>();
+
+  /**
    * Fire the module status mirror (best-effort: never blocks the transition).
    * Pass the open transaction when the caller has one (approve/reject/return) so
    * the module row commits atomically with the document; submit/cancel have no
@@ -302,14 +316,39 @@ export class WorkflowService {
 
   async detail(id: string, actor: Actor) {
     const request = await this.mustFind(id);
-    const roles = await this.userRoleNames(actor.userId);
     const isOwner = request.requesterId === actor.userId;
-    // approver = any role appearing in the resolved workflow's steps (workflow-specific)
     const wf = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
     const stepRoles = (wf?.steps ?? []).map((s) => s.roleName as string);
-    const isApprover = roles.includes('SYSTEM_ADMIN') || stepRoles.some((r) => roles.includes(r));
+    // Approver visibility must mirror approve(): a delegate whose principal holds
+    // a step role (or SYSTEM_ADMIN) can act on this request from the inbox and
+    // Telegram, so the detail page has to open for them as well. The old
+    // own-roles-only check threw "No access" for exactly that delegate — e.g.
+    // right after they approve a car/meeting request (Approvals navigates to
+    // this page), or when the delegate opens it from their pending list.
+    const delegators = await this.resolveDelegation(actor.userId, new Date());
+    const ownRoles = await this.userRoleNames(actor.userId);
+    const effectiveRoles = delegators.length > 0
+      ? [
+          ...ownRoles,
+          ...(await this.prisma.userRole.findMany({ where: { userId: { in: delegators } }, include: { role: true } })).map(
+            (r) => r.role.name as string,
+          ),
+        ]
+      : ownRoles;
+    const isApprover = effectiveRoles.includes('SYSTEM_ADMIN') || stepRoles.some((r) => effectiveRoles.includes(r));
 
-    if (!isOwner && !isApprover) throw new ForbiddenException('No access');
+    // module-declared extra viewers (CAR_REQUEST → the requester's dept manager)
+    let extraViewers: string[] = [];
+    const viewerHook = this.viewerHooks.get(request.docType);
+    if (viewerHook) {
+      try {
+        extraViewers = await viewerHook(id);
+      } catch {
+        // a broken hook must neither widen access nor block the owner/approver
+      }
+    }
+
+    if (!isOwner && !isApprover && !extraViewers.includes(actor.userId)) throw new ForbiddenException('No access');
 
     const [actions, attachments] = await Promise.all([
       this.prisma.approvalAction.findMany({

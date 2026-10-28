@@ -26,8 +26,10 @@ export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
 
   /** Requester-initiated cancel of an approved car request → module cleanup + notifications. */
   onModuleInit() {
+    // origin='requester' so the audit action and the bell wording do not blame
+    // Administration for a cancellation the requester made themselves
     this.workflow.registerCancelHook('CAR_REQUEST', (requestId, actor) =>
-      this.cars.adminCancelApproved(requestId, 'Cancelled by requester', actor),
+      this.cars.adminCancelApproved(requestId, 'Cancelled by requester', actor, 'requester'),
     );
 
     // Status mirroring: CarRequest.status now follows request_documents.status on
@@ -41,6 +43,12 @@ export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
     this.workflow.registerStatusMirror('CAR_REQUEST', (requestId, status, tx) =>
       tx.carRequest.update({ where: { requestId }, data: { status } }).then(() => undefined),
     );
+
+    // Viewer: the requester's department manager may OPEN a car request they
+    // neither own nor approve — they are the ones asked for the optional ack.
+    // Their eligibility is exactly managerAckUserIds() (same query the
+    // manager-ack endpoint authorizes with), so the grant can never outgrow it.
+    this.workflow.registerViewerHook('CAR_REQUEST', (requestId) => this.cars.managerAckUserIds(requestId));
   }
 
   /** Telegram approve/assign surface — wires into the Telegram poll loop. */

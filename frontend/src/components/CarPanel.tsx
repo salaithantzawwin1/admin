@@ -27,6 +27,8 @@ interface CarRequest {
   assignment?: {
     id: string;
     assignedAt: string;
+    /** set = the assignment was handed back (release / janitor auto-release) */
+    releasedAt?: string | null;
     driverNotedAt?: string | null;
     driverArrivedAt?: string | null;
     driverBackAtOfficeAt?: string | null;
@@ -171,10 +173,17 @@ export function CarPanel({
 
   const assignment = car.assignment;
   const trip = assignment?.trip;
-  const showAssign = canAssign && status === 'APPROVED' && !assignment;
-  const canStart = canAssign && assignment && !trip;
+  // A RELEASED assignment row is history, not a live booking: release() and the
+  // auto-release janitor put the request back into the APPROVED unassigned queue
+  // with vehicleId cleared while the row keeps releasedAt set. Keying these flags
+  // on `assignment` alone hid the Assign form for the whole 24h before the stale
+  // request is expired (the queue still lists it — vehicleId is null) and showed
+  // Start trip / Change assignment for a car that is already back in the pool.
+  const liveAssignment = assignment && !assignment.releasedAt ? assignment : null;
+  const showAssign = canAssign && status === 'APPROVED' && !liveAssignment;
+  const canStart = canAssign && !!liveAssignment && !trip;
   // change vehicle/driver on a live assignment (before the trip starts)
-  const canReassign = canAssign && assignment && !trip;
+  const canReassign = canAssign && !!liveAssignment && !trip;
   const canComplete = canAssign && trip?.status === 'STARTED';
   // Administration fleet-plan controls: cancel or shift time on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);
@@ -199,7 +208,9 @@ export function CarPanel({
             {car.vehicle ? <Badge color="blue">{car.vehicle.vehicleNo}</Badge> : <span className="text-gray-400">Not yet</span>}
             {car.driver && <div className="text-xs text-gray-500 mt-1">Driver: {car.driver.name}</div>}
           </div>
-          {assignment && <DriverAckStages a={assignment} />}
+          {/* ack stages describe a live ride (or one closed by its trip record) —
+              three pending ⏳ chips next to "Not yet" only confuse after a release */}
+          {assignment && (liveAssignment || trip) && <DriverAckStages a={assignment} />}
           {/* ⏰ driver-reported ETA (Telegram ⏰ Delay) — red when it passes the planned end */}
           {assignment?.estimatedReturnAt && (
             <div className="mt-1">
@@ -216,7 +227,7 @@ export function CarPanel({
             </div>
           )}
           {/* Administration ⏰ ETA control — record a delay the driver reported by phone */}
-          {canAssign && assignment && !assignment.driverBackAtOfficeAt && (
+          {canAssign && liveAssignment && !assignment?.driverBackAtOfficeAt && (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
               <span>⏰ Set ETA:</span>
               {[
@@ -582,7 +593,9 @@ export function CarPanel({
         </div>
       )}
 
-      {assignment && (
+      {/* expenses hang off the trip record — without one, Add Expense always fails
+          with "Trip not started for this request" (released/stale rows included) */}
+      {trip && (
         <div className="mt-4 border-t border-gray-100 pt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Expenses (fuel, toll, parking…)</div>
           {expenses.length === 0 && <div className="text-xs text-gray-400 mb-2">No expenses recorded.</div>}
@@ -619,7 +632,7 @@ export function CarPanel({
         </div>
       )}
 
-      {!assignment && !canAssign && (
+      {!liveAssignment && !canAssign && (
         <div className="mt-2 text-xs text-gray-400">Vehicle assignment appears here after Administration assigns a car (requires APPROVED status).</div>
       )}
     </Card>

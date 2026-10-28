@@ -64,6 +64,17 @@ interface QueueRow {
   } | null;
 }
 
+/** Pending optional manager acks — rows the backend returns for MY department(s). */
+interface ManagerAckRow {
+  id: string;
+  docNumber: string;
+  title: string;
+  status: string;
+  requester: { fullName: string };
+  department?: { name: string } | null;
+  carRequest?: { destination: string; startDate: string; endDate: string } | null;
+}
+
 /** ⏰ chip for a live driver-reported ETA — red when it passes the planned end. */
 function EtaChip({ eta, plannedEnd }: { eta: string; plannedEnd?: string }) {
   const late = plannedEnd ? new Date(eta) > new Date(plannedEnd) : false;
@@ -106,10 +117,12 @@ export default function CarRequests() {
   const setTab = (t: CarTab) => setSearchParams(t === 'availability' ? {} : { tab: t }, { replace: false });
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [queue, setQueue] = useState<QueueRow[]>([]);
+  const [acks, setAcks] = useState<ManagerAckRow[]>([]);
   const [fleet, setFleet] = useState<FleetVehicle[]>([]);
   const [handover, setHandover] = useState<Handover | null>(null);
   const [showForm, setShowForm] = useState(false); // "New car request" dialog
   const [error, setError] = useState('');
+  const [ackingId, setAckingId] = useState('');
   const navigate = useNavigate();
   const canAssign = hasPermission('cars.assign');
 
@@ -123,6 +136,9 @@ export default function CarRequests() {
       .then((r) => setRows(r.items))
       .catch((e) => setError(e.message));
     api<FleetVehicle[]>('/cars/fleet-overview').then(setFleet).catch(() => setFleet([]));
+    // optional manager ack — the backend returns rows only for the requester's
+    // department manager, so an empty list renders nothing for everyone else
+    api<ManagerAckRow[]>('/cars/manager-acks/pending').then(setAcks).catch(() => setAcks([]));
     if (hasPermission('cars.assign')) {
       api<QueueRow[]>('/cars/requests/approved-unassigned')
         .then(setQueue)
@@ -149,6 +165,69 @@ export default function CarRequests() {
       />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+
+      {/* ===== Optional manager acknowledgement (Department Head, never blocks) =====
+          This list IS the entry point: without it a pure department head could not
+          reach the ack at all — the request detail page only opens for the owner or
+          a workflow approver, and nothing else surfaced these rows. */}
+      {acks.length > 0 && (
+        <Card className="mb-5 p-5">
+          <h2 className="font-semibold text-gray-800 mb-1 text-sm uppercase tracking-wide">
+            👍 Awaiting your acknowledgement ({acks.length})
+          </h2>
+          <p className="text-xs text-gray-400 mb-3">
+            Car requests from your department(s) — optional, never delays the trip.
+          </p>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                <th className="px-3 py-2 font-medium">Doc No.</th>
+                <th className="px-3 py-2 font-medium">Requester</th>
+                <th className="px-3 py-2 font-medium">Destination</th>
+                <th className="px-3 py-2 font-medium">Schedule</th>
+                <th className="px-3 py-2 font-medium" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {acks.map((a) => (
+                <tr key={a.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2 font-medium">
+                    <Link to={`/requests/${a.id}`} className="text-blue-600 hover:underline">{a.docNumber}</Link>
+                  </td>
+                  <td className="px-3 py-2">
+                    {a.requester?.fullName ?? '—'}
+                    <div className="text-xs text-gray-400">{a.department?.name ?? '—'}</div>
+                  </td>
+                  <td className="px-3 py-2">{a.carRequest?.destination ?? '—'}</td>
+                  <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+                    {a.carRequest && `${fmtDateTime(a.carRequest.startDate)} → ${fmtDateTime(a.carRequest.endDate)}`}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      className="px-2.5 py-1 text-xs rounded-lg border border-green-200 text-green-700 hover:bg-green-50 disabled:opacity-50"
+                      disabled={ackingId === a.id}
+                      onClick={async () => {
+                        setAckingId(a.id);
+                        try {
+                          await api(`/cars/requests/${a.id}/manager-ack`, { method: 'POST' });
+                          toast('Acknowledged — thank you');
+                          load();
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : 'Failed to acknowledge');
+                        } finally {
+                          setAckingId('');
+                        }
+                      }}
+                    >
+                      {ackingId === a.id ? 'Saving…' : '👍 Acknowledge'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
 
       {/* Tabs (URL-driven, same pattern as Inventory/Meeting Rooms) */}
       <div className="flex gap-1 border-b border-gray-200 mb-5">

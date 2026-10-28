@@ -1097,6 +1097,130 @@ async function main() {
     assert.strictEqual(h.blocked[0].reason, 'Service');
   });
 
+  // ------------------------------------------ 6) trip close-out lifecycle
+  // completeTrip() used to leave releasedAt=null: the janitor deliberately skips
+  // rows whose trip is COMPLETED, so nothing ever closed them — handover/digests
+  // kept listing the ride as "on the road" and the hourly overdue cron kept
+  // telling the driver to tap 🏁 Back at Office for a trip already closed.
+  await test('completeTrip: releases the assignment (releasedAt + ETA cleared)', async () => {
+    const txWrites: { kind: string; data: any }[] = [];
+    const tx = {
+      carTrip: { update: async ({ data }: any) => { txWrites.push({ kind: 'trip', data }); return { id: 't1', ...data }; } },
+      carAssignment: { update: async ({ data }: any) => { txWrites.push({ kind: 'assignment', data }); }, count: async () => 0 },
+      vehicle: { update: async () => {} },
+      carRequest: { update: async () => {} },
+      requestDocument: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prismaCT: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1', releasedAt: null,
+          estimatedReturnAt: new Date(),
+          vehicle: { currentMileage: 100 },
+          trip: { id: 't1', status: 'STARTED', startMileage: 100 },
+        }),
+        count: async () => 0,
+      },
+      requestDocument: { findUnique: async () => ({ requesterId: 'u1', docNumber: 'CAR-202610-0099' }) },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const notifyCapture: any[] = [];
+    const svcCT: any = new CarsService(
+      prismaCT, {} as any, {} as any,
+      { notify: async (p: any) => notifyCapture.push(p) },
+      { log: async () => {} }, {} as any,
+    );
+    await svcCT.completeTrip('r1', { endMileage: 150 }, { userId: 'u9', username: 'admin' });
+    const rel = txWrites.find((w) => w.kind === 'assignment');
+    assert.ok(rel, 'the completion transaction must close the assignment row');
+    assert.ok(rel!.data.releasedAt instanceof Date, 'releasedAt must be set — the car is back');
+    assert.strictEqual(rel!.data.estimatedReturnAt, null, 'a closed-out assignment keeps no ETA');
+    const car = txWrites.find((w) => w.kind === 'trip');
+    assert.ok(car && car.data.status === 'COMPLETED', 'trip row marked COMPLETED');
+    assert.strictEqual(notifyCapture.length, 1, 'requester still gets the completion notice');
+  });
+
+  await test('startTrip: a released assignment cannot be dispatched', async () => {
+    const prismaST: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: null, releasedAt: new Date(),
+          vehicle: { currentMileage: 10 }, trip: null,
+        }),
+      },
+    };
+    const svcST: any = new CarsService(prismaST, {} as any, {} as any, {} as any, {} as any, {} as any);
+    await assert.rejects(
+      () => svcST.startTrip('r1', { startMileage: 20 }, { userId: 'u9', username: 'admin' }),
+      /released — assign a vehicle first/,
+      'a released (handed-back) assignment must refuse dispatch',
+    );
+  });
+
+  // --------------------------------------- 7) manager-ack reachability
+  // The requester's department manager owns neither the request nor a workflow
+  // step role — detail() threw "No access" before the Car panel could render the
+  // Acknowledge button, so the optional ack was unreachable for a pure dept head.
+  await test('workflow detail: a CAR_REQUEST viewer hook opens the request for the dept manager', async () => {
+    const prismaVw: any = {
+      requestDocument: { findUnique: async () => ({
+        id: 'r1', docNumber: 'CAR-1', docType: 'CAR_REQUEST', status: 'APPROVED',
+        currentLevel: 1, totalLevels: 1, requesterId: 'u-req', escalated: false,
+        requester: { id: 'u-req', username: 'req', fullName: 'Req' }, department: null,
+      }) },
+      approvalWorkflow: { findMany: async () => [{
+        id: 'wf-car', module: 'CAR_REQUEST', active: true, minAmount: null, maxAmount: null,
+        steps: [{ level: 1, roleName: 'ADMINISTRATION' }],
+      }] },
+      approvalDelegation: { findMany: async () => [] },
+      userRole: { findMany: async () => [] },
+      approvalAction: { findMany: async () => [] },
+      attachment: { findMany: async () => [] },
+    };
+    const svcVw: any = new WorkflowService(prismaVw, {} as any, {} as any, {} as any);
+    // no hook yet → a stranger is still refused
+    await assert.rejects(() => svcVw.detail('r1', { userId: 'u-head', username: 'head' }), /No access/);
+    svcVw.registerViewerHook('CAR_REQUEST', async (rid: string) => (rid === 'r1' ? ['u-head'] : []));
+    const out = await svcVw.detail('r1', { userId: 'u-head', username: 'head' });
+    assert.strictEqual(out.isOwner, false, 'the manager is not the owner');
+    // the hook is scoped: someone outside its list still cannot open the request
+    await assert.rejects(() => svcVw.detail('r1', { userId: 'u-nobody', username: 'x' }), /No access/);
+    // a broken hook must not widen access (and must not break the owner either)
+    svcVw.registerViewerHook('CAR_REQUEST', async () => { throw new Error('boom'); });
+    const owner = await svcVw.detail('r1', { userId: 'u-req', username: 'req' });
+    assert.strictEqual(owner.isOwner, true, 'owner access survives a broken hook');
+    await assert.rejects(() => svcVw.detail('r1', { userId: 'u-nobody', username: 'x' }), /No access/);
+  });
+
+  await test('cars findByRequest: the dept manager may open the panel, a stranger may not', async () => {
+    const prismaFm: any = {
+      userRole: {
+        // SYSTEM_ADMIN probe (findFirst) + eligible dept heads (findMany)
+        findFirst: async () => null,
+        findMany: async () => [{ userId: 'u-head' }],
+      },
+      requestDocument: {
+        findUnique: async (args: any) => args?.select?.requesterId
+          ? { requesterId: 'u-req' }
+          : { requesterId: 'u-req', requester: { employee: { departmentId: 'd1', headedDepartments: [{ id: 'd1' }] } } },
+      },
+      carRequest: { findUnique: async () => ({ id: 'cr1', requestId: 'r1', sharedTripId: null }) },
+    };
+    const permissions: any = {
+      forUser: async () => [],
+      userHas: async () => false,
+    };
+    const svcFm: any = new CarsService(prismaFm, permissions, {} as any, {} as any, {} as any, {} as any);
+    await assert.rejects(
+      () => svcFm.findByRequest('r1', { userId: 'u-stranger', username: 's' }),
+      /No access/,
+      'an unrelated user still cannot read the car panel',
+    );
+    const row = await svcFm.findByRequest('r1', { userId: 'u-head', username: 'head' });
+    assert.strictEqual(row.id, 'cr1', 'the eligible dept manager gets the panel');
+  });
+
   // ------------------------------------------------------------------ summary
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

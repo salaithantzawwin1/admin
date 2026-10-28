@@ -198,6 +198,11 @@ export class CarsController {
    * Administration or the assigned driver may set it; effective-end on the fleet
    * card / conflict pre-warning = max(planned end, ETA) until Back at Office.
    */
+  // Administration-only (CarPanel gates the ETA control on cars.assign): the
+  // driver's own ETA path is Telegram (chat-verified service call), never this
+  // endpoint — without this guard any logged-in user could rewrite any trip's
+  // ETA (verified: a finance account got 201 on someone else's trip).
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Post('requests/:requestId/eta')
   setEta(@Req() req, @Param('requestId') requestId: string, @Body() body: { minutes?: number; eta?: string }) {
     return this.cars.setEstimatedReturn(requestId, { minutes: body.minutes, eta: body.eta }, this.actor(req));

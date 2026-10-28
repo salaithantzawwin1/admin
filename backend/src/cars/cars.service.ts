@@ -131,7 +131,11 @@ export class CarsService {
     const isApprover = await this.permissions.userHas(actor.userId, 'approvals.act');
 
     if (!isOwner && !isSystemAdmin && !canAssign && !isApprover) {
-      throw new ForbiddenException('No access');
+      // last chance: the requester's department manager opens this panel to give
+      // the optional ack (the workflow detail page grants them the same via the
+      // CAR_REQUEST viewer hook — one eligibility query, never a wider grant).
+      const isAckManager = (await this.managerAckUserIds(requestId)).includes(actor.userId);
+      if (!isAckManager) throw new ForbiddenException('No access');
     }
     // shared trip: the other riders of the same car+driver (panel badge + Telegram card)
     if (car.sharedTripId) {
@@ -990,8 +994,17 @@ export class CarsService {
   /**
    * Administration actions on APPROVED requests: cancel outright or shift the
    * time window (fleet plan changes). The requester is notified either way.
+   * `origin` distinguishes the two callers — the workflow's cancel hook runs this
+   * for a REQUESTER-initiated "I no longer need it", and the audit/notification
+   * wording must say so instead of blaming Administration for a cancel the
+   * requester themselves made.
    */
-  async adminCancelApproved(requestId: string, comment: string | undefined, actor: Actor) {
+  async adminCancelApproved(
+    requestId: string,
+    comment: string | undefined,
+    actor: Actor,
+    origin: 'administration' | 'requester' = 'administration',
+  ) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: { carRequest: { include: { assignment: { include: { trip: true } } } } },
@@ -1042,13 +1055,18 @@ export class CarsService {
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
-      action: 'CAR_ADMIN_CANCELLED', module: 'CARS', recordId: requestId,
-      newValue: { comment },
+      action: origin === 'requester' ? 'CAR_CANCELLED_BY_REQUESTER' : 'CAR_ADMIN_CANCELLED',
+      module: 'CARS', recordId: requestId,
+      newValue: { comment, origin },
     });
     await this.notifications.notify({
       userId: request.requesterId, type: 'CANCELLED',
-      title: `Request ${request.docNumber} cancelled by Administration`,
-      body: comment || 'Your car request was cancelled by the Administration Department.',
+      title: origin === 'requester'
+        ? `Request ${request.docNumber} cancelled`
+        : `Request ${request.docNumber} cancelled by Administration`,
+      body: origin === 'requester'
+        ? comment || 'You cancelled this car request.'
+        : comment || 'Your car request was cancelled by the Administration Department.',
       link: `/requests/${requestId}`, requestId,
     });
     // the assigned driver doesn't hold an AMS account — reply to their Telegram directly
@@ -1348,6 +1366,12 @@ export class CarsService {
       include: { vehicle: true, trip: true },
     });
     if (!assignment) throw new NotFoundException('No assignment for this request');
+    // A released row (janitor auto-release / explicit release) is history: its
+    // vehicle was handed back to the pool, so dispatching it would start a trip
+    // on a car someone else may already have taken.
+    if (assignment.releasedAt) {
+      throw new ConflictException('This assignment was released — assign a vehicle first');
+    }
     if (assignment.trip) throw new ConflictException('Trip already exists for this assignment');
     if (data.startMileage < assignment.vehicle.currentMileage) {
       throw new BadRequestException(
@@ -1418,6 +1442,16 @@ export class CarsService {
       await tx.vehicle.update({
         where: { id: assignment.vehicleId },
         data: { currentMileage: data.endMileage, ...(otherActive === 0 ? { status: 'AVAILABLE' as const } : {}) },
+      });
+      // Close the assignment row in the same breath — an assignment that stays
+      // releasedAt=null after the ride is over is still "live" for every reader:
+      // handover/on-road lists and the 17:00 + 17:30 digests keep showing the
+      // finished trip, and the hourly overdue cron keeps nudging the driver with
+      // "tap 🏁 Back at Office" for a trip that is already closed (the janitor
+      // deliberately skips rows whose trip is COMPLETED, so nothing else would).
+      await tx.carAssignment.update({
+        where: { id: assignment.id },
+        data: { releasedAt: new Date(), estimatedReturnAt: null },
       });
       await tx.carRequest.update({ where: { requestId }, data: { status: 'COMPLETED' } });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'COMPLETED' } });

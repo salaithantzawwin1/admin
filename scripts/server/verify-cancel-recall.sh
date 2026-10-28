@@ -70,7 +70,7 @@ curl -s -X DELETE -H "Authorization: Bearer $TTOKEN" "$BASE/requests/$SREQ" | J 
 echo "supply recalled: $(q "SELECT status FROM request_documents WHERE id='$SREQ'") (expect CANCELLED)"
 
 echo "=== 5) audit trail ==="
-q "SELECT action||' x'||count(*) FROM audit_logs WHERE action IN ('REQUEST_CANCELLED','CAR_ADMIN_CANCELLED','MEETING_ADMIN_CANCELLED','SUPPLY_REQUEST_CANCELLED','TELEGRAM_DRIVER_CANCEL_NOTIFIED') AND \"createdAt\" > now() - interval '10 minutes' GROUP BY action"
+q "SELECT action||' x'||count(*) FROM audit_logs WHERE action IN ('REQUEST_CANCELLED','CAR_ADMIN_CANCELLED','CAR_CANCELLED_BY_REQUESTER','MEETING_ADMIN_CANCELLED','SUPPLY_REQUEST_CANCELLED','TELEGRAM_DRIVER_CANCEL_NOTIFIED') AND \"createdAt\" > now() - interval '10 minutes' GROUP BY action"
 
 echo "=== 6) cleanup ==="
 for RID in "$CREQ" "$C2" "$MREQ" "$SREQ"; do
