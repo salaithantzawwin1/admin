@@ -1221,6 +1221,69 @@ async function main() {
     assert.strictEqual(row.id, 'cr1', 'the eligible dept manager gets the panel');
   });
 
+  // --------------------------------------- 8) requester corrections (edit)
+  // The create flow submits immediately (form + Telegram /car), so a request is
+  // never DRAFT once it can be opened — the old `status !== 'DRAFT'` gate refused
+  // every PATCH, which is why the passenger count could not be changed.
+  const editRow: any = {
+    requestId: 'r-edit', destination: 'Mandalay', purpose: 'Site visit', passengers: 2,
+    pickupLocation: null, specialRequest: null, timeSlot: 'FULL_DAY', vehicleTypeRequired: null,
+    startDate: new Date('2026-11-01T09:00:00Z'), endDate: new Date('2026-11-01T17:00:00Z'),
+    request: { requesterId: 'u-req', status: 'PENDING_APPROVAL' },
+  };
+  const editAudits: any[] = [];
+  const prismaEdit: any = {
+    carRequest: {
+      findUnique: async () => ({ ...editRow }),
+      update: async ({ data }: any) => {
+        // real Prisma IGNORES undefined values — mirror that or an omitted field
+        // would wipe the column in this spy
+        for (const [k, v] of Object.entries(data)) if (v !== undefined) editRow[k] = v;
+        return { ...editRow };
+      },
+    },
+  };
+  const svcEdit: any = new CarsService(prismaEdit, {} as any, {} as any, {} as any, { log: async (e: any) => editAudits.push(e) }, {} as any);
+
+  await test('updateCarRequest: a PENDING request can change its passenger count', async () => {
+    const saved = await svcEdit.updateCarRequest('r-edit', { passengers: 5 }, { userId: 'u-req', username: 'req' });
+    assert.strictEqual(saved.passengers, 5, 'passengers must be saved while awaiting approval');
+    const log = editAudits.at(-1);
+    assert.strictEqual(log.action, 'CAR_REQUEST_UPDATED', 'the correction is audited (old → new)');
+    assert.strictEqual(log.oldValue.passengers, 2);
+    assert.strictEqual(log.newValue.passengers, 5);
+  });
+
+  await test('updateCarRequest: an APPROVED request can no longer be edited', async () => {
+    editRow.request.status = 'APPROVED';
+    await assert.rejects(
+      () => svcEdit.updateCarRequest('r-edit', { passengers: 9 }, { userId: 'u-req', username: 'req' }),
+      /awaiting approval/,
+      'once approved the booking belongs to Administration',
+    );
+    assert.strictEqual(editRow.passengers, 5, 'a refused edit must not write');
+    editRow.request.status = 'PENDING_APPROVAL';
+  });
+
+  await test('updateCarRequest: only the requester may edit', async () => {
+    await assert.rejects(
+      () => svcEdit.updateCarRequest('r-edit', { passengers: 3 }, { userId: 'u-other', username: 'x' }),
+      /Not your request/,
+    );
+    assert.strictEqual(editRow.passengers, 5);
+  });
+
+  await test('updateCarRequest: a one-sided edit can never invert the trip window', async () => {
+    await assert.rejects(
+      () => svcEdit.updateCarRequest('r-edit', { startDate: editRow.endDate.toISOString() }, { userId: 'u-req', username: 'req' }),
+      /endDate must be after startDate/,
+    );
+    // leaving the dates alone still works (passenger-only edits are the common case)
+    const saved = await svcEdit.updateCarRequest('r-edit', { passengers: 6 }, { userId: 'u-req', username: 'req' });
+    assert.strictEqual(saved.passengers, 6);
+    assert.strictEqual(saved.startDate.getTime(), new Date('2026-11-01T09:00:00Z').getTime());
+  });
+
   // ------------------------------------------------------------------ summary
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

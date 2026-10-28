@@ -107,6 +107,13 @@ export function CarPanel({
   const [etaMinutes, setEtaMinutes] = useState('30');
   // optional manager ack (Department Head FYI — never blocks)
   const [canManagerAck, setCanManagerAck] = useState(false);
+  // requester corrections (destination / passengers / pickup …) while the request
+  // is still awaiting approval — the create flow submits immediately, so this is
+  // the only moment a request can actually be corrected
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<{
+    destination: string; purpose: string; passengers: string; pickupLocation: string; specialRequest: string;
+  } | null>(null);
   const canAssign = hasPermission('cars.assign');
 
   const load = useCallback(() => {
@@ -187,6 +194,38 @@ export function CarPanel({
   const canComplete = canAssign && trip?.status === 'STARTED';
   // Administration fleet-plan controls: cancel or shift time on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);
+
+  // the requester may correct their own request until it is approved — after
+  // that the booking belongs to Administration (assign / shift / driver notice)
+  const canEdit = isOwner && (status === 'DRAFT' || status === 'PENDING_APPROVAL');
+
+  const openEdit = () => {
+    setEditForm({
+      destination: car.destination,
+      purpose: car.purpose ?? '',
+      passengers: String(car.passengers ?? 1),
+      pickupLocation: car.pickupLocation ?? '',
+      specialRequest: car.specialRequest ?? '',
+    });
+    setEditing(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editForm) return;
+    const ok = await act(() => api(`/cars/requests/${requestId}`, {
+      method: 'PATCH',
+      body: {
+        destination: editForm.destination.trim(),
+        purpose: editForm.purpose.trim() || undefined,
+        // clamp instead of trusting the raw box: an empty/partial input must not
+        // reach the DTO as 0 (Min(1)) and blow up the save
+        passengers: Math.max(1, Math.floor(Number(editForm.passengers) || 1)),
+        pickupLocation: editForm.pickupLocation.trim() || undefined,
+        specialRequest: editForm.specialRequest.trim() || undefined,
+      },
+    }));
+    if (ok) setEditing(false);
+  };
 
   return (
     <Card className="p-5 mb-5">
@@ -292,6 +331,61 @@ export function CarPanel({
           )}
         </div>
       </div>
+
+      {/* requester corrections — destination / passengers / pickup while the request
+          is still awaiting approval. There was no edit path at all: the backend
+          PATCH only accepted DRAFT, but the create flow submits immediately, so
+          every request a user can open was already PENDING_APPROVAL. */}
+      {canEdit && !editing && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-500">Need to change the destination, passenger count or pickup?</span>
+          <Button variant="ghost" onClick={openEdit}>✏️ Edit request</Button>
+        </div>
+      )}
+
+      {editing && editForm && (
+        <div className="border-t border-gray-100 pt-4 mt-4 mb-4">
+          <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Edit request — still awaiting approval</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="car-edit-destination" className="block text-xs text-gray-500 mb-1">Destination *</label>
+              <Input id="car-edit-destination" value={editForm.destination} onChange={(e) => setEditForm({ ...editForm, destination: e.target.value })} />
+            </div>
+            <div>
+              <label htmlFor="car-edit-passengers" className="block text-xs text-gray-500 mb-1">Passengers</label>
+              <Input
+                id="car-edit-passengers"
+                type="number"
+                min={1}
+                max={60}
+                value={editForm.passengers}
+                onChange={(e) => setEditForm({ ...editForm, passengers: e.target.value })}
+                onBlur={() => setEditForm((f) => (f ? { ...f, passengers: String(Math.max(1, Math.floor(Number(f.passengers) || 1))) } : f))}
+                describe="1–60 — this is what the vehicle picker shows Administration"
+              />
+            </div>
+            <div>
+              <label htmlFor="car-edit-purpose" className="block text-xs text-gray-500 mb-1">Purpose</label>
+              <Input id="car-edit-purpose" value={editForm.purpose} onChange={(e) => setEditForm({ ...editForm, purpose: e.target.value })} />
+            </div>
+            <div>
+              <label htmlFor="car-edit-pickup" className="block text-xs text-gray-500 mb-1">Pickup location</label>
+              <Input id="car-edit-pickup" value={editForm.pickupLocation} onChange={(e) => setEditForm({ ...editForm, pickupLocation: e.target.value })} />
+            </div>
+            <div className="sm:col-span-2">
+              <label htmlFor="car-edit-special" className="block text-xs text-gray-500 mb-1">Special request</label>
+              <Input id="car-edit-special" value={editForm.specialRequest} onChange={(e) => setEditForm({ ...editForm, specialRequest: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
+            <Button disabled={!editForm.destination.trim()} onClick={() => void saveEdit()}>Save</Button>
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">
+            Times and slots are changed by Administration (Shift time). Once the request is approved it can no longer be edited here.
+          </p>
+        </div>
+      )}
 
       {/* optional manager acknowledgement (Department Head) — never blocks */}
       {status !== 'DRAFT' && (car.managerAckAt || canManagerAck) && (

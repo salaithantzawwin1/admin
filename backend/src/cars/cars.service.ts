@@ -155,7 +155,18 @@ export class CarsService {
     return car;
   }
 
-  /** Update car details while still DRAFT. */
+  /**
+   * Update car details while the requester still owns the outcome.
+   *
+   * The gate used to be `status !== 'DRAFT'` — but the create flow submits the
+   * request immediately (CarRequestForm and Telegram /car both POST then
+   * submit), so a request a user can actually open is never DRAFT. Every edit
+   * was refused with "Only DRAFT requests can be edited", which is why the
+   * passenger count (and the rest of the form) could not be changed at all.
+   *
+   * DRAFT + PENDING_APPROVAL are editable; once APPROVED/IN_PROGRESS the booking
+   * belongs to Administration (assignment, shift, driver notice), so edits stop.
+   */
   async updateCarRequest(requestId: string, data: {
     destination?: string; purpose?: string; startDate?: string; endDate?: string;
     passengers?: number; vehicleTypeRequired?: string; timeSlot?: string; pickupLocation?: string;
@@ -164,9 +175,20 @@ export class CarsService {
     const car = await this.prisma.carRequest.findUnique({ where: { requestId }, include: { request: true } });
     if (!car) throw new NotFoundException('Car request not found');
     if (car.request.requesterId !== actor.userId) throw new ForbiddenException('Not your request');
-    if (car.request.status !== 'DRAFT') throw new BadRequestException('Only DRAFT requests can be edited');
+    if (!['DRAFT', 'PENDING_APPROVAL'].includes(car.request.status)) {
+      throw new BadRequestException(
+        'Only requests still awaiting approval can be edited — ask Administration to adjust an approved trip',
+      );
+    }
+    // same window rule the create path enforces: a one-sided edit must not
+    // produce an end at/before the start (the old code wrote both blindly)
+    const startDate = data.startDate ? new Date(data.startDate) : car.startDate;
+    const endDate = data.endDate ? new Date(data.endDate) : car.endDate;
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate <= startDate) {
+      throw new BadRequestException('endDate must be after startDate');
+    }
 
-    return this.prisma.carRequest.update({
+    const updated = await this.prisma.carRequest.update({
       where: { requestId },
       data: {
         destination: data.destination,
@@ -180,6 +202,15 @@ export class CarsService {
         endDate: data.endDate ? new Date(data.endDate) : undefined,
       },
     });
+    // mid-review edits must be traceable — the approver sees the new values but
+    // never who changed what or when
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'CAR_REQUEST_UPDATED', module: 'CARS', recordId: requestId,
+      oldValue: { destination: car.destination, purpose: car.purpose, passengers: car.passengers, pickupLocation: car.pickupLocation },
+      newValue: { destination: updated.destination, purpose: updated.purpose, passengers: updated.passengers, pickupLocation: updated.pickupLocation },
+    });
+    return updated;
   }
 
   /**
