@@ -30,6 +30,19 @@ export class CarsService {
     @Optional() private compliance?: FleetComplianceService,
   ) {}
 
+  /**
+   * Live push for open panels — every transition that already notifies someone
+   * must ALSO signal the watchers, or a second open tab only catches up on the
+   * 15s poll. The frame carries ids only; clients refetch through the API.
+   */
+  private push(requestId: string, type: 'assignment.updated' | 'request.updated' = 'assignment.updated') {
+    try {
+      this.events.publish(type, { requestId });
+    } catch {
+      /* SSE push is best-effort */
+    }
+  }
+
   /** VMS §6.5 — mandatory-document + driver-licence rules for one assignment.
    *  Throws the block reason so assign/reassign/dispatch all fail the same way;
    *  the message is surfaced verbatim by the Car panel. */
@@ -723,6 +736,8 @@ export class CarsService {
       action: 'CAR_ASSIGNED', module: 'CARS', recordId: requestId,
       newValue: { vehicleId: data.vehicleId, driverId: data.driverId, ...(share ? { sharedTrip: true } : {}) },
     });
+    // the requester's panel is already open in another tab — show the car now
+    this.push(requestId);
     return assignment;
   }
 
@@ -992,6 +1007,7 @@ export class CarsService {
       newValue: { vehicleId: data.vehicleId, driverId: data.driverId ?? null },
     });
 
+    this.push(requestId);
     return this.prisma.carAssignment.findUnique({ where: { requestId }, include: { vehicle: true, driver: true } });
   }
 
@@ -1019,6 +1035,8 @@ export class CarsService {
       userId: actor.userId, username: actor.username,
       action: 'CAR_ASSIGNMENT_RELEASED', module: 'CARS', recordId: requestId,
     });
+
+    this.push(requestId);
     return { success: true };
   }
 
@@ -1102,6 +1120,7 @@ export class CarsService {
     });
     // the assigned driver doesn't hold an AMS account — reply to their Telegram directly
     await this.telegram.notifyDriverOfCancellation(requestId, request.docNumber, comment);
+    this.push(requestId, 'request.updated'); // status + freed car repaint everywhere
     return { success: true };
   }
 
@@ -1168,6 +1187,7 @@ export class CarsService {
     if (request.carRequest?.driverId) {
       await this.telegram.notifyDriverOfTimeChange(requestId, request.docNumber, request.carRequest.driverId, start, end, data.comment).catch(() => undefined);
     }
+    this.push(requestId, 'request.updated'); // the moved window shows without a reload
     return { success: true };
   }
 
@@ -1434,6 +1454,7 @@ export class CarsService {
       action: 'TRIP_STARTED', module: 'CARS', recordId: requestId,
       newValue: { startMileage: data.startMileage },
     });
+    this.push(requestId);
     return trip;
   }
 
@@ -1506,6 +1527,7 @@ export class CarsService {
       oldValue: { status: 'STARTED' },
       newValue: { endMileage: data.endMileage, distance },
     });
+    this.push(requestId, 'request.updated'); // COMPLETED closes the doc too
     return trip;
   }
 

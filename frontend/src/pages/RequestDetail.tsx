@@ -8,6 +8,7 @@ import { PurchaseRequestPanel } from '../components/PurchaseRequestPanel';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { fmtDateTime } from '../util/yangonTime';
+import { useLiveReload } from '../hooks/useLiveReload';
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
   DRAFT: 'gray',
@@ -72,6 +73,12 @@ export default function RequestDetail() {
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
   }, [load]);
+
+  // live push: an approve / reject / return / shift done in ANOTHER tab repaints
+  // this header now instead of waiting for the next poll (poll stays as fallback)
+  useLiveReload(['request.updated'], (e) => {
+    if (!e.requestId || e.requestId === id) load();
+  });
 
   const act = async (action: 'submit' | 'approve' | 'reject' | 'return', force = false) => {
     setError('');

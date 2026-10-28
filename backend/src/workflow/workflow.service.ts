@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
+import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
 
 const DOC_PREFIX: Record<string, string> = {
@@ -43,7 +44,20 @@ export class WorkflowService {
     private numbering: NumberingService,
     private notifications: NotificationsService,
     private audit: AuditService,
-  ) {}  /** Register a module hook fired when its docType reaches final approval. */
+    private events?: EventsService, // optional: unit tests build this service directly
+  ) {}
+
+  /**
+   * Live push — a status transition must repaint every open tab now, not on the
+   * next 15s poll. Ids only; clients refetch through the API.
+   */
+  private pushRequestUpdated(requestId: string) {
+    try {
+      this.events?.publish('request.updated', { requestId });
+    } catch {
+      /* SSE push is best-effort */
+    }
+  }  /** Register a module hook fired when its docType reaches final approval. */
   /** Optional Telegram-approval hook (wired by TelegramModule at bootstrap). */
   onSubmittedTelegram?: (requestId: string) => Promise<void>;
 
@@ -436,6 +450,7 @@ export class WorkflowService {
       oldValue: { status: 'DRAFT' }, newValue: { status: 'PENDING_APPROVAL', level: firstLevel },
     });
 
+    this.pushRequestUpdated(id);
     return updated;
   }
 
@@ -519,6 +534,7 @@ export class WorkflowService {
       await this.notifyApprovers(id, nextLevel, 'SUBMITTED', `Request ${request.docNumber} needs approval (L${nextLevel})`, request.title);
     }
 
+    this.pushRequestUpdated(id); // approval flips the badge/status in every open tab
     return updated;
   }
 
@@ -584,6 +600,7 @@ export class WorkflowService {
       oldValue: { status: request.status }, newValue: { status: 'REJECTED' },
     });
 
+    this.pushRequestUpdated(id);
     return updated;
   }
 
@@ -622,6 +639,7 @@ export class WorkflowService {
       oldValue: { status: request.status }, newValue: { status: 'DRAFT' },
     });
 
+    this.pushRequestUpdated(id);
     return updated;
   }
 

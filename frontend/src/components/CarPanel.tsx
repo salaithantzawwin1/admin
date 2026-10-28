@@ -135,9 +135,10 @@ export function CarPanel({
 
   useEffect(load, [load]);
 
-  // live push: driver Telegram taps (Noted/Ready/Back at Office) and re-assignments
-  // refresh this panel instantly; the 15s polling elsewhere stays as fallback
-  useLiveReload(['assignment.updated', 'driver.updated'], (e) => {
+  // live push: driver Telegram taps (Noted/Ready/Back at Office), re-assignments
+  // and request-level transitions (approve / shift / cancel) refresh this panel
+  // instantly; the 15s polling elsewhere stays as fallback
+  useLiveReload(['assignment.updated', 'driver.updated', 'request.updated'], (e) => {
     // only refetch when the signal concerns this request (or fleet-wide driver state)
     if (!e.requestId || e.requestId === requestId) load();
   });
