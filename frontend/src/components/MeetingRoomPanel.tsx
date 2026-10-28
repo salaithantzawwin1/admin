@@ -43,6 +43,7 @@ export function MeetingRoomPanel({
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmComplete, setConfirmComplete] = useState(false);
   const [confirmShift, setConfirmShift] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const canAssign = hasPermission('meeting-rooms.assign');
 
   const load = useCallback(() => {
@@ -73,6 +74,9 @@ export function MeetingRoomPanel({
   // Administration plan-change controls on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);
   const showAssign = canAssign && status === 'APPROVED' && !mr.room;
+  // wrong room assigned? Administration can swap it or free it (request goes
+  // back to the APPROVED unassigned queue — backend reverts the doc status)
+  const showChangeRoom = canAssign && status === 'IN_PROGRESS' && !!mr.room;
   const showComplete = canAssign && status === 'IN_PROGRESS';
 
   return (
@@ -201,6 +205,42 @@ export function MeetingRoomPanel({
             </Button>
           </div>
         </div>
+      )}
+
+      {showChangeRoom && (
+        <div className="border-t border-gray-100 pt-4 mt-4">
+          <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Room (Administration)</div>
+          <div className="flex flex-wrap gap-2 items-center">
+            <Select className="!w-64" value={assignRoomId} onChange={(e) => setAssignRoomId(e.target.value)}>
+              <option value="">— New room —</option>
+              {rooms.filter((r) => r.status === 'AVAILABLE' || r.status === 'IN_USE').map((r) => (
+                <option key={r.id} value={r.id}>{r.name} — seats {r.capacity} ({r.status})</option>
+              ))}
+            </Select>
+            <Button
+              disabled={!assignRoomId || assignRoomId === mr.room?.id}
+              onClick={() => act(() => api(`/meeting-rooms/requests/${requestId}/assign`, { method: 'POST', body: { roomId: assignRoomId } }))}
+            >
+              Change room
+            </Button>
+            <Button variant="danger" onClick={() => setConfirmRemove(true)}>Remove room</Button>
+          </div>
+          <p className="text-xs text-gray-400 mt-1.5">Change frees the old room (unless another booking still uses it). Remove frees the room and returns the request to Administration&apos;s unassigned queue. The requester is notified either way.</p>
+        </div>
+      )}
+
+      {confirmRemove && (
+        <ConfirmDialog
+          title="Remove the assigned room?"
+          description="The room is freed and the request returns to the unassigned APPROVED queue for Administration to re-assign. The requester will be notified."
+          confirmLabel="Remove room"
+          variant="danger"
+          onConfirm={async () => {
+            const ok = await act(() => api(`/meeting-rooms/requests/${requestId}/assign`, { method: 'POST', body: {} }));
+            if (ok) setConfirmRemove(false);
+          }}
+          onClose={() => setConfirmRemove(false)}
+        />
       )}
 
       {!mr.room && !canAssign && (

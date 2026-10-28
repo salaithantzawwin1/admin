@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Prisma, WorkflowStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
@@ -39,6 +39,8 @@ export class MeetingRoomsService {
     reservedDriver?: boolean;
     services?: string;
   }, actor: Actor) {
+    const title = (data.title ?? '').trim();
+    if (title.length < 3) throw new BadRequestException('Title must be at least 3 characters');
     const startTime = new Date(data.startTime);
     // End optional: default start + 1 hour
     const endTime = data.endTime ? new Date(data.endTime) : new Date(startTime.getTime() + 60 * 60 * 1000);
@@ -51,7 +53,7 @@ export class MeetingRoomsService {
       data: {
         docNumber: await this.numbering.next('MTG'),
         docType: 'MEETING_ROOM_REQUEST',
-        title: `Meeting: ${data.title}`,
+        title: `Meeting: ${title}`,
         description: data.description,
         requesterId: actor.userId,
         departmentId: (await this.prisma.employee.findFirst({ where: { userId: actor.userId } }))?.departmentId,
@@ -61,7 +63,7 @@ export class MeetingRoomsService {
     const mr = await this.prisma.meetingRoomRequest.create({
       data: {
         requestId: request.id,
-        title: data.title,
+        title,
         attendees: data.attendees ?? 1,
         startTime,
         endTime,
@@ -77,18 +79,39 @@ export class MeetingRoomsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'MEETING_REQUEST_CREATED', module: 'MEETING_ROOMS', recordId: request.id,
-      newValue: { docNumber: request.docNumber, title: data.title, startTime, endTime },
+      newValue: { docNumber: request.docNumber, title, startTime, endTime },
     });
 
     return { ...request, meetingRequest: mr };
   }
 
-  /** Meeting detail for the request detail page. */
-  async findByRequest(requestId: string) {
-    return this.prisma.meetingRoomRequest.findUnique({
+  /**
+   * Meeting detail for the request detail page — the same access rule as the
+   * car panel: owner, SYSTEM_ADMIN, meeting-rooms.assign or approvals.act.
+   * Without it ANY authenticated user could read anyone's meeting detail
+   * (verified: a finance account got 200 on someone else's meeting), while
+   * the car endpoint already 403'd outsiders.
+   */
+  async findByRequest(requestId: string, actor?: Actor) {
+    const mr = await this.prisma.meetingRoomRequest.findUnique({
       where: { requestId },
-      include: { room: true },
+      include: { room: true, request: { select: { requesterId: true } } },
     });
+    if (!mr || !actor) return mr;
+
+    const isOwner = mr.request?.requesterId === actor.userId;
+    const isSystemAdmin = await this.prisma.userRole
+      .findFirst({ where: { userId: actor.userId, role: { name: 'SYSTEM_ADMIN' } }, select: { userId: true } })
+      .then((r) => !!r);
+    const granted = await this.permissions.forUser(actor.userId);
+    const canAssign = granted.includes('meeting-rooms.assign');
+    // RBAC-native: approver-level access = approvals.act permission (same as cars)
+    const isApprover = await this.permissions.userHas(actor.userId, 'approvals.act');
+
+    if (!isOwner && !isSystemAdmin && !canAssign && !isApprover) {
+      throw new ForbiddenException('No access');
+    }
+    return mr;
   }
 
   /**
@@ -275,22 +298,50 @@ export class MeetingRoomsService {
     ].join('\n');
   }
 
-  /** Administration assigns a room to an APPROVED meeting request. */
+  /**
+   * Administration assigns (or re-assigns) a room on an approved meeting:
+   *  • fresh assign — status APPROVED → room booked, doc IN_PROGRESS;
+   *  • re-assign — status IN_PROGRESS with a room → old room freed when no
+   *    other live booking uses it, new room booked (same doc status);
+   *  • clear (`roomId` omitted) → room freed, doc back to APPROVED so the
+   *    request returns to the unassigned queue.
+   */
   async assign(requestId: string, roomId: string | undefined, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: { meetingRequest: true, requester: { select: { telegramChatId: true } } },
     });
     if (!request || !request.meetingRequest) throw new NotFoundException('Meeting request not found');
-    if (request.status !== 'APPROVED') {
-      throw new BadRequestException(`Only APPROVED requests can be assigned (current: ${request.status})`);
+    if (!['APPROVED', 'IN_PROGRESS'].includes(request.status)) {
+      throw new BadRequestException(`Only APPROVED or IN_PROGRESS requests can be assigned (current: ${request.status})`);
     }
 
     const mr = request.meetingRequest;
+    const prevRoomId = mr.roomId;
 
     if (!roomId) {
-      // clear the room (re-open the booking)
-      await this.prisma.meetingRoomRequest.update({ where: { requestId }, data: { roomId: null } });
+      // clear the room: free it and re-queue the request as APPROVED (unassigned).
+      // The old branch demanded APPROVED while assigned docs are IN_PROGRESS —
+      // i.e. unreachable — and only nulled roomId without reverting the doc, so a
+      // wrongly assigned room could not be fixed short of cancelling the whole
+      // request (adminShiftTime even told admins to "unassign it").
+      if (!prevRoomId) return { success: true };
+      await this.prisma.$transaction(async (tx) => {
+        await this.freeRoom(tx, prevRoomId, requestId);
+        await tx.meetingRoomRequest.update({ where: { requestId }, data: { roomId: null, status: 'APPROVED' } });
+        await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'APPROVED' } });
+      });
+      await this.audit.log({
+        userId: actor.userId, username: actor.username,
+        action: 'MEETING_ROOM_CLEARED', module: 'MEETING_ROOMS', recordId: requestId,
+        oldValue: { roomId: prevRoomId }, newValue: { roomId: null },
+      });
+      await this.notifications.notify({
+        userId: request.requesterId, type: 'RETURNED' as never,
+        title: `Room removed from ${request.docNumber}`,
+        body: 'Administration removed the room assignment — the request is back in the queue for a new room.',
+        link: `/requests/${requestId}`, requestId,
+      });
       return { success: true };
     }
 
@@ -319,17 +370,23 @@ export class MeetingRoomsService {
       );
     }
 
+    // re-assign: book the new room and free the old one when no other live
+    // booking still uses it (doc stays IN_PROGRESS either way)
     await this.prisma.$transaction(async (tx) => {
       await tx.meetingRoomRequest.update({ where: { requestId }, data: { roomId, status: 'IN_PROGRESS' } });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'IN_PROGRESS' } });
       await tx.meetingRoom.update({ where: { id: roomId }, data: { status: 'IN_USE' } });
+      if (prevRoomId && prevRoomId !== roomId) await this.freeRoom(tx, prevRoomId, requestId);
     });
 
+    const changed = !!prevRoomId && prevRoomId !== roomId;
     await this.notifications.notify({
       userId: request.requesterId,
       type: 'MEETING_ROOM_ASSIGNED',
-      title: `Room assigned to ${request.docNumber}`,
-      body: `${room.name}${room.location ? ` (${room.location})` : ''} has been booked for your meeting.`,
+      title: changed ? `Room changed on ${request.docNumber}` : `Room assigned to ${request.docNumber}`,
+      body: changed
+        ? `Your meeting was moved to ${room.name}${room.location ? ` (${room.location})` : ''}.`
+        : `${room.name}${room.location ? ` (${room.location})` : ''} has been booked for your meeting.`,
       link: `/requests/${requestId}`, requestId,
     });
 
@@ -341,10 +398,21 @@ export class MeetingRoomsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'MEETING_ROOM_ASSIGNED', module: 'MEETING_ROOMS', recordId: requestId,
+      ...(changed ? { oldValue: { roomId: prevRoomId } } : {}),
       newValue: { roomId, roomName: room.name },
     });
 
     return { success: true };
+  }
+
+  /** Free a room unless another live booking still uses it. */
+  private async freeRoom(tx: Prisma.TransactionClient, roomId: string, exceptRequestId: string) {
+    const others = await tx.meetingRoomRequest.count({
+      where: { roomId, requestId: { not: exceptRequestId }, status: { in: ACTIVE } },
+    });
+    if (others === 0) {
+      await tx.meetingRoom.update({ where: { id: roomId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+    }
   }
 
   /** Administration shifts the meeting time (requester is notified). */
