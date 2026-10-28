@@ -177,7 +177,7 @@ export default function PettyCash() {
             <td className="px-4 py-2.5">{t.account ? `${t.account.code ?? ''} ${t.account.name}` : '—'}</td>
             <td className="px-4 py-2.5 max-w-[280px] truncate" title={t.description ?? ''}>{t.description ?? '—'}</td>
             <td className="px-4 py-2.5 text-gray-500">{t.createdBy?.fullName || t.createdBy?.username || '—'}</td>
-            <td className="px-4 py-2.5">
+            <td className="px-4 py-2.5 text-center">
               {canManage && (
                 <Button variant="danger" onClick={() => setToDelete(t)}>Delete</Button>
               )}

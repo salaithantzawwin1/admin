@@ -616,7 +616,7 @@ export default function Inventory() {
                   <th className="px-4 py-3 font-medium">Item</th>
                   <th className="px-4 py-3 font-medium">Category</th>
                   <th className="px-4 py-3 font-medium">In stock</th>
-                  <th className="px-4 py-3 font-medium text-right">Action</th>
+                  <th className="px-4 py-3 font-medium text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -664,7 +664,7 @@ export default function Inventory() {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <button
                         className="text-blue-600 hover:underline mr-3 disabled:text-gray-300 disabled:no-underline"
                         disabled={i.out}
@@ -772,7 +772,7 @@ export default function Inventory() {
                   <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
                     <th className="px-4 py-3 font-medium">Doc No.</th>
                     <th className="px-4 py-3 font-medium">Items</th>
-                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium text-center">Status</th>
                     <th className="px-4 py-3 font-medium">Created</th>
                   </tr>
                 </thead>
@@ -785,7 +785,7 @@ export default function Inventory() {
                       <td className="px-4 py-3 text-gray-600">
                         {r.supplyRequest?.lines.map((l) => `${l.item?.name ?? '?'} ×${l.quantity}`).join(', ')}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 text-center">
                         <Badge color={STATUS_COLORS[r.supplyRequest?.status ?? r.status] ?? 'gray'}>
                           {r.supplyRequest?.status === 'PENDING' ? `PENDING (${r.status === 'PENDING_APPROVAL' ? 'awaiting approval' : 'approved — fulfilling'})` : r.supplyRequest?.status ?? r.status}
                         </Badge>
@@ -1020,7 +1020,7 @@ export default function Inventory() {
                   <th className="px-4 py-3 font-medium">Unit</th>
                   <th className="px-4 py-3 font-medium">Balance</th>
                   <th className="px-4 py-3 font-medium">Min</th>
-                  <th className="px-4 py-3 font-medium text-right">Actions</th>
+                  <th className="px-4 py-3 font-medium text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -1046,7 +1046,7 @@ export default function Inventory() {
                     <td className="px-4 py-3 text-gray-500">{i.unit}</td>
                     <td className="px-4 py-3">{i.balance}</td>
                     <td className="px-4 py-3 text-gray-500">{i.minStock}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => openImageModal(i)}>Photo</button>
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => { setEditingItem(i); setItemForm({ ...i }); }}>Edit</button>
                       <button className="text-gray-500 hover:underline mr-3" onClick={() => openHistory(i)}>Ledger</button>
@@ -1203,7 +1203,7 @@ export default function Inventory() {
                   <th className="px-4 py-3 font-medium">Unit</th>
                   <th className="px-4 py-3 font-medium">Balance</th>
                   <th className="px-4 py-3 font-medium">Min</th>
-                  <th className="px-4 py-3 font-medium text-right">Actions</th>
+                  <th className="px-4 py-3 font-medium text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -1229,7 +1229,7 @@ export default function Inventory() {
                     <td className="px-4 py-3 text-gray-500">{i.unit}</td>
                     <td className="px-4 py-3">{i.balance}</td>
                     <td className="px-4 py-3 text-gray-500">{i.minStock}</td>
-                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                    <td className="px-4 py-3 text-center whitespace-nowrap">
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => openImageModal(i)}>Photo</button>
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => { setEditingItem(i); setItemForm({ ...i }); }}>Edit</button>
                       <button className="text-gray-500 hover:underline mr-3" onClick={() => openHistory(i)}>Ledger</button>

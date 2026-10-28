@@ -177,10 +177,10 @@ export default function MyRequests() {
               <th className="px-4 py-3 font-medium">Doc No.</th>
               <th className="px-4 py-3 font-medium">Title</th>
               <th className="px-4 py-3 font-medium">Type</th>
-              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium text-center">Status</th>
               <th className="px-4 py-3 font-medium">Level</th>
               <th className="px-4 py-3 font-medium">Created</th>
-              <th className="px-4 py-3 font-medium"></th>
+              <th className="px-4 py-3 font-medium text-center"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -192,10 +192,10 @@ export default function MyRequests() {
                 </td>
                 <td className="px-4 py-3">{r.title}</td>
                 <td className="px-4 py-3 text-gray-500">{r.docType.replace(/_REQUEST|_/, ' ')}</td>
-                <td className="px-4 py-3"><Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge></td>
+                <td className="px-4 py-3 text-center"><Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge></td>
                 <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>
                 <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtDate(r.createdAt)}</td>
-                <td className="px-4 py-3 text-right space-x-2">
+                <td className="px-4 py-3 text-center space-x-2">
                   {r.status === 'DRAFT' && (
                     <>
                       <Button variant="ghost" onClick={() => submit(r.id)}>Submit</Button>

@@ -290,7 +290,7 @@ export function FleetDocumentsModal({
             <th className="px-3 py-2 font-medium">Ref. no.</th>
             <th className="px-3 py-2 font-medium">Expiry</th>
             <th className="px-3 py-2 font-medium">State</th>
-            <th className="px-3 py-2 font-medium text-right">Actions</th>
+            <th className="px-3 py-2 font-medium text-center">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100">
@@ -333,7 +333,7 @@ export function FleetDocumentsModal({
                   </button>
                 )}
               </td>
-              <td className="px-3 py-2 text-right whitespace-nowrap text-xs">
+              <td className="px-3 py-2 text-center whitespace-nowrap text-xs">
                 {canManage && d.current && mode === null && (
                   <>
                     <button className="text-blue-600 hover:underline mr-2" onClick={() => openEdit(d)}>Edit</button>

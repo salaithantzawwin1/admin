@@ -280,8 +280,8 @@ export default function Suppliers() {
                 <th className="px-4 py-3 font-medium">Name</th>
                 <th className="px-4 py-3 font-medium">Phone</th>
                 <th className="px-4 py-3 font-medium">Address</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium text-right">Actions</th>
+                <th className="px-4 py-3 font-medium text-center">Status</th>
+                <th className="px-4 py-3 font-medium text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -290,10 +290,10 @@ export default function Suppliers() {
                   <td className="px-4 py-3 font-medium">{s.name}{!s.isActive && ' (inactive)'}</td>
                   <td className="px-4 py-3 text-gray-500">{s.phone || '—'}</td>
                   <td className="px-4 py-3 text-gray-500 truncate max-w-xs">{s.address || '—'}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center">
                     <Badge color={s.isActive ? 'green' : 'gray'}>{s.isActive ? 'ACTIVE' : 'INACTIVE'}</Badge>
                   </td>
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button className="text-blue-600 hover:underline mr-3" onClick={() => openHistory(s)}>History</button>
                     {canManage && (
                       <>

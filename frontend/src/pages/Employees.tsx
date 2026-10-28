@@ -363,10 +363,10 @@ export default function Employees() {
                 ? <div className="flex flex-wrap gap-1">{e0.roles.map((r) => <Badge key={r} color="blue">{r}</Badge>)}</div>
                 : <span className="text-gray-400">—</span>}
             </td>
-            <td className="px-4 py-3"><Badge color={statusColor(e0.status)}>{e0.status}</Badge></td>
+            <td className="px-4 py-3 text-center"><Badge color={statusColor(e0.status)}>{e0.status}</Badge></td>
             <td className="px-4 py-3">
               {canManage && (
-                <div className="flex flex-wrap justify-end gap-1.5">
+                <div className="flex flex-wrap justify-center gap-1.5">
                   <button
                     className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
                     onClick={() => {

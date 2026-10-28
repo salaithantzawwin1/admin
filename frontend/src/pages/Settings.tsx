@@ -908,7 +908,7 @@ export default function Settings() {
                 <th className="py-2 pr-2">Amount band</th>
                 <th className="py-2 pr-2">Steps</th>
                 <th className="py-2 pr-2">State</th>
-                <th className="py-2 pr-2 text-right">Actions</th>
+                <th className="py-2 pr-2 text-center">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -928,8 +928,8 @@ export default function Settings() {
                   <td className="py-2 pr-2">
                     {wf.steps.map((s) => `L${s.level}: ${s.roleName}${(s.minApprovals ?? 1) > 1 ? ` (×${s.minApprovals})` : ''}`).join(' → ')}
                   </td>
-                  <td className="py-2 pr-2"><Badge color={wf.active ? 'green' : 'gray'}>{wf.active ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
-                  <td className="py-2 pr-2 text-right space-x-2 whitespace-nowrap">
+                  <td className="py-2 pr-2 text-center"><Badge color={wf.active ? 'green' : 'gray'}>{wf.active ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
+                  <td className="py-2 pr-2 text-center space-x-2 whitespace-nowrap">
                     <Button variant="ghost" onClick={() => openWfEdit(wf)}>Edit</Button>
                     <Button variant="ghost" onClick={() => toggleWfActive(wf)}>{wf.active ? 'Deactivate' : 'Activate'}</Button>
                   </td>
@@ -1030,8 +1030,8 @@ export default function Settings() {
               <th className="px-3 py-2 font-semibold first:pl-0">Code</th>
               <th className="px-3 py-2 font-semibold">Name</th>
               <th className="px-3 py-2 font-semibold">Category</th>
-              <th className="px-3 py-2 font-semibold">Status</th>
-              {hasPermission('procurement.manage') && <th className="px-3 py-2 font-semibold text-right">Actions</th>}
+              <th className="px-3 py-2 font-semibold text-center">Status</th>
+              {hasPermission('procurement.manage') && <th className="px-3 py-2 font-semibold text-center">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -1054,9 +1054,9 @@ export default function Settings() {
                 <td className="px-3 py-2 first:pl-0 font-mono text-xs text-gray-500">{a.code ?? '—'}</td>
                 <td className="px-3 py-2 font-medium text-gray-800">{a.name}</td>
                 <td className="px-3 py-2 text-gray-600">{a.category?.name ?? '—'}</td>
-                <td className="px-3 py-2"><Badge color={a.active ? 'green' : 'gray'}>{a.active ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
+                <td className="px-3 py-2 text-center"><Badge color={a.active ? 'green' : 'gray'}>{a.active ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
                 {hasPermission('procurement.manage') && (
-                  <td className="px-3 py-2 text-right whitespace-nowrap">
+                  <td className="px-3 py-2 text-center whitespace-nowrap">
                     <Button variant="ghost" disabled={acctBusy} onClick={() => openAcctEdit(a)}>Edit</Button>{' '}
                     <Button variant="ghost" disabled={acctBusy} onClick={() => toggleAcctActive(a)}>{a.active ? 'Deactivate' : 'Activate'}</Button>{' '}
                     <Button variant="danger" disabled={acctBusy} onClick={() => { setAcctDelete(a); setAcctError(''); setAcctMsg(''); }}>Delete</Button>
@@ -1197,7 +1197,7 @@ export default function Settings() {
               <th className="px-3 py-2 font-semibold">Spent</th>
               <th className="px-3 py-2 font-semibold">Remaining</th>
               <th className="px-3 py-2 font-semibold">Used</th>
-              {hasPermission('procurement.manage') && <th className="px-3 py-2 font-semibold text-right">Actions</th>}
+              {hasPermission('procurement.manage') && <th className="px-3 py-2 font-semibold text-center">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -1228,7 +1228,7 @@ export default function Settings() {
                   <Badge color={b.usedPercent >= 100 ? 'red' : b.usedPercent >= 80 ? 'orange' : b.usedPercent >= 50 ? 'yellow' : 'green'}>{b.usedPercent}%</Badge>
                 </td>
                 {hasPermission('procurement.manage') && (
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-center">
                     <Button variant="danger" disabled={budgetBusy} onClick={() => removeBudget(b.id)}>
                       Remove
                     </Button>
@@ -1278,7 +1278,7 @@ export default function Settings() {
                 <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
                   <th className="px-2 py-2 font-medium w-36">Date</th>
                   <th className="px-2 py-2 font-medium">Holiday name</th>
-                  <th className="px-2 py-2 font-medium text-right">Action</th>
+                  <th className="px-2 py-2 font-medium text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -1295,7 +1295,7 @@ export default function Settings() {
                       <td className="px-2 py-1.5">
                         <Input value={h.name} onChange={(e) => updateHoliday(i, { name: e.target.value })} />
                       </td>
-                      <td className="px-2 py-1.5 text-right">
+                      <td className="px-2 py-1.5 text-center">
                         <button className="text-red-600 hover:underline" onClick={() => removeHoliday(i)}>Remove</button>
                       </td>
                     </tr>

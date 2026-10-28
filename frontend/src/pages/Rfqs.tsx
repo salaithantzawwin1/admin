@@ -145,7 +145,7 @@ export default function Rfqs() {
               <th className="px-4 py-3 font-medium">Vendors</th>
               <th className="px-4 py-3 font-medium">Quotation</th>
               <th className="px-4 py-3 font-medium">Decision</th>
-              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium text-center">Status</th>
               <th className="px-4 py-3 font-medium">Created</th>
             </tr>
           </thead>
@@ -179,7 +179,7 @@ export default function Rfqs() {
                       <span className="text-gray-400">—</span>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center">
                     <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
                   </td>
                   <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtDate(r.createdAt)}</td>

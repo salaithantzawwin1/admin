@@ -562,7 +562,7 @@ export default function MeetingRooms() {
                   <th className="px-4 py-3 font-medium">Doc No.</th>
                   {canAssign && <th className="px-4 py-3 font-medium">Requester</th>}
                   <th className="px-4 py-3 font-medium">Title</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium text-center">Status</th>
                   <th className="px-4 py-3 font-medium">Level</th>
                   <th className="px-4 py-3 font-medium">Created</th>
                 </tr>
@@ -581,7 +581,7 @@ export default function MeetingRooms() {
                       </td>
                     )}
                     <td className="px-4 py-3">{r.title}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-center">
                       <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
                     </td>
                     <td className="px-4 py-3 text-gray-500">{r.totalLevels ? `${r.currentLevel}/${r.totalLevels}` : '—'}</td>
@@ -826,8 +826,8 @@ export default function MeetingRooms() {
                     <th className="px-3 py-2 font-medium">Location</th>
                     <th className="px-3 py-2 font-medium">Capacity</th>
                     <th className="px-3 py-2 font-medium">Facilities</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
-                    <th className="px-3 py-2 font-medium text-right">Actions</th>
+                    <th className="px-3 py-2 font-medium text-center">Status</th>
+                    <th className="px-3 py-2 font-medium text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -847,8 +847,8 @@ export default function MeetingRooms() {
                           {(room.facilities ?? '').trim() === '' && <span className="text-gray-400">—</span>}
                         </div>
                       </td>
-                      <td className="px-3 py-2"><Badge color={ROOM_STATUS_BADGES[room.status] ?? 'gray'}>{room.status}</Badge></td>
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <td className="px-3 py-2 text-center"><Badge color={ROOM_STATUS_BADGES[room.status] ?? 'gray'}>{room.status}</Badge></td>
+                      <td className="px-3 py-2 text-center whitespace-nowrap">
                         <button
                           className="text-blue-600 hover:underline mr-3"
                           onClick={() => {

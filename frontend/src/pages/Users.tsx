@@ -248,8 +248,8 @@ export default function Users() {
                 ))}
               </div>
             </td>
-            <td className="px-4 py-3">
-              <div className="flex items-center gap-1.5">
+            <td className="px-4 py-3 text-center">
+              <div className="flex items-center justify-center gap-1.5">
                 <Badge color={statusColor(u.status)}>{u.status}</Badge>
                 {(u.lockedSeconds ?? 0) > 0 && (
                   <Badge color="red" title={`Too many failed logins — locked for ${Math.ceil((u.lockedSeconds ?? 0) / 60)} more minute(s)`}>
@@ -266,8 +266,8 @@ export default function Users() {
               )}
             </td>
             <td className="px-4 py-3 text-gray-500">{u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : '—'}</td>
-            <td className="px-4 py-3">
-              <div className="flex flex-wrap justify-end gap-1.5">
+            <td className="px-4 py-3 text-center">
+              <div className="flex flex-wrap justify-center gap-1.5">
                 <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => openEdit(u)}>Edit</button>
                 <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => { setResetFor(u); setNewPassword(''); }}>Password</button>
                 {(u.lockedSeconds ?? 0) > 0 && (

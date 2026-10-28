@@ -1198,8 +1198,8 @@ export default function Fleet() {
               <th className="px-4 py-3 font-medium">Specs</th>
               <th className="px-4 py-3 font-medium">Driver</th>
               <th className="px-4 py-3 font-medium">Documents</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+              <th className="px-4 py-3 font-medium text-center">Status</th>
+              {canManage && <th className="px-4 py-3 font-medium text-center">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -1236,9 +1236,9 @@ export default function Fleet() {
                   <ExpiryPill label="Reg" date={v.registrationExpiry} status={v.registrationExpiryStatus} />
                   <ExpiryPill label="Insurance" date={v.insuranceExpiry} status={v.insuranceExpiryStatus} />
                 </td>
-                <td className="px-4 py-3"><Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge></td>
+                <td className="px-4 py-3 text-center"><Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge></td>
                 {canManage && (
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button
                       className="text-blue-600 hover:underline mr-3"
                       onClick={() => {
@@ -1278,9 +1278,9 @@ export default function Fleet() {
               <th className="px-4 py-3 font-medium">Vehicles</th>
               <th className="px-4 py-3 font-medium">Employee</th>
               <th className="px-4 py-3 font-medium">Telegram</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              <th className="px-4 py-3 font-medium text-right">History</th>
-              {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>
+              <th className="px-4 py-3 font-medium text-center">Status</th>
+              <th className="px-4 py-3 font-medium text-center">History</th>
+              {canManage && <th className="px-4 py-3 font-medium text-center">Actions</th>
               }
             </tr>
           </thead>
@@ -1335,7 +1335,7 @@ export default function Fleet() {
                     <span className="text-gray-400">—</span>
                   )}
                 </td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 text-center">
                   <Badge color={DRIVER_STATUS[d.status] ?? 'gray'}>{d.status}</Badge>
                   {d.absences?.some((a) => new Date(a.startsAt) <= new Date() && new Date(a.endsAt) > new Date()) && (
                     <span className="ml-1 text-[10px] text-yellow-800 bg-yellow-100 border border-yellow-200 rounded-full px-1.5 py-0.5" title={d.absences.map((a) => a.reason || 'absence').join(', ')}>on leave</span>
@@ -1349,7 +1349,7 @@ export default function Fleet() {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-3 text-right whitespace-nowrap">
+                <td className="px-4 py-3 text-center whitespace-nowrap">
                   <button
                     className="text-blue-600 hover:underline"
                     onClick={async () => {
@@ -1367,7 +1367,7 @@ export default function Fleet() {
                   >History</button>
                 </td>
                 {canManage && (
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button
                       className="text-blue-600 hover:underline mr-3"
                       onClick={() => {
@@ -1445,7 +1445,7 @@ export default function Fleet() {
               <th className="px-4 py-3 font-medium">Leave</th>
               <th className="px-4 py-3 font-medium">Window</th>
               <th className="px-4 py-3 font-medium">Reason</th>
-              {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+              {canManage && <th className="px-4 py-3 font-medium text-center">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -1463,7 +1463,7 @@ export default function Fleet() {
                   </td>
                   <td className="px-4 py-3 text-gray-500">{a.reason || '—'}</td>
                   {canManage && (
-                  <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button
                       className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1 mr-2 transition-colors"
                       onClick={() => {
@@ -1525,7 +1525,7 @@ export default function Fleet() {
               <th className="px-4 py-3 font-medium">From</th>
               <th className="px-4 py-3 font-medium">Until</th>
               <th className="px-4 py-3 font-medium">Reason</th>
-              {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+              {canManage && <th className="px-4 py-3 font-medium text-center">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -1536,7 +1536,7 @@ export default function Fleet() {
                 <td className="px-4 py-3 text-gray-600">{fmtDateTime(u.endsAt)}</td>
                 <td className="px-4 py-3 text-gray-500">{u.reason || '—'}</td>
                 {canManage && (
-                <td className="px-4 py-3 text-right whitespace-nowrap">
+                <td className="px-4 py-3 text-center whitespace-nowrap">
                   <button
                     className="text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg px-2.5 py-1 mr-2 transition-colors"
                     onClick={() => {
@@ -1593,8 +1593,8 @@ export default function Fleet() {
             <thead>
               <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
                 <th className="px-4 py-3 font-medium">Type</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                {canManage && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+                <th className="px-4 py-3 font-medium text-center">Status</th>
+                {canManage && <th className="px-4 py-3 font-medium text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -1602,9 +1602,9 @@ export default function Fleet() {
               {types.map((t) => (
                 <tr key={t.id} className="hover:bg-gray-50">
                   <td className="px-4 py-2.5 font-medium font-mono text-xs">{t.name}</td>
-                  <td className="px-4 py-2.5"><Badge color={t.active ? 'green' : 'gray'}>{t.active ? 'ACTIVE' : 'HIDDEN'}</Badge></td>
+                  <td className="px-4 py-2.5 text-center"><Badge color={t.active ? 'green' : 'gray'}>{t.active ? 'ACTIVE' : 'HIDDEN'}</Badge></td>
                   {canManage && (
-                    <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap">
                       <button className="text-blue-600 hover:underline mr-3" onClick={() => toggleType(t)}>{t.active ? 'Hide' : 'Show'}</button>
                       <button className="text-red-600 hover:underline" onClick={() => setDeletingType(t)}>Delete</button>
                     </td>
@@ -1679,8 +1679,8 @@ export default function Fleet() {
                 <th className="px-4 py-3 font-medium">Applies to</th>
                 <th className="px-4 py-3 font-medium">Dispatch policy</th>
                 <th className="px-4 py-3 font-medium">Reminder</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                {canSetup && <th className="px-4 py-3 font-medium text-right">Actions</th>}
+                <th className="px-4 py-3 font-medium text-center">Status</th>
+                {canSetup && <th className="px-4 py-3 font-medium text-center">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -1701,9 +1701,9 @@ export default function Fleet() {
                     {t.warningDays.length ? `${t.warningDays.join('/')} d before` : 'default 30/14/7/1'}
                     <div className="text-[10px] text-gray-400">{t.allowNoExpiry ? 'expiry optional' : 'expiry required'}</div>
                   </td>
-                  <td className="px-4 py-2.5"><Badge color={t.active ? 'green' : 'gray'}>{t.active ? 'ACTIVE' : 'HIDDEN'}</Badge></td>
+                  <td className="px-4 py-2.5 text-center"><Badge color={t.active ? 'green' : 'gray'}>{t.active ? 'ACTIVE' : 'HIDDEN'}</Badge></td>
                   {canSetup && (
-                    <td className="px-4 py-2.5 text-right whitespace-nowrap text-xs">
+                    <td className="px-4 py-2.5 text-center whitespace-nowrap text-xs">
                       <button
                         className="text-blue-600 hover:underline mr-2"
                         onClick={() => {

@@ -396,9 +396,9 @@ export default function PurchaseOrders() {
                 <th className="py-2 pr-2">From PR</th>
                 <th className="py-2 pr-2">Lines</th>
                 <th className="py-2 pr-2">Total</th>
-                <th className="py-2 pr-2">Status</th>
+                <th className="py-2 pr-2 text-center">Status</th>
                 <th className="py-2 pr-2">Ordered</th>
-                <th className="py-2 pr-2"></th>
+                <th className="py-2 pr-2 text-center"></th>
               </tr>
             </thead>
             <tbody>
@@ -412,7 +412,7 @@ export default function PurchaseOrders() {
                     <td className="py-2 pr-2">{po.purchaseRequest ? po.purchaseRequest.request.docNumber : '—'}</td>
                     <td className="py-2 pr-2">{po.items.length}</td>
                     <td className="py-2 pr-2">{money(tot)}</td>
-                    <td className="py-2 pr-2">
+                    <td className="py-2 pr-2 text-center">
                       <Badge color={PO_STATUS[po.status] ?? 'gray'}>{po.status.replace(/_/g, ' ')}</Badge>
                       {po.purchaseType && po.purchaseType !== 'NORMAL' && (
                         <div className="mt-1" title={po.purchaseReason ?? undefined}>
@@ -421,7 +421,7 @@ export default function PurchaseOrders() {
                       )}
                     </td>
                     <td className="py-2 pr-2">{fmtDate(po.orderDate)}</td>
-                    <td className="py-2 pr-2 text-right" onClick={(e) => e.stopPropagation()}>
+                    <td className="py-2 pr-2 text-center" onClick={(e) => e.stopPropagation()}>
                       {quality && canManage && (
                         <Button variant="ghost" onClick={quality === '📥 Record GRN' ? () => openGrnFromRow(po) : undefined}>{quality}</Button>
                       )}

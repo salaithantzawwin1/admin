@@ -387,7 +387,7 @@ export default function CarRequests() {
               <th className="px-4 py-3 font-medium">Doc No.</th>
               {canAssign && <th className="px-4 py-3 font-medium">Requester</th>}
               <th className="px-4 py-3 font-medium">Title</th>
-              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium text-center">Status</th>
               <th className="px-4 py-3 font-medium">Level</th>
               <th className="px-4 py-3 font-medium">Created</th>
             </tr>
@@ -406,7 +406,7 @@ export default function CarRequests() {
                   </td>
                 )}
                 <td className="px-4 py-3">{r.title}</td>
-                <td className="px-4 py-3">
+                <td className="px-4 py-3 text-center">
                   <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                     r.status === 'APPROVED' ? 'bg-green-100 text-green-700'
                     : r.status === 'REJECTED' ? 'bg-red-100 text-red-700'

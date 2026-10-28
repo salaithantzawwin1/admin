@@ -158,6 +158,9 @@ export function statusColor(status: string): 'green' | 'red' | 'gray' {
   return 'gray';
 }
 
+/** Columns whose content is a badge or a button group — rendered centred. */
+const CENTERED_COLS = new Set(['STATUS', 'ACTIONS']);
+
 export function Table({ head, children }: { head: string[]; children: ReactNode }) {
   return (
     <Card>
@@ -165,7 +168,9 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
         <thead>
           <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
             {head.map((h) => (
-              <th key={h} className="px-4 py-3 font-semibold first:pl-5 last:pr-5">
+              // STATUS badges and ACTIONS buttons are centred so a short pill / small
+              // button group doesn't sit flush against the left edge of a wide column.
+              <th key={h} className={`px-4 py-3 font-semibold first:pl-5 last:pr-5 ${CENTERED_COLS.has(h.trim().toUpperCase()) ? 'text-center' : ''}`}>
                 {h}
               </th>
             ))}

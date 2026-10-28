@@ -110,7 +110,7 @@ export default function Procurement() {
               <th className="px-4 py-3 font-medium">Title</th>
               <th className="px-4 py-3 font-medium">Items</th>
               <th className="px-4 py-3 font-medium">Priority</th>
-              <th className="px-4 py-3 font-medium">Status</th>
+              <th className="px-4 py-3 font-medium text-center">Status</th>
               {canReadAll && <th className="px-4 py-3 font-medium">Requester</th>}
               <th className="px-4 py-3 font-medium">Created</th>
             </tr>
@@ -142,7 +142,7 @@ export default function Procurement() {
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center">
                     <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
                     {canReadAll && r.status === 'APPROVED' && (
                       <Link

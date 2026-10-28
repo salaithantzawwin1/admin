@@ -238,10 +238,10 @@ export default function Assets() {
             <td className="px-4 py-2.5 font-mono text-xs">{a.serialNumber ?? '—'}</td>
             <td className="px-4 py-2.5">{a.custodian ?? '—'}</td>
             <td className="px-4 py-2.5">{a.location?.name ?? '—'}</td>
-            <td className="px-4 py-2.5">{statusBadge(a.status)}</td>
+            <td className="px-4 py-2.5 text-center">{statusBadge(a.status)}</td>
             <td className="px-4 py-2.5 text-right tabular-nums">{a.purchaseCost ? Number(a.purchaseCost).toLocaleString() : '—'}</td>
-            <td className="px-4 py-2.5">
-              <div className="flex flex-wrap gap-1.5">
+            <td className="px-4 py-2.5 text-center">
+              <div className="flex flex-wrap justify-center gap-1.5">
                 <Button variant="ghost" onClick={() => void openDetail(a.id)}>View</Button>
                 {canManage && a.status !== 'DISPOSED' && (
                   <Button variant="ghost" onClick={() => setTransfer({ id: a.id, name: a.name, toLocationId: a.location?.id ?? '', custodian: a.custodian ?? '', note: '' })}>

@@ -226,7 +226,7 @@ export default function Invoices() {
                 <th className="px-4 py-3 font-medium">Total</th>
                 <th className="px-4 py-3 font-medium">Match</th>
                 <th className="px-4 py-3 font-medium">Payment</th>
-                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium text-center">Status</th>
                 <th className="px-4 py-3 font-medium">Date</th>
               </tr>
             </thead>
@@ -251,7 +251,7 @@ export default function Invoices() {
                       <div className="text-xs text-gray-400 mt-0.5 tabular-nums">bal {money(Number(inv.total) - Number(inv.paidAmount))}</div>
                     )}
                   </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3 text-center">
                     <Badge color={STATUS_COLORS[inv.status] ?? 'gray'}>{inv.status}</Badge>
                   </td>
                   <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtDate(inv.invoiceDate)}</td>

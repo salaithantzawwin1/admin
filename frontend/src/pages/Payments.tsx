@@ -196,7 +196,7 @@ export default function Payments() {
             <td className="px-4 py-2.5">{p.method.replace('_', ' ')}</td>
             <td className="px-4 py-2.5 text-gray-500">{p.reference ?? '—'}</td>
             <td className="px-4 py-2.5 text-gray-500">{p.createdBy?.fullName || p.createdBy?.username || '—'}</td>
-            <td className="px-4 py-2.5">
+            <td className="px-4 py-2.5 text-center">
               {canManage && <Button variant="danger" onClick={() => setToDelete(p)}>Delete</Button>}
             </td>
           </tr>
@@ -226,7 +226,7 @@ export default function Payments() {
                 <span className="ml-2 text-xs font-semibold text-red-600">{p.daysOverdue}d overdue</span>
               )}
             </td>
-            <td className="px-4 py-2.5">
+            <td className="px-4 py-2.5 text-center">
               <Badge color={PAY_STATUS_COLOR[p.paymentStatus] ?? 'gray'}>{p.paymentStatus.replace('_', ' ')}</Badge>
             </td>
           </tr>
