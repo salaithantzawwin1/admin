@@ -620,6 +620,53 @@ async function main() {
     assert.strictEqual(ops.filter((o) => o[0] === 'notification.create').length, 2, 'each expired requester gets a bell notice');
   });
 
+  await test('startPassedNudge: past start + waiting → one START_PASSED bell each; already-notified skipped', async () => {
+    const notifies: any[] = [];
+    let capturedWhere: any = null;
+    const prismaSP: any = {
+      carRequest: {
+        findMany: async (p: any) => {
+          capturedWhere = p.where;
+          return [
+            // due an hour ago, still awaiting a decision
+            { startDate: new Date(Date.now() - 3600e3), vehicleId: null,
+              request: { id: 'r-pending', docNumber: 'CAR-202610-0076', status: 'PENDING_APPROVAL', requesterId: 'u-req' } },
+            // approved on time, but no car was ever picked
+            { startDate: new Date(Date.now() - 7200e3), vehicleId: null,
+              request: { id: 'r-unassigned', docNumber: 'CAR-202610-0078', status: 'APPROVED', requesterId: 'u-req2' } },
+            // bell already sent on an earlier sweep
+            { startDate: new Date(Date.now() - 9000e3), vehicleId: null,
+              request: { id: 'r-already', docNumber: 'CAR-202610-0070', status: 'PENDING_APPROVAL', requesterId: 'u-req3' } },
+          ];
+        },
+      },
+      notification: {
+        findFirst: async ({ where }: any) => (where.requestId === 'r-already' ? { id: 'n-seen' } : null),
+      },
+    };
+    const svcSP: any = new TripRemindersService(
+      prismaSP,
+      { notify: async (p: any) => { notifies.push(p); return {}; }, notifyMany: async () => ({}) } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+    await svcSP.startPassedNudge();
+
+    // only the not-yet-notified rows get a bell — one per request, never a repeat
+    assert.deepStrictEqual(notifies.map((n) => n.requestId), ['r-pending', 'r-unassigned']);
+    assert.ok(notifies.every((n) => n.type === 'START_PASSED'), 'bell carries the START_PASSED type');
+    assert.strictEqual(notifies[0].userId, 'u-req', 'the bell goes to the requester');
+    assert.ok(notifies[0].body.includes('awaiting approval'), 'pending wording names the missing approval');
+    assert.ok(notifies[1].body.includes('no vehicle was assigned'), 'approved-unassigned wording names the missing car');
+
+    // the sweep may only ever look at past starts and these two dead ends
+    assert.ok(capturedWhere.startDate.lte instanceof Date, 'cutoff is "start already passed"');
+    assert.strictEqual(capturedWhere.OR.length, 2, 'pending + approved-unassigned branches');
+    assert.deepStrictEqual(capturedWhere.OR[0].request.status.in, ['SUBMITTED', 'PENDING_APPROVAL']);
+    assert.deepStrictEqual(capturedWhere.OR[1], { request: { status: 'APPROVED' }, vehicleId: null }, 'approved branch requires an unassigned car');
+    assert.ok(capturedWhere.NOT?.request?.carAssignment?.releasedAt === null, 'a live assignment keeps the trip out of this sweep');
+  });
+
   await test('renormalizeVehicleStatuses: stale IN_USE vehicle → AVAILABLE + audit; live claims untouched', async () => {
     const ops: Array<[string, any]> = [];
     const prismaRenorm: any = {

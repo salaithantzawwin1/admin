@@ -370,6 +370,74 @@ export class TripRemindersService {
   }
 
   /**
+   * "Start time passed" — the missing first rung of the request ladder.
+   * Reported case: CAR-202610-0076 was due 28 Oct 15:30 and the requester
+   * heard nothing while it sat unapproved; the only notice that ever fires is
+   * the expiry bell 24h AFTER the window closed (expireStaleRequests below).
+   *
+   * Two dead ends are caught the moment the scheduled start arrives:
+   *   • SUBMITTED/PENDING_APPROVAL — the trip cannot start on time, nobody told them
+   *   • APPROVED with no vehicle — approved, but Administration never picked a car
+   *     (an assignment still open means the Back-at-Office flow owns it, not this)
+   *
+   * One START_PASSED bell per request, ever — so a 5-minute sweep is free to
+   * repeat and never nags. Ladder: T+start → this bell, window-end +24h →
+   * expireStaleRequests (CANCELLED + "⌛ Request expired").
+   */
+  @Cron('0 */5 * * * *') // every 5 min — "immediately" from the requester's side
+  async startPassedNudge() {
+    try {
+      const now = new Date();
+      const overdue = await this.prisma.carRequest.findMany({
+        where: {
+          startDate: { lte: now },
+          OR: [
+            { request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL'] as never } } },
+            { request: { status: 'APPROVED' as never }, vehicleId: null },
+          ],
+          // a live assignment belongs to the trip itself, not to this sweep
+          NOT: { request: { carAssignment: { releasedAt: null } } },
+        },
+        select: {
+          startDate: true,
+          vehicleId: true,
+          request: { select: { id: true, docNumber: true, status: true, requesterId: true } },
+        },
+        orderBy: { startDate: 'asc' },
+        take: 100,
+      });
+
+      let sent = 0;
+      for (const r of overdue) {
+        // idempotency: at most one START_PASSED bell per request
+        const existing = await this.prisma.notification.findFirst({
+          where: { requestId: r.request.id, type: 'START_PASSED' as never },
+          select: { id: true },
+        });
+        if (existing) continue;
+
+        const pending = r.request.status !== 'APPROVED';
+        const when = yangonShort(r.startDate);
+        const body = pending
+          ? `Your car request for ${when} is still awaiting approval, so the trip could not start on time. Contact Administration — or submit a new request — if you still need the vehicle.`
+          : `Your car request for ${when} was approved, but no vehicle was assigned before the start time passed. Contact Administration: the trip needs to be re-planned.`;
+        await this.notifications.notify({
+          userId: r.request.requesterId,
+          type: 'START_PASSED' as never,
+          title: `⏳ Start time passed — ${r.request.docNumber}`,
+          body,
+          link: `/requests/${r.request.id}`,
+          requestId: r.request.id,
+        });
+        sent++;
+      }
+      if (sent > 0) this.logger.log(`sent ${sent} start-passed notice(s) for overdue car request(s)`);
+    } catch (e) {
+      this.logger.warn(`startPassedNudge failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
    * Expire forgotten requests: a car request whose window ended MORE than 24h
    * ago and that never got a vehicle (or never got approved) can no longer
    * happen — the rider forgot to cancel. Close it CANCELLED with an audit

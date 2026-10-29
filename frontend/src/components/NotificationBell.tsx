@@ -33,6 +33,8 @@ const TYPE_META: Record<string, { icon: string; cls: string }> = {
   CAR_DRIVER_NOTED: { icon: '👁️', cls: 'bg-gray-100 text-gray-600' },
   CAR_DRIVER_ARRIVED: { icon: '📍', cls: 'bg-blue-100 text-blue-600' },
   CAR_DRIVER_RETURNED: { icon: '🔄', cls: 'bg-gray-100 text-gray-600' },
+  // scheduled start arrived with approval still outstanding (or no car assigned)
+  START_PASSED: { icon: '⏳', cls: 'bg-amber-100 text-amber-700' },
   // meetings
   MEETING_ROOM_ASSIGNED: { icon: '🏢', cls: 'bg-blue-100 text-blue-600' },
   MEETING_COMPLETED: { icon: '📝', cls: 'bg-gray-100 text-gray-600' },
