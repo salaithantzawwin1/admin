@@ -907,7 +907,7 @@ export default function Settings() {
                 <th className="py-2 pr-2">Name</th>
                 <th className="py-2 pr-2">Amount band</th>
                 <th className="py-2 pr-2">Steps</th>
-                <th className="py-2 pr-2">State</th>
+                <th className="py-2 pr-2 text-center">State</th>
                 <th className="py-2 pr-2 text-center">Actions</th>
               </tr>
             </thead>
