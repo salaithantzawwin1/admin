@@ -1,3 +1,8 @@
+/* Noto Sans Myanmar for Burmese text — must be FIRST: an @import is only valid
+   before any other rule, so sitting it below the @tailwind directives meant it
+   was silently dropped and Burmese fell back to whatever was installed. */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -16,9 +21,8 @@ body {
   color: #1f2937;
 }
 
-/* Myanmar script gets the proper font first — Burmese titles must not fall
-   back to a Latin font with broken stacking. Loaded from Google Fonts. */
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;500;600;700&display=swap');
+/* Myanmar script resolves to Noto Sans Myanmar (loaded above), then Padauk /
+   Myanmar Text as local fallbacks. Loaded from Google Fonts. */
 
 /* Mobile responsiveness: data tables keep readable column widths and
    scroll horizontally inside their card instead of squeezing or

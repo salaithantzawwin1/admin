@@ -223,7 +223,7 @@ export default function Departments() {
             <td className="px-4 py-3">{d.headEmployee?.fullName ?? '—'}</td>
             <td className="px-4 py-3">{d._count?.employees ?? 0}</td>
             <td className="px-4 py-3 text-center"><Badge color={d.isActive ? 'green' : 'red'}>{d.isActive ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
-            <td className="px-4 py-3">
+            <td className="px-4 py-3 text-center">
               {canManage && (
                 <div className="flex flex-wrap justify-center gap-1.5">
                   <button className="text-xs px-2 py-1 rounded border border-yellow-300 text-yellow-700 hover:bg-yellow-50" onClick={() => toggleDept(d)}>
@@ -247,7 +247,7 @@ export default function Departments() {
             <td className="px-4 py-3 text-gray-500">{b.address || '—'}</td>
             <td className="px-4 py-3 text-gray-500">{b.phone || '—'}</td>
             <td className="px-4 py-3 text-center"><Badge color={b.isActive ? 'green' : 'red'}>{b.isActive ? 'ACTIVE' : 'INACTIVE'}</Badge></td>
-            <td className="px-4 py-3">
+            <td className="px-4 py-3 text-center">
               {canManage && (
                 <div className="flex flex-wrap justify-center gap-1.5">
                   <button className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50" onClick={() => setMode({ kind: 'editBranch', row: { ...b } })}>Edit</button>

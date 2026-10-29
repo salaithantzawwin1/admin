@@ -161,6 +161,10 @@ export function statusColor(status: string): 'green' | 'red' | 'gray' {
 /** Columns whose content is a badge or a button group — rendered centred. */
 const CENTERED_COLS = new Set(['STATUS', 'ACTIONS']);
 
+/** Numeric (money/quantity) columns — values are right-aligned with
+ *  tabular-nums, so the header must match or the column reads as ragged. */
+const RIGHT_COLS = new Set(['COST (MMK)', 'AMOUNT (MMK)', 'TOTAL', 'PAID', 'BALANCE']);
+
 export function Table({ head, children }: { head: string[]; children: ReactNode }) {
   return (
     <Card>
@@ -170,7 +174,7 @@ export function Table({ head, children }: { head: string[]; children: ReactNode 
             {head.map((h) => (
               // STATUS badges and ACTIONS buttons are centred so a short pill / small
               // button group doesn't sit flush against the left edge of a wide column.
-              <th key={h} className={`px-4 py-3 font-semibold first:pl-5 last:pr-5 ${CENTERED_COLS.has(h.trim().toUpperCase()) ? 'text-center' : ''}`}>
+              <th key={h} className={`px-4 py-3 font-semibold first:pl-5 last:pr-5 ${CENTERED_COLS.has(h.trim().toUpperCase()) ? 'text-center' : RIGHT_COLS.has(h.trim().toUpperCase()) ? 'text-right' : ''}`}>
                 {h}
               </th>
             ))}

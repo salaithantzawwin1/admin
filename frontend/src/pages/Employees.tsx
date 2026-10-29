@@ -364,7 +364,7 @@ export default function Employees() {
                 : <span className="text-gray-400">—</span>}
             </td>
             <td className="px-4 py-3 text-center"><Badge color={statusColor(e0.status)}>{e0.status}</Badge></td>
-            <td className="px-4 py-3">
+            <td className="px-4 py-3 text-center">
               {canManage && (
                 <div className="flex flex-wrap justify-center gap-1.5">
                   <button
