@@ -3,8 +3,15 @@
 @tailwind utilities;
 
 /* ---- Design system base ---- */
+/* Latin first, Myanmar fonts after the Latin system stack: font fallback is
+   per glyph, so Burmese still falls through to Noto Sans Myanmar / Padauk /
+   Myanmar Text, but Latin never does. The old order listed the Myanmar fonts
+   before system-ui, and Myanmar Text is installed on office PCs — it carries
+   Myanmar-script metrics (descent ~10px at 12px) that sit the baseline too
+   low, which pushed short Latin labels like the status badges up out of the
+   centre of their pill (AVAILABLE / APPROVED / COMPLETED). */
 body {
-  font-family: 'Inter', 'Noto Sans Myanmar', 'Padauk', 'Myanmar Text', ui-sans-serif, system-ui, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Noto Sans Myanmar', 'Padauk', 'Myanmar Text', sans-serif;
   -webkit-font-smoothing: antialiased;
   color: #1f2937;
 }
