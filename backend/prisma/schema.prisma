@@ -1390,6 +1390,18 @@ model Location {
   @@map("locations")
 }
 
+// Custody master list (§40) — who may hold an asset, managed from the
+// Asset Setup tab. Asset.custodian stays a free-text SNAPSHOT on the asset so
+// history never rewrites itself when this list is renamed or trimmed; the
+// column stores the name, this table only feeds the picker.
+model Custodian {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("custodians")
+}
+
 model Asset {
   id           String    @id @default(uuid()) @db.Uuid
   assetCode    String    @unique // e.g. AST-COP-001

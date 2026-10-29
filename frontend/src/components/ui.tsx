@@ -163,7 +163,7 @@ const CENTERED_COLS = new Set(['STATUS', 'ACTIONS']);
 
 /** Numeric (money/quantity) columns — values are right-aligned with
  *  tabular-nums, so the header must match or the column reads as ragged. */
-const RIGHT_COLS = new Set(['COST (MMK)', 'AMOUNT (MMK)', 'TOTAL', 'PAID', 'BALANCE']);
+const RIGHT_COLS = new Set(['COST (MMK)', 'AMOUNT (MMK)', 'TOTAL', 'PAID', 'BALANCE', 'USED BY']);
 
 export function Table({ head, children }: { head: string[]; children: ReactNode }) {
   return (

@@ -55,6 +55,11 @@ export class AssetTransferDto {
   @IsOptional() @IsString() @MaxLength(300) note?: string;
 }
 
+/** Asset Setup (New) master-list body: {name} for category/location/custodian. */
+export class SetupNameDto {
+  @IsString() @IsNotEmpty() @MaxLength(120) name!: string;
+}
+
 @ApiTags('assets')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -85,6 +90,81 @@ export class AssetsController {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="asset-register-${new Date().toISOString().slice(0, 10)}.csv"`);
     res.send(body);
+  }
+
+  // ---------- Asset Setup (New) master CRUD — categories / locations / custodians ----------
+  // Declared before @Get(':id') so the static segments are not swallowed by it.
+
+  @Get('categories')
+  @RequirePermissions(PERMISSIONS.ASSETS_READ)
+  listCategories() {
+    return this.assets.listSetup('categories');
+  }
+
+  @Post('categories')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  createCategory(@Req() req, @Body() dto: SetupNameDto) {
+    return this.assets.createSetup('categories', dto, this.actor(req));
+  }
+
+  @Get('locations')
+  @RequirePermissions(PERMISSIONS.ASSETS_READ)
+  listLocations() {
+    return this.assets.listSetup('locations');
+  }
+
+  @Post('locations')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  createLocation(@Req() req, @Body() dto: SetupNameDto) {
+    return this.assets.createSetup('locations', dto, this.actor(req));
+  }
+
+  @Get('custodians')
+  @RequirePermissions(PERMISSIONS.ASSETS_READ)
+  listCustodians() {
+    return this.assets.listSetup('custodians');
+  }
+
+  @Post('custodians')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  createCustodian(@Req() req, @Body() dto: SetupNameDto) {
+    return this.assets.createSetup('custodians', dto, this.actor(req));
+  }
+
+  @Patch('categories/:id')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  updateCategory(@Req() req, @Param('id') id: string, @Body() dto: SetupNameDto) {
+    return this.assets.updateSetup('categories', id, dto, this.actor(req));
+  }
+
+  @Delete('categories/:id')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  removeCategory(@Req() req, @Param('id') id: string) {
+    return this.assets.removeSetup('categories', id, this.actor(req));
+  }
+
+  @Patch('locations/:id')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  updateLocation(@Req() req, @Param('id') id: string, @Body() dto: SetupNameDto) {
+    return this.assets.updateSetup('locations', id, dto, this.actor(req));
+  }
+
+  @Delete('locations/:id')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  removeLocation(@Req() req, @Param('id') id: string) {
+    return this.assets.removeSetup('locations', id, this.actor(req));
+  }
+
+  @Patch('custodians/:id')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  updateCustodian(@Req() req, @Param('id') id: string, @Body() dto: SetupNameDto) {
+    return this.assets.updateSetup('custodians', id, dto, this.actor(req));
+  }
+
+  @Delete('custodians/:id')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  removeCustodian(@Req() req, @Param('id') id: string) {
+    return this.assets.removeSetup('custodians', id, this.actor(req));
   }
 
   @Get(':id')

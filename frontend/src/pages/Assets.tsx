@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, hasPermission, getToken } from '../api';
 import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { AssetSetupTab } from '../components/AssetSetupTab';
 
 interface AssetRow {
   id: string;
@@ -37,6 +39,7 @@ interface AssetDetail extends AssetRow {
 
 interface Category { id: string; name: string }
 interface Location { id: string; name: string }
+interface Custodian { id: string; name: string }
 
 const STATUS_COLORS: Record<string, 'green' | 'gray' | 'yellow' | 'red'> = {
   ACTIVE: 'green', IN_STORAGE: 'gray', MAINTENANCE: 'yellow', DISPOSED: 'red',
@@ -53,6 +56,12 @@ export default function Assets() {
   const [rows, setRows] = useState<AssetRow[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
+  const [custodians, setCustodians] = useState<Custodian[]>([]);
+  // tabs (URL-driven, same pattern as Inventory / Meeting Rooms); the setup tab
+  // is admin-only, so a stale ?tab=setup URL falls back to the register
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get('tab') === 'setup' && canManage ? 'setup' : 'register';
+  const setTab = (t: 'register' | 'setup') => setSearchParams(t === 'register' ? {} : { tab: t }, { replace: false });
   const [q, setQ] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [locationId, setLocationId] = useState('');
@@ -86,21 +95,23 @@ export default function Assets() {
 
   useEffect(() => { void load(); }, [load]);
 
-  // pickers (once)
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [cats, locs] = await Promise.all([
-          api<Category[]>('/procurement/asset-categories'),
-          api<Location[]>('/procurement/asset-locations'),
-        ]);
-        setCategories(cats);
-        setLocations(locs);
-      } catch {
-        // pickers degrade to empty — the form still works without them
-      }
-    })();
+  // pickers (once, and again after the Asset Setup tab edits them)
+  const loadPickers = useCallback(async () => {
+    try {
+      const [cats, locs, custs] = await Promise.all([
+        api<Category[]>('/procurement/asset-categories'),
+        api<Location[]>('/procurement/asset-locations'),
+        api<Custodian[]>('/assets/custodians'),
+      ]);
+      setCategories(cats);
+      setLocations(locs);
+      setCustodians(custs);
+    } catch {
+      // pickers degrade to empty — the form still works without them
+    }
   }, []);
+
+  useEffect(() => { void loadPickers(); }, [loadPickers]);
 
   const openDetail = async (id: string) => {
     try {
@@ -185,6 +196,13 @@ export default function Assets() {
     () => rows.reduce((sum, r) => sum + (r.purchaseCost ? Number(r.purchaseCost) : 0), 0),
     [rows],
   );
+  const tabDefs: { key: 'register' | 'setup'; label: string }[] = canManage
+    ? [{ key: 'register', label: 'Asset Register' }, { key: 'setup', label: 'Asset Setup (New)' }]
+    : [{ key: 'register', label: 'Asset Register' }];
+  // auto-code segment the backend derives from the chosen category
+  // ("IT Equipment" → AST-ITE-…), mirrored here so the dialog can preview it
+  const autoSeg = (categories.find((c) => c.id === form?.categoryId)?.name ?? '')
+    .toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
 
   return (
     <div>
@@ -192,12 +210,35 @@ export default function Assets() {
         title="Asset Register"
         subtitle={`${rows.length} asset(s) · book value MMK ${totalCost.toLocaleString()}`}
         actions={
-          <>
-            <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
-            {canManage && <Button onClick={() => setForm({ ...emptyForm })}>+ New asset</Button>}
-          </>
+          tab === 'register' ? (
+            <>
+              <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
+              {canManage && <Button onClick={() => setForm({ ...emptyForm })}>+ New asset</Button>}
+            </>
+          ) : null
         }
       />
+
+      {/* Tabs (URL-driven, same pattern as Inventory / Meeting Rooms) */}
+      <div className="flex gap-1 border-b border-gray-200 mb-4">
+        {tabDefs.map((t) => (
+          <button
+            key={t.key}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+              tab === t.key
+                ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ============ Tab: Asset Register (everyone) ============ */}
+      {tab === 'register' && (
+      <>
 
       {/* filters */}
       <Card className="p-4 mb-4">
@@ -267,6 +308,14 @@ export default function Assets() {
         ))}
       </Table>
 
+      </>
+      )}
+
+      {/* ============ Tab: Asset Setup (New) — CATEGORY / LOCATION / CUSTODIAN CRUD ============ */}
+      {tab === 'setup' && canManage && (
+        <AssetSetupTab onChanged={() => void loadPickers()} />
+      )}
+
       {/* create / edit */}
       {form && (
         <Modal title={form.id ? 'Edit asset' : 'New asset'} onClose={() => setForm(null)} error={error} wide>
@@ -277,7 +326,14 @@ export default function Assets() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Asset code</label>
-              <Input value={form.assetCode} onChange={(e) => setForm({ ...form, assetCode: e.target.value })} placeholder="Leave blank → auto AST-…" describe="Custom code must be unique" />
+              <Input
+                value={form.assetCode}
+                onChange={(e) => setForm({ ...form, assetCode: e.target.value })}
+                placeholder="Leave blank → auto from category"
+                describe={form.assetCode
+                  ? 'Custom code must be unique'
+                  : `Auto code: ${autoSeg ? `AST-${autoSeg}-YYYYMM-0001` : 'AST-YYYYMM-0001'}`}
+              />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
@@ -325,7 +381,16 @@ export default function Assets() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Custodian</label>
-              <Input value={form.custodian} onChange={(e) => setForm({ ...form, custodian: e.target.value })} placeholder="Person / department" />
+              <Select value={form.custodian} onChange={(e) => setForm({ ...form, custodian: e.target.value })}>
+                <option value="">— none —</option>
+                {/* a value that left the master list stays selectable, so saving
+                    never silently rewrites the row it came from */}
+                {form.custodian && !custodians.some((c) => c.name === form.custodian) && (
+                  <option value={form.custodian}>{form.custodian}</option>
+                )}
+                {custodians.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </Select>
+              <p className="text-[11px] text-gray-400 mt-1">Maintained in the Asset Setup (New) tab.</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Purchase date</label>
@@ -402,7 +467,13 @@ export default function Assets() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Custodian</label>
-              <Input value={transfer.custodian} onChange={(e) => setTransfer({ ...transfer, custodian: e.target.value })} placeholder="Person / department taking custody" />
+              <Select value={transfer.custodian} onChange={(e) => setTransfer({ ...transfer, custodian: e.target.value })}>
+                <option value="">— keep current —</option>
+                {transfer.custodian && !custodians.some((c) => c.name === transfer.custodian) && (
+                  <option value={transfer.custodian}>{transfer.custodian}</option>
+                )}
+                {custodians.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+              </Select>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Note</label>

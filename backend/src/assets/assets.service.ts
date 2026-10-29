@@ -6,6 +6,17 @@ import { Actor } from '../org/org.service';
 
 const ASSET_STATUSES = ['ACTIVE', 'IN_STORAGE', 'MAINTENANCE', 'DISPOSED'] as const;
 
+/** Asset Setup (New) master lists — each is a flat {id,name} table. */
+export type SetupKind = 'categories' | 'locations' | 'custodians';
+
+const SETUP_LABEL: Record<SetupKind, string> = {
+  categories: 'Category', locations: 'Location', custodians: 'Custodian',
+};
+
+const SETUP_AUDIT: Record<SetupKind, string> = {
+  categories: 'ASSET_CATEGORY', locations: 'ASSET_LOCATION', custodians: 'ASSET_CUSTODIAN',
+};
+
 /** Movement rows audit the lifecycle (§16/§40): every register/transfer/
  *  status change leaves one append-only row. */
 const MOVEMENT_FOR_TRANSITION: Record<string, string> = {
@@ -75,14 +86,14 @@ export class AssetsService {
       const taken = await this.prisma.asset.findUnique({ where: { assetCode } });
       if (taken) throw new ConflictException(`Asset code "${assetCode}" already exists`);
     }
-    await this.assertRefs(data.categoryId, data.locationId);
+    const category = await this.assertRefs(data.categoryId, data.locationId);
     if (data.purchaseCost !== undefined && data.purchaseCost !== null && data.purchaseCost < 0) {
       throw new BadRequestException('Purchase cost must be non-negative');
     }
 
     const asset = await this.prisma.asset.create({
       data: {
-        assetCode: assetCode || (await this.numbering.next('AST')),
+        assetCode: assetCode || (await this.nextAutoCode(category?.name)),
         name: data.name.trim(),
         categoryId: data.categoryId || undefined,
         brand: data.brand?.trim() || undefined,
@@ -248,11 +259,11 @@ export class AssetsService {
     const accepted = item.grnItems.reduce((s, g) => s + g.acceptedQty, 0);
     const cost = data.purchaseCost ?? Number(item.unitPrice) * (accepted > 0 ? accepted : item.quantity);
     if (cost < 0) throw new BadRequestException('Purchase cost must be non-negative');
-    await this.assertRefs(data.categoryId, data.locationId);
+    const poCategory = await this.assertRefs(data.categoryId, data.locationId);
 
     const asset = await this.prisma.asset.create({
       data: {
-        assetCode: await this.numbering.next('AST'),
+        assetCode: await this.nextAutoCode(poCategory?.name),
         name: data.name?.trim() || item.description,
         categoryId: data.categoryId || undefined,
         brand: data.brand?.trim() || undefined,
@@ -316,14 +327,142 @@ export class AssetsService {
     });
   }
 
-  private async assertRefs(categoryId?: string, locationId?: string) {
+  /** Validates the optional category/location links and returns the category row
+   *  (callers need its name to build a category-scoped asset code). */
+  private async assertRefs(categoryId?: string, locationId?: string): Promise<{ name: string } | null> {
+    let category: { name: string } | null = null;
     if (categoryId) {
-      const cat = await this.prisma.assetCategory.findUnique({ where: { id: categoryId } });
-      if (!cat) throw new BadRequestException('Unknown asset category');
+      category = await this.prisma.assetCategory.findUnique({ where: { id: categoryId } });
+      if (!category) throw new BadRequestException('Unknown asset category');
     }
     if (locationId) {
       const loc = await this.prisma.location.findUnique({ where: { id: locationId } });
       if (!loc) throw new BadRequestException('Unknown location');
     }
+    return category;
+  }
+
+  /**
+   * Auto codes are scoped to the asset's category: "IT Equipment" → AST-ITE-202610-0001
+   * instead of the generic AST-202610-0001, so codes sort and read by type.
+   * The segment is the first three A-Z/0-9 characters of the name uppercased;
+   * a Latin-free (Burmese) name or no category keeps the plain AST- prefix.
+   * Categories that share a segment share one counter — codes stay unique either way.
+   */
+  private autoPrefix(categoryName?: string | null): string {
+    const seg = (categoryName ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+    return seg ? `AST-${seg}` : 'AST';
+  }
+
+  /** The sequence only knows its own rows: a hand-typed code can already occupy
+   *  the slot it is about to hand out, so retry until a free code comes back. */
+  private async nextAutoCode(categoryName?: string | null): Promise<string> {
+    const prefix = this.autoPrefix(categoryName);
+    for (let i = 0; i < 10; i++) {
+      const code = await this.numbering.next(prefix);
+      const taken = await this.prisma.asset.findUnique({ where: { assetCode: code } });
+      if (!taken) return code;
+    }
+    throw new ConflictException('Could not allocate a free asset code — please enter one manually');
+  }
+
+  // ---------- Asset Setup master data: categories / locations / custodians ----------
+
+  /** Rows used by the Asset Setup (New) tab. The usage count is what blocks a
+   *  delete, so it is computed the same way in list and remove. */
+  async listSetup(kind: SetupKind) {
+    const rows: any[] = await this.setupModel(kind).findMany({ orderBy: { name: 'asc' } });
+    const out = [] as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      const { total } = await this.setupUsage(kind, row);
+      out.push({ ...row, usage: total });
+    }
+    return out;
+  }
+
+  async createSetup(kind: SetupKind, data: { name: string }, actor: Actor) {
+    const name = data.name?.trim();
+    if (!name) throw new BadRequestException('Name is required');
+    const taken = await this.setupModel(kind).findUnique({ where: { name } });
+    if (taken) throw new ConflictException(`${SETUP_LABEL[kind]} "${name}" already exists`);
+    const row = await this.setupModel(kind).create({ data: { name } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: `${SETUP_AUDIT[kind]}_CREATED`, module: 'ASSETS', recordId: row.id,
+      newValue: { name },
+    });
+    return { ...row, usage: 0 };
+  }
+
+  async updateSetup(kind: SetupKind, id: string, data: { name: string }, actor: Actor) {
+    const prev = await this.setupModel(kind).findUnique({ where: { id } });
+    if (!prev) throw new NotFoundException(`${SETUP_LABEL[kind]} not found`);
+    const name = data.name?.trim();
+    if (!name) throw new BadRequestException('Name is required');
+    if (name !== prev.name) {
+      const taken = await this.setupModel(kind).findUnique({ where: { name } });
+      if (taken) throw new ConflictException(`${SETUP_LABEL[kind]} "${name}" already exists`);
+    }
+    const row = await this.setupModel(kind).update({ where: { id }, data: { name } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: `${SETUP_AUDIT[kind]}_UPDATED`, module: 'ASSETS', recordId: id,
+      oldValue: { name: prev.name }, newValue: { name },
+    });
+    const { total } = await this.setupUsage(kind, row);
+    return { ...row, usage: total };
+  }
+
+  async removeSetup(kind: SetupKind, id: string, actor: Actor) {
+    const prev = await this.setupModel(kind).findUnique({ where: { id } });
+    if (!prev) throw new NotFoundException(`${SETUP_LABEL[kind]} not found`);
+    const { total, parts } = await this.setupUsage(kind, prev);
+    if (total > 0) {
+      throw new ConflictException(
+        `${SETUP_LABEL[kind]} "${prev.name}" is still used by ${parts.join(', ')} — reassign or clear those first`,
+      );
+    }
+    await this.setupModel(kind).delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: `${SETUP_AUDIT[kind]}_DELETED`, module: 'ASSETS', severity: 'WARNING',
+      recordId: id, oldValue: { name: prev.name },
+    });
+    return { success: true };
+  }
+
+  private setupModel(kind: SetupKind): any {
+    return kind === 'categories' ? this.prisma.assetCategory
+      : kind === 'locations' ? this.prisma.location
+      : this.prisma.custodian;
+  }
+
+  /**
+   * Referencing records that block a delete. Categories/locations are FKs with
+   * ON DELETE SET NULL (deleting would silently rewrite asset rows and movement /
+   * receipt history), and a custodian name is snapshotted onto assets the same way,
+   * so all three are refused while still in use.
+   */
+  private async setupUsage(kind: SetupKind, row: { id: string; name: string }): Promise<{ total: number; parts: string[] }> {
+    const label = (n: number, s: string) => (n ? [`${n} ${s}${n === 1 ? '' : 's'}`] : []);
+    if (kind === 'categories') {
+      const n = await this.prisma.asset.count({ where: { categoryId: row.id } });
+      return { total: n, parts: label(n, 'asset') };
+    }
+    if (kind === 'custodians') {
+      const n = await this.prisma.asset.count({ where: { custodian: row.name } });
+      return { total: n, parts: label(n, 'asset') };
+    }
+    const [assets, receipts, from, to] = await Promise.all([
+      this.prisma.asset.count({ where: { locationId: row.id } }),
+      this.prisma.goodsReceipt.count({ where: { locationId: row.id } }),
+      this.prisma.assetMovement.count({ where: { fromLocationId: row.id } }),
+      this.prisma.assetMovement.count({ where: { toLocationId: row.id } }),
+    ]);
+    return {
+      total: assets + receipts + from + to,
+      parts: [...label(assets, 'asset'), ...label(receipts, 'goods receipt'),
+        ...label(from + to, 'movement record')],
+    };
   }
 }
