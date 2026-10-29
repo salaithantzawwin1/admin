@@ -46,6 +46,8 @@ interface RequestRow {
   department?: { name?: string } | null;
   carRequest?: {
     endDate?: string;
+    /** assigned driver — shown under the status pill in the list */
+    driver?: { name?: string } | null;
     assignment?: {
       id: string;
       assignedAt: string;
@@ -428,6 +430,12 @@ export default function CarRequests() {
                     : r.status === 'COMPLETED' ? 'bg-teal-100 text-teal-700'
                     : 'bg-gray-100 text-gray-600'
                   }`}>{r.status}</span>
+                  {/* who has the car — same 👤 sky treatment as the fleet card */}
+                  {r.carRequest?.driver?.name && (
+                    <div className="text-xs text-sky-700 font-medium mt-1" title="Assigned driver">
+                      👤 {r.carRequest.driver.name}
+                    </div>
+                  )}
                   {r.status === 'IN_PROGRESS' && r.carRequest?.assignment && (
                     <DriverAckStages a={r.carRequest.assignment} />
                   )}
@@ -483,7 +491,13 @@ export default function CarRequests() {
                     <Link to={`/requests/${t.requestId}`} className="text-blue-600 hover:underline">{t.docNumber}</Link>
                   </td>
                   <td className="px-3 py-2">{t.vehicle}</td>
-                  <td className="px-3 py-2">{t.driver ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    {t.driver ? (
+                      <span className="text-sky-700 font-medium">👤 {t.driver}</span>
+                    ) : (
+                      <span className="text-gray-400">—</span>
+                    )}
+                  </td>
                   <td className={`px-3 py-2 ${t.overdue ? 'text-red-600' : 'text-gray-500'}`}>{fmtDateTime(t.plannedEnd)}</td>
                   <td className="px-3 py-2">
                     {t.estimatedReturnAt ? (
@@ -511,7 +525,10 @@ export default function CarRequests() {
                 <span className="text-gray-500 w-32 whitespace-nowrap">{fmtDateTime(t.startDate)}</span>
                 <Link to={`/requests/${t.requestId}`} className="text-blue-600 hover:underline font-medium">{t.docNumber}</Link>
                 <Badge color={t.status === 'IN_PROGRESS' ? 'blue' : 'orange'}>{t.status}</Badge>
-                <span className="text-gray-500">{t.vehicle}{t.driver ? ` · ${t.driver}` : ''} · {t.destination}</span>
+                <span className="text-gray-500">{t.vehicle} · {t.destination}</span>
+                {t.driver && (
+                  <span className="text-sky-700 font-medium" title="Assigned driver">👤 {t.driver}</span>
+                )}
                 {t.estimatedReturnAt && <EtaChip eta={t.estimatedReturnAt} plannedEnd={t.endDate} />}
               </div>
             ))}

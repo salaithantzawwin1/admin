@@ -317,9 +317,15 @@ export class WorkflowService {
           _count: { select: { attachments: true } },
           // Car Requests list: driver ack stages (✓ Noted / 🚦 Ready / 🏁 Back)
           // shown inline — the driver works through these while the doc sits IN_PROGRESS
-          // — plus the ⏰ ETA so Administration sees delays right in the list
+          // — plus the ⏰ ETA so Administration sees delays right in the list, and the
+          // assigned driver's name so the status cell answers "who has the car?"
           ...(params.docType === 'CAR_REQUEST' ? {
-            carRequest: { select: { assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } } } },
+            carRequest: {
+              select: {
+                driver: { select: { name: true } },
+                assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
+              },
+            },
           } : {}),
         },
       }),
