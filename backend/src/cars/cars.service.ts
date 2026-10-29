@@ -302,7 +302,13 @@ export class CarsService {
           startDate: true,
           endDate: true,
           request: { select: { docNumber: true } },
-          assignment: { select: { estimatedReturnAt: true } },
+          // driver name rides along so the fleet card can say WHO has the car
+          assignment: {
+            select: {
+              estimatedReturnAt: true,
+              driver: { select: { name: true } },
+            },
+          },
         },
         orderBy: { startDate: 'asc' },
       }),
@@ -374,6 +380,7 @@ export class CarsService {
             startDate: b.startDate,
             endDate: b.endDate,
             estimatedReturnAt: b.assignment?.estimatedReturnAt ?? null,
+            driverName: b.assignment?.driver?.name ?? null,
             likelyFreeFrom: new Date(this.effectiveEnd(b.endDate, b.assignment?.estimatedReturnAt).getTime() + buf * 60_000),
           })),
           // blocked windows surface on the same card (reason = the booking label)

@@ -13,7 +13,15 @@ interface FleetVehicle {
   vehicleNo: string;
   brandModel: string;
   status: string;
-  bookings: { docNumber?: string; startDate: string; endDate: string; estimatedReturnAt?: string | null; likelyFreeFrom?: string | null }[];
+  bookings: {
+    docNumber?: string;
+    startDate: string;
+    endDate: string;
+    estimatedReturnAt?: string | null;
+    likelyFreeFrom?: string | null;
+    /** assigned driver, when Administration has already picked one */
+    driverName?: string | null;
+  }[];
 }
 
 // Prisma VehicleStatus enum values + the derived BOOKED state (future-only
@@ -312,11 +320,16 @@ export default function CarRequests() {
                           {b.docNumber ?? '—'}: {fmtShort(b.startDate)}
                           {' → '}
                           {fmtShort(b.endDate)}
+                          {!blocked && b.driverName && (
+                            <span className="text-sky-700 font-medium"> · 👤 {b.driverName}</span>
+                          )}
                           {b.estimatedReturnAt && new Date(b.estimatedReturnAt) > new Date(b.endDate) && (
                             <span className="text-red-600 font-medium"> · ⏰ ETA {fmtShort(b.estimatedReturnAt)}</span>
                           )}
                           {!blocked && b.likelyFreeFrom && (
-                            <span className="text-gray-500"> · likely free ~{fmtShort(b.likelyFreeFrom)}</span>
+                            // teal = forecast (when we expect the car back), kept distinct
+                            // from the orange window text and the red ⏰ ETA above it
+                            <span className="text-teal-700 font-medium"> · likely free ~{fmtShort(b.likelyFreeFrom)}</span>
                           )}
                         </div>
                       );

@@ -1011,6 +1011,25 @@ async function main() {
     assert.strictEqual(new Date(b.estimatedReturnAt).toISOString(), '2026-09-24T14:00:00.000Z', 'the ETA is surfaced for the ⏰ badge');
   });
 
+  // the fleet card names the driver who holds the car (null when unassigned)
+  await test('requesterFleetOverview: bookings surface the assigned driver name', async () => {
+    const start = new Date('2026-09-24T09:00Z');
+    const end = new Date('2026-09-24T12:00Z');
+    const rows = (driver: { name: string } | null) => [
+      { requestId: 'r1', vehicleId: 'v1', startDate: start, endDate: end, assignment: { estimatedReturnAt: null, driver }, request: { docNumber: 'CAR-DRV' } },
+    ];
+    const svcOf = (driver: { name: string } | null): any =>
+      new CarsService({
+        carAssignment: { findMany: async () => [] },
+        vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: 'V-1', brandModel: 'Probox', status: 'AVAILABLE' }] },
+        vehicleUnavailability: { findMany: async () => [] },
+        carRequest: { findMany: async () => rows(driver) },
+      } as any, {} as any, {} as any, {} as any, {} as any, {} as any);
+
+    assert.strictEqual((await svcOf({ name: 'Kyaw Thiha Maw' }).requesterFleetOverview())[0].bookings[0].driverName, 'Kyaw Thiha Maw', 'assigned driver is surfaced');
+    assert.strictEqual((await svcOf(null).requesterFleetOverview())[0].bookings[0].driverName, null, 'no driver yet → null');
+  });
+
   await test('requesterFleetOverview: an Administration block covering now shows UNDER_MAINTENANCE + a 🛠 window on the card', async () => {
     const now = new Date();
     const prismaBlock: any = {
