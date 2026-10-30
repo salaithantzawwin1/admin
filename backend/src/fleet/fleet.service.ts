@@ -685,8 +685,7 @@ export class FleetService {
    * stay; a driver whose booked window covers now shows ON_TRIP, otherwise
    * AVAILABLE even when the DB still says ON_TRIP for a future ride.
    */
-  async listDrivers(status?: DriverStatus) {
-    const now = new Date();
+  async listDrivers(status?: DriverStatus, now: Date = new Date()) {
     // telegramBindCode deliberately excluded — it is a linking secret (see listTelegramBindings)
     const rows = await this.prisma.driver.findMany({
       where: status ? { status } : undefined,

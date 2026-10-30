@@ -128,7 +128,8 @@ async function main() {
     assert.strictEqual(byId['v-clean'].registrationExpiryStatus, 'VALID');
   });
   await test('listDrivers carries licence expiry status', async () => {
-    const rows = await fleet.listDrivers();
+    // NOW, not the wall clock — the fixture's +14d date is anchored to the fixed NOW
+    const rows = await fleet.listDrivers(undefined, NOW);
     const byId = Object.fromEntries(rows.map((r: any) => [r.id, r]));
     assert.strictEqual(byId['d-1'].licenseExpiryStatus, 'UPCOMING'); // 14 days
     assert.strictEqual(byId['d-2'].licenseExpiryStatus, null);
