@@ -870,12 +870,29 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
   );
 }
 
-export function DriverAckStages({ a }: { a: NonNullable<CarRequest['assignment']> }) {
+/**
+ * Driver ack lane (✓ Noted / 🚦 Ready / 🏁 Back at office).
+ * `sharedRide` carries the taps of the REST of a shared-trip group: one car, one
+ * driver, one set of taps — so a member with no own taps must not read as
+ * unacknowledged when the driver already tapped on the partner row.
+ */
+export function DriverAckStages({
+  a,
+  sharedRide,
+}: {
+  a?: NonNullable<CarRequest['assignment']> | null;
+  sharedRide?: { docNumber?: string; notedAt?: string | null; arrivedAt?: string | null; backAtOfficeAt?: string | null } | null;
+}) {
   const fmt = (iso?: string | null) => (iso ? fmtTime(iso) : '');
+  const ownTaps = !!(a?.driverNotedAt || a?.driverArrivedAt || a?.driverBackAtOfficeAt);
+  // own taps always win; the group's only stand in when this row has none
+  const groupTaps = !!(sharedRide?.notedAt || sharedRide?.arrivedAt || sharedRide?.backAtOfficeAt);
+  const fromShared = !ownTaps && groupTaps;
+  const via = fromShared && sharedRide?.docNumber ? ` (shared · ${sharedRide.docNumber})` : '';
   const stages = [
-    { key: 'noted', label: 'Noted', at: a.driverNotedAt, icon: '✓' },
-    { key: 'arrived', label: 'Ready', at: a.driverArrivedAt, icon: '🚦' },
-    { key: 'returned', label: 'Back at office', at: a.driverBackAtOfficeAt, icon: '🏁' },
+    { key: 'noted', label: 'Noted', at: a?.driverNotedAt ?? (fromShared ? sharedRide?.notedAt : null), icon: '✓' },
+    { key: 'arrived', label: 'Ready', at: a?.driverArrivedAt ?? (fromShared ? sharedRide?.arrivedAt : null), icon: '🚦' },
+    { key: 'returned', label: 'Back at office', at: a?.driverBackAtOfficeAt ?? (fromShared ? sharedRide?.backAtOfficeAt : null), icon: '🏁' },
   ];
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -884,14 +901,25 @@ export function DriverAckStages({ a }: { a: NonNullable<CarRequest['assignment']
           key={s.key}
           className={`px-2 py-0.5 rounded-full border ${
             s.at
-              ? 'bg-green-50 border-green-200 text-green-700'
+              ? fromShared
+                ? 'bg-sky-50 border-sky-200 text-sky-700'
+                : 'bg-green-50 border-green-200 text-green-700'
               : 'bg-gray-50 border-gray-200 text-gray-400'
           }`}
-          title={s.at ? `${s.label} at ${fmtDateTime(s.at)}` : `Waiting for driver — ${s.label}`}
+          title={
+            s.at
+              ? `${s.label} at ${fmtDateTime(s.at)}${via}`
+              : `Waiting for driver — ${s.label}`
+          }
         >
           {s.at ? `${s.icon} ${s.label} ${fmt(s.at)}` : `⏳ ${s.label}`}
         </span>
       ))}
+      {fromShared && (
+        <span className="px-2 py-0.5 rounded-full border border-sky-200 bg-sky-50 text-sky-700" title="This request shares the ride (and the driver's taps) with the other trip">
+          🧑‍🤝‍🧑 shared ride
+        </span>
+      )}
     </div>
   );
 }

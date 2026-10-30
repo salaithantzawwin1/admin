@@ -50,6 +50,14 @@ interface RequestRow {
     vehicleId?: string | null;
     /** assigned driver — shown under the status pill in the list */
     driver?: { name?: string } | null;
+    /** shared-trip group — every member shows the ONE ride's driver taps */
+    sharedTripId?: string | null;
+    sharedRide?: {
+      docNumber?: string;
+      notedAt?: string | null;
+      arrivedAt?: string | null;
+      backAtOfficeAt?: string | null;
+    } | null;
     assignment?: {
       id: string;
       assignedAt: string;
@@ -508,8 +516,8 @@ export default function CarRequests() {
                       🚗 vehicle not assigned
                     </div>
                   )}
-                  {r.status === 'IN_PROGRESS' && r.carRequest?.assignment && (
-                    <DriverAckStages a={r.carRequest.assignment} />
+                  {r.status === 'IN_PROGRESS' && (r.carRequest?.assignment || r.carRequest?.sharedRide) && (
+                    <DriverAckStages a={r.carRequest?.assignment} sharedRide={r.carRequest?.sharedRide} />
                   )}
                   {r.status === 'IN_PROGRESS' && r.carRequest?.assignment?.estimatedReturnAt && (
                     <EtaChip eta={r.carRequest.assignment.estimatedReturnAt} plannedEnd={r.carRequest?.endDate} />
