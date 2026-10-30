@@ -164,6 +164,28 @@ export class CarsService {
       (car as typeof car & { sharedRiders?: { requestId: string; docNumber: string; requester: string }[] }).sharedRiders = riders
         .filter((r) => r.id !== requestId)
         .map((r) => ({ requestId: r.id, docNumber: r.docNumber, requester: r.requester.fullName }));
+      // A shared member whose own vehicle link is gone (janitor re-queued the
+      // earlier window before this fix, or an explicit release) still rode the
+      // group's car — surface it instead of "no vehicle was assigned".
+      if (!car.vehicle) {
+        const partner = await this.prisma.carRequest.findFirst({
+          where: { sharedTripId: car.sharedTripId, requestId: { not: requestId }, vehicleId: { not: null } },
+          orderBy: { startDate: 'asc' },
+          select: {
+            vehicle: { select: { vehicleNo: true, brandModel: true } },
+            driver: { select: { name: true } },
+            request: { select: { docNumber: true } },
+          },
+        });
+        (car as typeof car & { sharedRide?: { docNumber: string; vehicleNo: string | null; brandModel: string | null; driverName: string | null } | null }).sharedRide = partner
+          ? {
+              docNumber: partner.request.docNumber,
+              vehicleNo: partner.vehicle?.vehicleNo ?? null,
+              brandModel: partner.vehicle?.brandModel ?? null,
+              driverName: partner.driver?.name ?? null,
+            }
+          : null;
+      }
     }
     return car;
   }

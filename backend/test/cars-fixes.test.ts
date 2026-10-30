@@ -978,6 +978,65 @@ async function main() {
     assert.ok(n.body.includes('Kyaw Thiha Maw') && n.body.includes('Back at Office'), 'body must name the driver and the missed tap');
   });
 
+  await test('releaseExpired: a shared-trip member is never re-queued while its partner rides', async () => {
+    // CAR-202610-0084 (07:00→08:00) shared the car with CAR-202610-0081
+    // (07:00→11:00). Its own window closed first, the janitor released it, the
+    // panel then read "Vehicle not assigned" for a ride that was still running.
+    const ops: Array<[string, any]> = [];
+    const endPast = new Date(Date.now() - 3600e3);
+    let peerReleased: Date | null = null; // partner still riding → member must stay live
+    const prismaShared: any = {
+      carAssignment: {
+        findMany: async (args: any) =>
+          // first call = the stuck sweep, second = the peer lookup
+          args?.where?.requestId ? [{ releasedAt: peerReleased, driverBackAtOfficeAt: null, driverNotedAt: null, driverArrivedAt: null, request: { docNumber: 'CAR-202610-0081' } }]
+            : [{
+                id: 'a-84', requestId: 'r-84', vehicleId: 'v1', driverId: 'd1',
+                driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null,
+                vehicle: { vehicleNo: '9F1213' }, driver: { name: 'Naing Naing Tun' },
+                request: { docNumber: 'CAR-202610-0084', requesterId: 'u-req', carRequest: { endDate: endPast, sharedTripId: 'grp-1' } },
+                trip: null,
+              }],
+        update: async (p: any) => { ops.push(['carAssignment.update', p.data]); return {}; },
+      },
+      $transaction: async (list: any[]) => { for (const op of list) await op; },
+      vehicle: { update: async (p: any) => { ops.push(['vehicle.update', p.data]); return {}; } },
+      driver: { update: async (p: any) => { ops.push(['driver.update', p.data]); return {}; }, findMany: async () => [] },
+      carRequest: { update: async (p: any) => { ops.push(['carRequest.update', p.data]); return {}; } },
+      requestDocument: { update: async (p: any) => { ops.push(['requestDocument.update', p.data]); return {}; } },
+      auditLog: { create: async () => {} },
+      notification: { create: async () => ({}) },
+    };
+    const svcShared: any = new TripRemindersService(
+      prismaShared,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => [] } as any,
+    );
+    await svcShared.releaseExpired();
+    assert.strictEqual(ops.length, 0, 'a member whose partner still rides keeps its car (no release, no re-queue)');
+
+    // partner finished the ride (Back at Office) → this member closes COMPLETED
+    // and KEEPS its vehicle/driver link so the panel still shows 9F1213
+    peerReleased = new Date();
+    prismaShared.carAssignment.findMany = async (args: any) =>
+      args?.where?.requestId
+        ? [{ releasedAt: new Date(), driverBackAtOfficeAt: new Date(), driverNotedAt: new Date(), driverArrivedAt: null, request: { docNumber: 'CAR-202610-0081' } }]
+        : [{
+            id: 'a-84', requestId: 'r-84', vehicleId: 'v1', driverId: 'd1',
+            driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null,
+            vehicle: { vehicleNo: '9F1213' }, driver: { name: 'Naing Naing Tun' },
+            request: { docNumber: 'CAR-202610-0084', requesterId: 'u-req', carRequest: { endDate: endPast, sharedTripId: 'grp-1' } },
+            trip: null,
+          }];
+    await svcShared.releaseExpired();
+    const docStatus = ops.filter((o) => o[0] === 'requestDocument.update').map((o) => o[1].status);
+    assert.deepStrictEqual(docStatus, ['COMPLETED'], 'the member closes COMPLETED with its group');
+    const carRow = ops.find((o) => o[0] === 'carRequest.update')![1];
+    assert.strictEqual(carRow.status, 'COMPLETED');
+    assert.ok(!('vehicleId' in carRow), 'the vehicle link is NOT cleared — the ride had a car');
+  });
+
   await test('releaseExpired: assignment whose driver DID tap Back at Office → released + finalised, NO "Auto-closed" notice (CAR-202610-0022 regression)', async () => {
     const adminNotifs: any[] = [];
     const requesterNotifs: any[] = [];

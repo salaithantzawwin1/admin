@@ -24,6 +24,8 @@ interface CarRequest {
   driver?: { id: string; name: string } | null;
   sharedTripId?: string | null;
   sharedRiders?: { requestId: string; docNumber: string; requester: string }[];
+  /** the car the shared group rode, when this member's own vehicle link was cleared */
+  sharedRide?: { docNumber: string; vehicleNo: string | null; brandModel: string | null; driverName: string | null } | null;
   assignment?: {
     id: string;
     assignedAt: string;
@@ -274,6 +276,11 @@ export function CarPanel({
           <div className="text-gray-400 text-xs uppercase tracking-wide">Vehicle required</div>
           <div className="mt-1 text-gray-800">{car.vehicleTypeRequired ?? 'Any'}</div>
         </div>
+        {/* Approval and assignment are Administration's steps; Noted / Ready /
+            Back at office are the driver's. They fail independently, so they get
+            separate lanes — "approved but no car" must not look like "driver
+            never tapped Noted". */}
+        <TripProgress status={status} car={car} />
         {/* Assigned takes the rest of the row: plate, driver, ack timeline and the
             ETA controls all live here — a 1/4-width column used to cram them into an
             unreadable stack. The tinted box reads as "this ride has a car". */}
@@ -289,14 +296,21 @@ export function CarPanel({
                   <Badge color="blue">🚗 {car.vehicle.vehicleNo}</Badge>
                   {car.vehicle.brandModel && <span className="text-xs text-gray-500">{car.vehicle.brandModel}</span>}
                 </>
+              ) : car.sharedRide?.vehicleNo ? (
+                // shared ride: this member rode the group's car even though its own
+                // vehicle link is gone — "no vehicle was assigned" would be a lie
+                <>
+                  <Badge color="blue">🚗 {car.sharedRide.vehicleNo}</Badge>
+                  {car.sharedRide.brandModel && <span className="text-xs text-gray-500">{car.sharedRide.brandModel}</span>}
+                  <span className="text-xs text-gray-500">🤝 shared with {car.sharedRide.docNumber}</span>
+                </>
               ) : (
                 <span className="text-sm text-gray-400">No vehicle picked yet</span>
               )}
-              {car.driver && <span className="text-xs font-medium text-gray-700">👤 {car.driver.name}</span>}
+              {(car.driver ?? car.sharedRide?.driverName) && (
+                <span className="text-xs font-medium text-gray-700">👤 {car.driver?.name ?? car.sharedRide?.driverName}</span>
+              )}
             </div>
-          {/* ack stages describe a live ride (or one closed by its trip record) —
-              three pending ⏳ chips next to "Not yet" only confuse after a release */}
-          {assignment && (liveAssignment || trip) && <DriverAckStages a={assignment} />}
           {/* ⏰ driver-reported ETA (Telegram ⏰ Delay) — red when it passes the planned end */}
           {assignment?.estimatedReturnAt && (
             <div className="mt-1">
@@ -786,6 +800,65 @@ export function CarPanel({
 /** Driver acknowledgment stages — Noted (admin assign acknowledged) → Arrived
  *  (car ready) → Back at Office (vehicle free). Filled by the driver's Telegram
  *  buttons; Administration and the requester both see them here. */
+/**
+ * Two-lane lifecycle: Administration (approve → assign the car) and the driver
+ * (Noted → Ready → Back at office). Deliberately split — an APPROVED request
+ * with no car and an assigned car the driver never acknowledged are different
+ * problems for different people, and one joined row hid which side was stuck.
+ */
+export function TripProgress({ status, car }: { status: string; car: CarRequest }) {
+  const a = car.assignment;
+  const approved = ['APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(status);
+  const refused = ['REJECTED', 'CANCELLED', 'RETURNED'].includes(status);
+  const assigned = !!(car.vehicle || a || car.sharedRide?.vehicleNo);
+  const chip = (state: 'done' | 'pending' | 'off', text: string, at?: string | null) => (
+    <span
+      key={text}
+      className={`px-2 py-0.5 rounded-full border text-xs whitespace-nowrap ${
+        state === 'done'
+          ? 'bg-green-50 border-green-200 text-green-700'
+          : state === 'pending'
+            ? 'bg-amber-50 border-amber-200 text-amber-700'
+            : 'bg-gray-50 border-gray-200 text-gray-400'
+      }`}
+      title={at ? `${text} · ${fmtDateTime(at)}` : undefined}
+    >
+      {state === 'done' ? '✓' : state === 'pending' ? '⏳' : '–'} {text}
+      {state === 'done' && at ? ` ${fmtTime(at)}` : ''}
+    </span>
+  );
+  return (
+    <div className="col-span-2 sm:col-span-4 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2 space-y-1.5">
+      <div className="text-gray-400 text-xs uppercase tracking-wide">Trip progress</div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="w-28 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">Administration</span>
+        {approved
+          ? chip('done', 'Approved')
+          : refused
+            ? chip('off', status === 'REJECTED' ? 'Rejected' : 'Cancelled')
+            : chip('pending', 'Awaiting approval')}
+        {assigned
+          ? chip('done', 'Car assigned')
+          : approved
+            ? chip('pending', 'Not assigned yet')
+            : chip('off', 'Car assigned')}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="w-28 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">Driver</span>
+        {a ? (
+          <>
+            {chip(a.driverNotedAt ? 'done' : 'pending', 'Noted', a.driverNotedAt)}
+            {chip(a.driverArrivedAt ? 'done' : 'pending', 'Ready', a.driverArrivedAt)}
+            {chip(a.driverBackAtOfficeAt ? 'done' : 'pending', 'Back at office', a.driverBackAtOfficeAt)}
+          </>
+        ) : (
+          <span className="text-xs text-gray-400">No driver assigned yet</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function DriverAckStages({ a }: { a: NonNullable<CarRequest['assignment']> }) {
   const fmt = (iso?: string | null) => (iso ? fmtTime(iso) : '');
   const stages = [

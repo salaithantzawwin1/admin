@@ -214,14 +214,16 @@ export class TripRemindersService {
       },        include: {
         vehicle: { select: { vehicleNo: true } },
         driver: { select: { name: true } },
-        request: { select: { docNumber: true, requesterId: true, carRequest: { select: { endDate: true } } } },
+        request: { select: { docNumber: true, requesterId: true, carRequest: { select: { endDate: true, sharedTripId: true } } } },
       },
     });
 
     for (const a of stuck) {
-      const freedDriver = a.driverId
+      // built lazily: the shared-trip branch below skips the driver release, and
+      // creating the promise up-front would still run it in a mocked/test client
+      const freedDriver = () => (a.driverId
         ? [this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } })]
-        : [];
+        : []);
       if (a.driverBackAtOfficeAt) {
         // Driver DID tap "🏁 Back at Office" — the car was freed and the request
         // completed at that moment; this sweep only closes the assignment row.
@@ -230,7 +232,7 @@ export class TripRemindersService {
         await this.prisma.$transaction([
           this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
           this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
-          ...freedDriver,
+          ...freedDriver(),
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
         ]);
@@ -245,12 +247,57 @@ export class TripRemindersService {
         console.log(`[cars] finalised back-at-office assignment ${a.request.docNumber} (no notice — driver did tap)`);
         continue;
       }
+      // SHARED ride (one car+driver serving several requests, sharedTripId): the
+      // group ends together. A member whose own window closed early must NOT be
+      // re-queued while its partner is still riding — that cleared its vehicle
+      // link and the panel then claimed "no vehicle was assigned" for a ride that
+      // already ran (CAR-202610-0084 next to CAR-202610-0081).
+      if (a.request.carRequest?.sharedTripId) {
+        const peers = await this.prisma.carAssignment.findMany({
+          where: {
+            requestId: { not: a.requestId },
+            request: { carRequest: { sharedTripId: a.request.carRequest.sharedTripId } },
+          },
+          select: {
+            releasedAt: true, driverBackAtOfficeAt: true, driverNotedAt: true, driverArrivedAt: true,
+            request: { select: { docNumber: true } },
+          },
+        });
+        if (peers.some((p) => p.releasedAt === null)) {
+          console.log(`[cars] shared-trip member ${a.request.docNumber} kept live — partner still riding`);
+          continue;
+        }
+        const rode = peers.some((p) => p.driverBackAtOfficeAt || p.driverNotedAt || p.driverArrivedAt);
+        if (rode) {
+          // the group's ride happened → close this member COMPLETED and KEEP the
+          // vehicle/driver link so the panel still shows the shared car
+          await this.prisma.$transaction([
+            this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
+            this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
+            this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
+          ]);
+          await this.prisma.auditLog
+            .create({
+              data: {
+                action: 'REQUEST_AUTO_COMPLETED', module: 'CARS', recordId: a.requestId,
+                newValue: {
+                  reason: 'Shared ride completed with its group — janitor finalised this member',
+                  auto: true,
+                  sharedWith: peers.map((p) => p.request.docNumber),
+                },
+              },
+            })
+            .catch(() => undefined);
+          console.log(`[cars] shared-trip member ${a.request.docNumber} closed COMPLETED with its group`);
+          continue;
+        }
+      }
       if (a.driverNotedAt || a.driverArrivedAt) {
         // driver confirmed the ride → complete it, do NOT re-await a car
         await this.prisma.$transaction([
           this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
           this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
-          ...freedDriver,
+          ...freedDriver(),
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
         ]);
@@ -294,7 +341,7 @@ export class TripRemindersService {
         await this.prisma.$transaction([
           this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
           this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
-          ...freedDriver,
+          ...freedDriver(),
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'APPROVED' } }),
         ]);
