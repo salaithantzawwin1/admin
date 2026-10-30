@@ -167,7 +167,7 @@ export class CarsService {
       // A shared member whose own vehicle link is gone (janitor re-queued the
       // earlier window before this fix, or an explicit release) still rode the
       // group's car — surface it instead of "no vehicle was assigned".
-      if (!car.vehicle) {
+      if (!car.vehicle || !car.assignment?.driverNotedAt) {
         const partner = await this.prisma.carRequest.findFirst({
           where: { sharedTripId: car.sharedTripId, requestId: { not: requestId }, vehicleId: { not: null } },
           orderBy: { startDate: 'asc' },
@@ -175,14 +175,29 @@ export class CarsService {
             vehicle: { select: { vehicleNo: true, brandModel: true } },
             driver: { select: { name: true } },
             request: { select: { docNumber: true } },
+            // one driver, one ride: the group's ack taps ARE this member's taps
+            assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true } },
           },
         });
-        (car as typeof car & { sharedRide?: { docNumber: string; vehicleNo: string | null; brandModel: string | null; driverName: string | null } | null }).sharedRide = partner
+        (car as typeof car & {
+          sharedRide?: {
+            docNumber: string;
+            vehicleNo: string | null;
+            brandModel: string | null;
+            driverName: string | null;
+            notedAt?: Date | null;
+            arrivedAt?: Date | null;
+            backAtOfficeAt?: Date | null;
+          } | null;
+        }).sharedRide = partner
           ? {
               docNumber: partner.request.docNumber,
               vehicleNo: partner.vehicle?.vehicleNo ?? null,
               brandModel: partner.vehicle?.brandModel ?? null,
               driverName: partner.driver?.name ?? null,
+              notedAt: partner.assignment?.driverNotedAt ?? null,
+              arrivedAt: partner.assignment?.driverArrivedAt ?? null,
+              backAtOfficeAt: partner.assignment?.driverBackAtOfficeAt ?? null,
             }
           : null;
       }

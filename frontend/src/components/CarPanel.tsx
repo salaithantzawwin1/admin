@@ -24,8 +24,17 @@ interface CarRequest {
   driver?: { id: string; name: string } | null;
   sharedTripId?: string | null;
   sharedRiders?: { requestId: string; docNumber: string; requester: string }[];
-  /** the car the shared group rode, when this member's own vehicle link was cleared */
-  sharedRide?: { docNumber: string; vehicleNo: string | null; brandModel: string | null; driverName: string | null } | null;
+  /** the car the shared group rode, when this member's own vehicle link was cleared
+   *  (the group's driver taps count for this member too — same car, same driver) */
+  sharedRide?: {
+    docNumber: string;
+    vehicleNo: string | null;
+    brandModel: string | null;
+    driverName: string | null;
+    notedAt?: string | null;
+    arrivedAt?: string | null;
+    backAtOfficeAt?: string | null;
+  } | null;
   assignment?: {
     id: string;
     assignedAt: string;
@@ -845,11 +854,11 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-28 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">Driver</span>
-        {a ? (
+        {a || car.sharedRide?.notedAt || car.sharedRide?.backAtOfficeAt ? (
           <>
-            {chip(a.driverNotedAt ? 'done' : 'pending', 'Noted', a.driverNotedAt)}
-            {chip(a.driverArrivedAt ? 'done' : 'pending', 'Ready', a.driverArrivedAt)}
-            {chip(a.driverBackAtOfficeAt ? 'done' : 'pending', 'Back at office', a.driverBackAtOfficeAt)}
+            {chip(a?.driverNotedAt || car.sharedRide?.notedAt ? 'done' : 'pending', 'Noted', a?.driverNotedAt ?? car.sharedRide?.notedAt)}
+            {chip(a?.driverArrivedAt || car.sharedRide?.arrivedAt ? 'done' : 'pending', 'Ready', a?.driverArrivedAt ?? car.sharedRide?.arrivedAt)}
+            {chip(a?.driverBackAtOfficeAt || car.sharedRide?.backAtOfficeAt ? 'done' : 'pending', 'Back at office', a?.driverBackAtOfficeAt ?? car.sharedRide?.backAtOfficeAt)}
           </>
         ) : (
           <span className="text-xs text-gray-400">No driver assigned yet</span>
