@@ -266,6 +266,109 @@ async function main() {
     assert.ok(sent.some((n) => n.type === 'CAR_ASSIGNED'), 'a free driver assigns normally');
   });
 
+  await test('reassign(): a replacement driver already booked on an overlapping trip is refused', async () => {
+    // Change vehicle / driver rewrites the assignment row directly, so it needs
+    // the same double-booking guard as assign() — a direct API call must not be
+    // able to force Naing Naing onto a second overlapping car.
+    const clash = {
+      startDate: new Date('2026-10-30T13:30:00Z'), endDate: new Date('2026-10-30T17:30:00Z'),
+      request: { docNumber: 'CAR-202610-0081' }, assignment: { estimatedReturnAt: null },
+    };
+    let wrote = false;
+    const prismaRe: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'CAR-NEW', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requesterId: 'u1',
+          carRequest: {
+            id: 'cr1', requestId: 'r1', sharedTripId: null,
+            startDate: new Date('2026-10-30T11:00:00Z'), endDate: new Date('2026-10-30T14:00:00Z'),
+            vehicle: { vehicleNo: '2P2942', brandModel: 'Probox' },
+            assignment: {
+              id: 'a1', vehicleId: 'v1', driverId: 'd-other', releasedAt: null, trip: null,
+              driver: { name: 'Other' }, vehicle: { vehicleNo: '2P2942' },
+            },
+          },
+        }),
+      },
+      vehicle: { findUnique: async () => ({ id: 'v2', vehicleNo: '6P5997', brandModel: 'Starex', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      driverAbsence: { findFirst: async () => null },
+      carRequest: { findFirst: async () => clash },
+      $transaction: async () => { wrote = true; throw new Error('must not reach the write'); },
+    };
+    const svcRe: any = new CarsService(prismaRe, {} as any, {} as any, {} as any, { log: async () => {} } as any, {} as any);
+    let msg = '';
+    try { await svcRe.reassign('r1', { vehicleId: 'v2', driverId: 'd-naing' }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('CAR-202610-0081'), `reassign must name the clashing trip, got: ${msg}`);
+    assert.strictEqual(wrote, false, 'nothing is written when the driver is busy');
+  });
+
+  await test('startTrip(): a driver still out on an unfinished trip cannot be dispatched twice', async () => {
+    // Trip 1 (09:00 → 12:00) is STARTED and never closed with Back at Office;
+    // Trip 2 (13:30 → 15:00) is due. Planned windows do not overlap, yet the
+    // driver is one person — dispatch has to look at the live trip, not only
+    // the timetable.
+    const prismaST2: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a2', requestId: 'r2', vehicleId: 'v2', driverId: 'd-naing', releasedAt: null,
+          vehicle: { currentMileage: 1000, vehicleNo: '4E2241', vehicleType: 'SEDAN' }, trip: null,
+          carRequest: { startDate: new Date('2026-10-30T13:30:00Z'), endDate: new Date('2026-10-30T15:00:00Z'), sharedTripId: null },
+        }),
+        findMany: async () => ([
+          {
+            estimatedReturnAt: null,
+            trip: { status: 'STARTED' },
+            request: {
+              docNumber: 'CAR-202610-0081',
+              carRequest: { startDate: new Date('2026-10-30T09:00:00Z'), endDate: new Date('2026-10-30T12:00:00Z'), sharedTripId: null },
+            },
+          },
+        ]),
+      },
+    };
+    const svcST2: any = new CarsService(prismaST2, {} as any, {} as any, {} as any, { log: async () => {} } as any, {} as any);
+    let msg = '';
+    try { await svcST2.startTrip('r2', { startMileage: 1000 }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('CAR-202610-0081'), `dispatch must name the open trip, got: ${msg}`);
+  });
+
+  await test("setEstimatedReturn: an ETA running into the driver's next trip flags the clash", async () => {
+    const plannedEnd = new Date(Date.now() + 3600 * 1000);
+    const clashStart = new Date(Date.now() + 90 * 60 * 1000);
+    const ops: Array<[string, any]> = [];
+    const prismaEtaClash: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a1', requestId: 'r1', driverId: 'd1', releasedAt: null, estimatedReturnAt: null,
+          vehicle: { vehicleNo: '2P2942', brandModel: 'Probox' }, driver: { name: 'Naing' },
+          request: { docNumber: 'CAR-TRIP1', requesterId: 'u-req', status: 'IN_PROGRESS' },
+          carRequest: { endDate: plannedEnd, sharedTripId: null },
+        }),
+        update: async (p: any) => ({ estimatedReturnAt: p.data.estimatedReturnAt }),
+      },
+      carRequest: {
+        findFirst: async () => ({
+          startDate: clashStart, endDate: new Date(Date.now() + 4 * 3600 * 1000),
+          request: { docNumber: 'CAR-TRIP2' }, assignment: { estimatedReturnAt: null },
+        }),
+      },
+    };
+    const notifications = { notifyMany: async (_ids: string[], data: any) => { ops.push(['notice', data]); } };
+    const audit = { log: async (p: any) => { ops.push(['audit', p]); } };
+    const permissions = { usersWithPermissions: async () => ['u-admin'] };
+    const telegram = { mirrorToUser: async () => ({}), sendAssignment: async () => ({}) };
+    const svcEtaClash: any = new CarsService(prismaEtaClash, permissions, {} as any, notifications, audit, telegram, {} as any, { publish: () => undefined });
+
+    const res = await svcEtaClash.setEstimatedReturn('r1', { minutes: 120 });
+    assert.strictEqual(res.driverClash?.docNumber, 'CAR-TRIP2', 'the API reply names the clashing trip');
+    const notice = ops.find((o) => o[0] === 'notice')![1];
+    assert.ok(notice.title.includes('clash'), 'Administration sees the clash in the notification title');
+    assert.ok(notice.body.includes('CAR-TRIP2'), 'the body names the trip that cannot be served');
+    const log = ops.find((o) => o[0] === 'audit')![1];
+    assert.strictEqual(log.newValue.driverClashWith, 'CAR-TRIP2', 'the audit row flags the clash for later review');
+  });
+
   await test('assign(): requester notification includes the driver name', async () => {
     const captured: any[] = [];
     const notifications = { notify: async (p: any) => { captured.push(p); } };
@@ -1053,10 +1156,12 @@ async function main() {
           id: 'a1', requestId: 'r1', releasedAt: null, estimatedReturnAt: null,
           vehicle: { vehicleNo: 'V-1', brandModel: 'Probox' }, driver: { name: 'Kyaw' },
           request: { docNumber: 'CAR-ETA', requesterId: 'u-req', status: 'IN_PROGRESS' },
-          carRequest: { endDate: plannedEnd },
+          carRequest: { endDate: plannedEnd, sharedTripId: null },
         }),
         update: async (p: any) => { ops.push(['ca.update', p.data]); return { estimatedReturnAt: p.data.estimatedReturnAt }; },
       },
+      // no other trip for this driver → the delay is recorded without a clash flag
+      carRequest: { findFirst: async () => null },
     };
     const notifications = { notifyMany: async (ids: string[], data: any) => { ops.push(['notifyMany', { ids, type: data.type, title: data.title }]); return {}; } };
     const audit = { log: async () => ({}) };

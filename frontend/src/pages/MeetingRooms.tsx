@@ -5,7 +5,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
 import { MeetingMonthCalendar, Holiday, PrefillSlot } from '../components/MeetingMonthCalendar';
-import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, NumberField, PageHeader, Select, Textarea } from '../components/ui';
 import { fmtDate, fmtDateTime, fmtShort } from '../util/yangonTime';
 
 interface RoomInfo {
@@ -474,11 +474,9 @@ export default function MeetingRooms() {
                 {/* (viii) Number of attendees */}
                 <div>
                   <label htmlFor="meeting-rooms-attendees" className="text-xs text-gray-500 block mb-1">Number of attendees *</label>
-                  <Input id="meeting-rooms-attendees" type="number" min={1} value={form.attendees} onChange={(e) => {
-                    // cleared / NaN input must not poison the room-size hint → fall back to 1
-                    const n = Number(e.target.value);
-                    setForm({ ...form, attendees: Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 });
-                  }} />
+                  {/* empty stays empty while typing (a cleared box used to snap back to 1),
+                      then normalises to 1 on blur so the room-size hint is never NaN */}
+                  <NumberField id="meeting-rooms-attendees" min={1} integer value={form.attendees} onChange={(attendees) => setForm({ ...form, attendees })} />
                 </div>
                 {/* (ix) Name of attendees (optional) */}
                 <Input placeholder="Attendee names (optional)" value={form.attendeeNames} onChange={(e) => setForm({ ...form, attendeeNames: e.target.value })} />
@@ -783,7 +781,7 @@ export default function MeetingRooms() {
                     </div>
                     <div>
                       <label htmlFor="meeting-rooms-capacity" className="block text-xs text-gray-500 mb-1">Capacity</label>
-                      <Input id="meeting-rooms-capacity" type="number" min={1} placeholder="Capacity" value={roomForm.capacity} onChange={(e) => setRoomForm({ ...roomForm, capacity: Number(e.target.value) })} />
+                      <NumberField id="meeting-rooms-capacity" min={1} integer placeholder="Capacity" value={roomForm.capacity} onChange={(capacity) => setRoomForm({ ...roomForm, capacity })} />
                     </div>
                   </div>
                   <div>

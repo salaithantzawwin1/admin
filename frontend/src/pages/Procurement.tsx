@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
-import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, NumberField, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDate } from '../util/yangonTime';
@@ -253,7 +253,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
                 <Input placeholder={`Item ${idx + 1} description *`} value={it.description} onChange={(e) => setItem(idx, { description: e.target.value })} />
               </div>
               <div className="col-span-4 md:col-span-1">
-                <Input type="number" min={1} placeholder="Qty" title="Quantity" value={it.quantity} onChange={(e) => setItem(idx, { quantity: Math.max(1, Math.floor(Number(e.target.value) || 1)) })} />
+                <NumberField min={1} integer placeholder="Qty" title="Quantity" value={it.quantity} onChange={(quantity) => setItem(idx, { quantity })} />
               </div>
               <div className="col-span-4 md:col-span-1">
                 <Input placeholder="Unit" value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} />

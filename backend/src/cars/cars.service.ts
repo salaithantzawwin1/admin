@@ -543,6 +543,36 @@ export class CarsService {
     return { available: stretched.length === 0, conflicts: stretched };
   }
 
+  /**
+   * Driver double-booking guard — one driver, two cars, overlapping windows.
+   * The web and Telegram pickers already grey out a busy driver
+   * (fleet.busyDriverIds), but a direct API call bypassed that check. Window
+   * rule = the ⏰ Delay stretch (effectiveEnd), the same one the pickers and
+   * overlaps() use; a released row or a ride the driver already closed with
+   * "🏁 Back at Office" is free again and never blocks. Convoy members share one
+   * driver on purpose; those callers skip the guard themselves, so this helper
+   * only answers "is this driver holding another overlapping trip?".
+   */
+  private async driverClash(driverId: string, window: { start: Date; end: Date }, opts: { excludeRequestId?: string } = {}) {
+    return this.prisma.carRequest.findFirst({
+      where: {
+        driverId,
+        ...(opts.excludeRequestId ? { requestId: { not: opts.excludeRequestId } } : {}),
+        status: 'IN_PROGRESS',
+        assignment: { releasedAt: null, driverBackAtOfficeAt: null },
+        startDate: { lt: window.end },
+        OR: [{ endDate: { gt: window.start } }, { assignment: { estimatedReturnAt: { gt: window.start } } }],
+      },
+      orderBy: { startDate: 'asc' },
+      select: {
+        startDate: true,
+        endDate: true,
+        request: { select: { docNumber: true } },
+        assignment: { select: { estimatedReturnAt: true } },
+      },
+    });
+  }
+
   /** Administration assigns vehicle (+ optional driver) to an APPROVED car request.
    *  `share=true` explicitly joins an overlapping request onto the same car+driver
    *  (convoy mode) — the overlap/driver-busy guards deliberately step aside, but
@@ -619,18 +649,7 @@ export class CarsService {
     // counts. Explicit shared/convoy trips and members of this request's own group
     // deliberately ride the same driver, so they step aside.
     if (data.driverId && !share && !carReq.sharedTripId) {
-      const clash = await this.prisma.carRequest.findFirst({
-        where: {
-          driverId: data.driverId,
-          requestId: { not: requestId },
-          status: 'IN_PROGRESS',
-          assignment: { releasedAt: null, driverBackAtOfficeAt: null },
-          startDate: { lt: end },
-          OR: [{ endDate: { gt: start } }, { assignment: { estimatedReturnAt: { gt: start } } }],
-        },
-        orderBy: { startDate: 'asc' },
-        select: { startDate: true, endDate: true, request: { select: { docNumber: true } }, assignment: { select: { estimatedReturnAt: true } } },
-      });
+      const clash = await this.driverClash(data.driverId, { start, end }, { excludeRequestId: requestId });
       if (clash) {
         throw new ConflictException(
           `Driver is already assigned to ${clash.request.docNumber} ${clash.startDate.toISOString()} → ${this.effectiveEnd(clash.endDate, clash.assignment?.estimatedReturnAt).toISOString()} — pick another driver, or join that trip as a shared one`,
@@ -926,6 +945,24 @@ export class CarsService {
       }
     }
     const previousDriverId = assignment.driverId;
+
+    // driver double-booking guard for the REPLACEMENT driver — same rule as
+    // assign(). The Change vehicle / driver endpoint rewrites the assignment row
+    // directly, so without this a direct API call could hand one driver a second
+    // overlapping car. A shared-group member is skipped (the row is about to
+    // lose its group stamp anyway, so only a genuine second booking blocks).
+    if (data.driverId && data.driverId !== previousDriverId) {
+      const clash = await this.driverClash(
+        data.driverId,
+        { start: carReq.startDate, end: carReq.endDate },
+        { excludeRequestId: requestId },
+      );
+      if (clash) {
+        throw new ConflictException(
+          `Driver is already assigned to ${clash.request.docNumber} ${clash.startDate.toISOString()} → ${this.effectiveEnd(clash.endDate, clash.assignment?.estimatedReturnAt).toISOString()} — pick another driver`,
+        );
+      }
+    }
 
     await this.prisma.$transaction(async (tx) => {
       // overlap re-check for the NEW vehicle (excluding this request's own booking).
@@ -1238,7 +1275,7 @@ export class CarsService {
         vehicle: { select: { vehicleNo: true, brandModel: true } },
         driver: { select: { name: true } },
         request: { select: { docNumber: true, requesterId: true, status: true } },
-        carRequest: { select: { endDate: true } },
+        carRequest: { select: { endDate: true, sharedTripId: true } },
       },
     });
     if (!assignment || assignment.releasedAt !== null) throw new NotFoundException('No active assignment for this request');
@@ -1262,6 +1299,19 @@ export class CarsService {
     if (eta <= now) throw new BadRequestException('ETA must be in the future');
     if (eta > cap) throw new BadRequestException('ETA cannot be more than 72 hours ahead');
 
+    // ⏰ ETA vs the same driver's NEXT booking: a delay reaching into another trip
+    // the driver already holds is a clash Administration has to see NOW. The ETA
+    // itself is still recorded — the driver is already on the road, so hiding the
+    // real signal would be worse; assign()/reassign()/startTrip() carry the hard
+    // blocks, this is the warning + audit flag for the trip already running.
+    const driverClash = assignment.driverId
+      ? await this.driverClash(
+          assignment.driverId,
+          { start: now, end: eta },
+          { excludeRequestId: assignment.requestId },
+        )
+      : null;
+
     const updated = await this.prisma.carAssignment.update({
       where: { requestId },
       data: { estimatedReturnAt: eta },
@@ -1273,7 +1323,10 @@ export class CarsService {
       recordId: requestId,
       username: actor?.username ?? assignment.driver?.name ?? 'driver-telegram',
       oldValue: { plannedEnd: planned, previousEta: assignment.estimatedReturnAt ?? null },
-      newValue: { estimatedReturnAt: eta },
+      newValue: {
+        estimatedReturnAt: eta,
+        ...(driverClash ? { driverClashWith: driverClash.request.docNumber } : {}),
+      },
     });
 
     // who learns about the delay: Administration (cars.assign) + the requester —
@@ -1284,10 +1337,18 @@ export class CarsService {
     const plannedTxt = yangonShort(planned);
     const late = eta > planned;
     const veh = assignment.vehicle ? `${assignment.vehicle.brandModel} · ${assignment.vehicle.vehicleNo}` : 'vehicle';
-    const title = `⏰ Delay reported — ${assignment.request.docNumber}`;
-    const body = late
-      ? `Driver reports the car (${veh}) will be back around ${when} — past the planned ${plannedTxt}. The car stays blocked until then (or Back at Office).`
-      : `Driver reports the car (${veh}) will be back around ${when} (planned: ${plannedTxt}).`;
+    const clashLine = driverClash
+      ? `⚠️ Driver clash: they are also booked on ${driverClash.request.docNumber} from ${yangonShort(driverClash.startDate)} — one driver cannot take both, reassign or shift that trip.`
+      : null;
+    const title = driverClash
+      ? `⏰ Delay + driver clash — ${assignment.request.docNumber}`
+      : `⏰ Delay reported — ${assignment.request.docNumber}`;
+    const body = [
+      late
+        ? `Driver reports the car (${veh}) will be back around ${when} — past the planned ${plannedTxt}. The car stays blocked until then (or Back at Office).`
+        : `Driver reports the car (${veh}) will be back around ${when} (planned: ${plannedTxt}).`,
+      clashLine,
+    ].filter(Boolean).join(' ');
     await this.notifications.notifyMany(recipients, {
       type: 'CAR_ETA_SET' as never,
       title,
@@ -1306,7 +1367,18 @@ export class CarsService {
     } catch {
       /* SSE push is best-effort */
     }
-    return { success: true, estimatedReturnAt: updated.estimatedReturnAt };
+    return {
+      success: true,
+      estimatedReturnAt: updated.estimatedReturnAt,
+      // surfaced so the Car panel can paint the clash without a second round-trip
+      driverClash: driverClash
+        ? {
+            docNumber: driverClash.request.docNumber,
+            startDate: driverClash.startDate,
+            endDate: this.effectiveEnd(driverClash.endDate, driverClash.assignment?.estimatedReturnAt),
+          }
+        : null,
+    };
   }
 
   /**
@@ -1447,7 +1519,12 @@ export class CarsService {
   async startTrip(requestId: string, data: { startMileage: number }, actor: Actor) {
     const assignment = await this.prisma.carAssignment.findUnique({
       where: { requestId },
-      include: { vehicle: true, trip: true },
+      include: {
+        vehicle: true,
+        trip: true,
+        // the dispatch-time driver re-check needs this trip's own window + group
+        carRequest: { select: { startDate: true, endDate: true, sharedTripId: true } },
+      },
     });
     if (!assignment) throw new NotFoundException('No assignment for this request');
     // A released row (janitor auto-release / explicit release) is history: its
@@ -1465,6 +1542,52 @@ export class CarsService {
     // VMS §8.3 — a trip cannot be DISPATCHED while blocked by a mandatory
     // compliance rule: re-check at start (documents may have expired since assign)
     await this.assertDispatchCompliant(assignment.vehicle, assignment.driverId, 'dispatch');
+
+    // dispatch-time driver re-check: assign()/reassign() only see the PLANNED
+    // windows, so a Trip 1 that overran (no ⏰ ETA reported, or an ETA that
+    // stretched) can still be on the road when Trip 2 is due. The driver is one
+    // person — refuse to dispatch while another trip of theirs is unfinished:
+    //   • a STARTED trip never closed with "🏁 Back at Office" is physically out
+    //     regardless of what the timetable says → hard block
+    //   • otherwise fall back to the window test incl. the ⏰ Delay stretch
+    // Same-group convoy rides ride one car+driver on purpose and are skipped.
+    if (assignment.driverId) {
+      const mine = assignment.carRequest;
+      const others = await this.prisma.carAssignment.findMany({
+        where: {
+          driverId: assignment.driverId,
+          requestId: { not: requestId },
+          releasedAt: null,
+          driverBackAtOfficeAt: null,
+          request: { status: 'IN_PROGRESS' },
+        },
+        select: {
+          estimatedReturnAt: true,
+          trip: { select: { status: true } },
+          request: {
+            select: {
+              docNumber: true,
+              carRequest: { select: { startDate: true, endDate: true, sharedTripId: true } },
+            },
+          },
+        },
+      });
+      const blocker = others.find((o) => {
+        const other = o.request.carRequest;
+        if (!other) return false;
+        if (mine?.sharedTripId && other.sharedTripId === mine.sharedTripId) return false;
+        if (o.trip?.status === 'STARTED') return true;
+        if (!mine) return false;
+        return other.startDate < mine.endDate && this.effectiveEnd(other.endDate, o.estimatedReturnAt) > mine.startDate;
+      });
+      if (blocker) {
+        const other = blocker.request.carRequest!;
+        const until = this.effectiveEnd(other.endDate, blocker.estimatedReturnAt);
+        throw new ConflictException(
+          `Driver is still on ${blocker.request.docNumber} (until ${until.toISOString()}) — close it with "Back at Office" or reassign a driver before dispatching`,
+        );
+      }
+    }
 
     const trip = await this.prisma.$transaction(async (tx) => {
       const t = await tx.carTrip.create({

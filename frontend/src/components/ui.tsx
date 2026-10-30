@@ -1,4 +1,4 @@
-import { ReactNode, useId } from 'react';
+import { ReactNode, useEffect, useId, useRef, useState } from 'react';
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
@@ -94,6 +94,85 @@ export function Input({ invalid, error, describe, className, id, ...props }: Rea
       />
       {error && <p id={fieldErrorId(fieldId)} className="mt-1 text-xs text-red-600">{error}</p>}
       {describe && <p id={fieldHintId(fieldId)} className="mt-1 text-xs text-gray-400">{describe}</p>}
+    </div>
+  );
+}
+
+/**
+ * Number field that never snaps back mid-edit.
+ *
+ * A plain `type="number"` bound to a numeric state was painful everywhere: on a
+ * phone clearing it re-rendered the old value immediately (so "1" could not be
+ * replaced by "12"), and on desktop the existing digit had to be selected
+ * before typing or the new digit was appended to it.
+ *
+ * Fix: the DOM value is a text draft. Empty is legal while typing and nothing is
+ * pushed to the caller until it parses; blur normalises (clamp to min/max,
+ * integer rounding, min as the empty fallback) and focus selects the old value
+ * so typing replaces it. `onChange` always receives a real number, so existing
+ * numeric state keeps working unchanged.
+ */
+export function NumberField({
+  value,
+  onChange,
+  min,
+  max,
+  integer = false,
+  className,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type' | 'min' | 'max' | 'step'> & {
+  value: number | null | undefined;
+  onChange: (n: number) => void;
+  min?: number;
+  max?: number;
+  /** whole numbers only (counts, capacities) — decimals stay allowed otherwise */
+  integer?: boolean;
+}) {
+  const [draft, setDraft] = useState(value === null || value === undefined ? '' : String(value));
+  const editing = useRef(false);
+  useEffect(() => {
+    // external writes (steppers, API reload) win — but never while the user is
+    // typing, or the box would be rewritten under their cursor
+    if (!editing.current) setDraft(value === null || value === undefined ? '' : String(value));
+  }, [value]);
+  const clamp = (n: number) => {
+    let v = integer ? Math.round(n) : n;
+    if (min !== undefined && v < min) v = min;
+    if (max !== undefined && v > max) v = max;
+    return v;
+  };
+  return (
+    <div>
+      <input
+        {...props}
+        type="text"
+        inputMode={integer ? 'numeric' : 'decimal'}
+        autoComplete="off"
+        value={draft}
+        onFocus={(e) => {
+          editing.current = true;
+          e.currentTarget.select();
+          props.onFocus?.(e);
+        }}
+        onChange={(e) => {
+          const raw = e.target.value.replace(integer ? /[^0-9]/g : /[^0-9.]/g, '');
+          setDraft(raw);
+          // "" and a lone "." are intermediate states — pushing a number here is
+          // exactly what used to snap the field back to its previous value
+          if (raw === '' || raw === '.') return;
+          const n = Number(raw);
+          if (Number.isFinite(n)) onChange(clamp(n));
+        }}
+        onBlur={(e) => {
+          editing.current = false;
+          const n = Number(draft);
+          const v = draft === '' || !Number.isFinite(n) ? (min ?? 0) : clamp(n);
+          setDraft(String(v));
+          onChange(v);
+          props.onBlur?.(e);
+        }}
+        className={fieldCls(undefined, 'w-full h-10 px-3 py-2', className)}
+      />
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { api, getToken, hasPermission } from '../api';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
-import { Badge, Button, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { Badge, Button, Empty, Input, NumberField, PageHeader, Select, Textarea } from '../components/ui';
 import { fmtDate, fmtDateTime } from '../util/yangonTime';
 
 interface AdConfig {
@@ -982,7 +982,7 @@ export default function Settings() {
                   </label>
                   <label className="col-span-2 block text-sm">
                     <span className="text-gray-600">Approvals</span>
-                    <Input type="number" min="1" value={s.minApprovals ?? 1} onChange={(e) => setWfSteps((ss) => ss.map((x, i) => i === idx ? { ...x, minApprovals: Math.max(1, Number(e.target.value) || 1) } : x))} />
+                    <NumberField min={1} integer value={s.minApprovals ?? 1} onChange={(n) => setWfSteps((ss) => ss.map((x, i) => i === idx ? { ...x, minApprovals: n } : x))} />
                   </label>
                   <div className="col-span-1">
                     <Button variant="ghost" onClick={() => setWfSteps((ss) => ss.filter((_, i) => i !== idx))} disabled={wfSteps.length <= 1}>✕</Button>

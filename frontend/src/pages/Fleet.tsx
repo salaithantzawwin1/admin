@@ -4,7 +4,7 @@ import { api, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
-import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, NumberField, PageHeader, Select } from '../components/ui';
 import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 import { FleetDocumentsModal, FleetDocType } from '../components/FleetDocumentsModal';
@@ -1100,7 +1100,7 @@ export default function Fleet() {
                   </div>
                   <div>
                     <label htmlFor="fleet-capacity" className="block text-xs text-gray-500 mb-1">Capacity</label>
-                    <Input id="fleet-capacity" type="number" min={1} max={60} value={vForm.capacity} onChange={(e) => setVForm({ ...vForm, capacity: Number(e.target.value) })} />
+                    <NumberField id="fleet-capacity" min={1} max={60} integer value={vForm.capacity === '' ? null : Number(vForm.capacity)} onChange={(capacity) => setVForm({ ...vForm, capacity })} />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-3">

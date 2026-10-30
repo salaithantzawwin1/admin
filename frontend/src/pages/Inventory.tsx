@@ -4,7 +4,7 @@ import { api, getToken, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
-import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, NumberField, PageHeader, Select, Textarea } from '../components/ui';
 import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 
 interface Item {
@@ -891,7 +891,7 @@ export default function Inventory() {
                 </Select>
                 <div className="flex gap-3">
                   <div className="flex-1">
-                    <Input type="number" min={1} placeholder="Quantity" value={restock.quantity} onChange={(e) => setRestock({ ...restock, quantity: Number(e.target.value) })} />
+                    <NumberField min={1} integer placeholder="Quantity" value={restock.quantity} onChange={(quantity) => setRestock({ ...restock, quantity })} />
                   </div>
                   <div className="flex-1">
                     <Input type="number" min={0} step="0.01" placeholder="Unit price (optional)" value={restock.unitPrice} onChange={(e) => setRestock({ ...restock, unitPrice: e.target.value })} />
@@ -1282,7 +1282,7 @@ export default function Inventory() {
         >
           <div className="mt-3">
             <label htmlFor="inventory-quantity-requestfor-unit" className="block text-xs text-gray-500 mb-1">Quantity ({requestFor.unit})</label>
-            <Input id="inventory-quantity-requestfor-unit" type="number" min={1} value={requestQty} onChange={(e) => setRequestQty(Math.max(1, Number(e.target.value)))} />
+            <NumberField id="inventory-quantity-requestfor-unit" min={1} integer value={requestQty} onChange={setRequestQty} />
             <label htmlFor="inventory-note-optional" className="block text-xs text-gray-500 mb-1 mt-2">Note (optional)</label>
             <Input id="inventory-note-optional" value={requestNote} onChange={(e) => setRequestNote(e.target.value)} />
           </div>
@@ -1306,9 +1306,9 @@ export default function Inventory() {
               </Select>
               <Input placeholder="Unit (pcs, box, ream…)" value={itemForm.unit ?? ''} onChange={(e) => setItemForm({ ...itemForm, unit: e.target.value })} />
               {!editingItem && (
-                <Input type="number" min={0} placeholder="Opening balance" value={itemForm.balance ?? 0} onChange={(e) => setItemForm({ ...itemForm, balance: Number(e.target.value) })} />
+                <NumberField min={0} integer placeholder="Opening balance" value={itemForm.balance ?? 0} onChange={(balance) => setItemForm({ ...itemForm, balance })} />
               )}
-              <Input type="number" min={0} placeholder="Min stock (alert threshold)" value={itemForm.minStock ?? 0} onChange={(e) => setItemForm({ ...itemForm, minStock: Number(e.target.value) })} />
+              <NumberField min={0} integer placeholder="Min stock (alert threshold)" value={itemForm.minStock ?? 0} onChange={(minStock) => setItemForm({ ...itemForm, minStock })} />
               <Input
                 type="number"
                 min={0}
@@ -1341,8 +1341,8 @@ export default function Inventory() {
                       <div className="text-[11px] text-gray-400">{item?.code} · balance {item?.balance} {item?.unit}</div>
                     </td>
                     <td className="py-2 text-right">
-                      <Input type="number" min={1} className="!w-24" value={q}
-                        onChange={(e) => setCart({ ...cart, [id]: Math.max(1, Number(e.target.value)) })} />
+                      <NumberField min={1} integer className="!w-24" value={q}
+                        onChange={(n) => setCart({ ...cart, [id]: n })} />
                     </td>
                     <td className="py-2 text-right text-gray-400">{item?.unit}</td>
                     <td className="py-2 text-right">
