@@ -612,6 +612,32 @@ export class CarsService {
       }
     }
 
+    // driver double-booking guard: the web and Telegram pickers grey out a driver
+    // who already holds an overlapping trip (fleet.busyDriverIds), but assign()
+    // itself never checked it — a direct API call could put one driver on two cars.
+    // Same window rule as the pickers, plus the ⏰ Delay stretch that overlaps()
+    // counts. Explicit shared/convoy trips and members of this request's own group
+    // deliberately ride the same driver, so they step aside.
+    if (data.driverId && !share && !carReq.sharedTripId) {
+      const clash = await this.prisma.carRequest.findFirst({
+        where: {
+          driverId: data.driverId,
+          requestId: { not: requestId },
+          status: 'IN_PROGRESS',
+          assignment: { releasedAt: null, driverBackAtOfficeAt: null },
+          startDate: { lt: end },
+          OR: [{ endDate: { gt: start } }, { assignment: { estimatedReturnAt: { gt: start } } }],
+        },
+        orderBy: { startDate: 'asc' },
+        select: { startDate: true, endDate: true, request: { select: { docNumber: true } }, assignment: { select: { estimatedReturnAt: true } } },
+      });
+      if (clash) {
+        throw new ConflictException(
+          `Driver is already assigned to ${clash.request.docNumber} ${clash.startDate.toISOString()} → ${this.effectiveEnd(clash.endDate, clash.assignment?.estimatedReturnAt).toISOString()} — pick another driver, or join that trip as a shared one`,
+        );
+      }
+    }
+
     // double-booking prevention: transaction + overlap re-check
     // (skipped for explicit shared trips — see the group stamp inside the tx)
     const assignment = await this.prisma.$transaction(async (tx) => {

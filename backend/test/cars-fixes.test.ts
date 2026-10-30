@@ -209,6 +209,63 @@ async function main() {
     assert.strictEqual(msg, 'Shared trips need a driver — pick the driver of the trip you are joining');
   });
 
+  await test('assign(): a driver already on an overlapping trip is refused (API-side guard)', async () => {
+    // Naing Naing Tun drives CAR-202610-0081 13:30 → 17:30; the API is asked to
+    // put him on a 11:00 → 14:00 trip with another car — the pickers grey him out,
+    // and now assign() itself must refuse a direct call too.
+    const capturedWhere: any[] = [];
+    const sent: any[] = [];
+    const clash = {
+      startDate: new Date('2026-10-30T13:30:00Z'), endDate: new Date('2026-10-30T17:30:00Z'),
+      request: { docNumber: 'CAR-202610-0081' }, assignment: { estimatedReturnAt: null },
+    };
+    let busy: any = clash;
+    const tx = {
+      carAssignment: { upsert: async () => ({ id: 'a1' }), findMany: async () => [] },
+      carRequest: { update: async () => {}, findMany: async () => [] },
+      requestDocument: { update: async () => {} },
+      vehicle: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prismaGuard: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'CAR-NEW', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
+          carRequest: {
+            id: 'cr1', requestId: 'r1', sharedTripId: null, assignment: null,
+            startDate: new Date('2026-10-30T11:00:00Z'), endDate: new Date('2026-10-30T14:00:00Z'),
+          },
+        }),
+      },
+      vehicle: { findUnique: async () => ({ id: 'v2', vehicleNo: '6P5997', brandModel: 'Hyundai Grand Starex', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      driverAbsence: { findFirst: async () => null },
+      driver: { findUnique: async () => ({ name: 'Naing Naing Tun' }), update: async () => {} },
+      carRequest: { findFirst: async (args: any) => { capturedWhere.push(args.where); return busy; } },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const notifications = { notify: async (p: any) => { sent.push(p); } };
+    const telegram = { sendAssignment: async () => {}, repaintDriverCards: async () => {} };
+    const svcGuard: any = new CarsService(prismaGuard, {} as any, {} as any, notifications, { log: async () => {} } as any, telegram as any);
+
+    let msg = '';
+    try { await svcGuard.assign('r1', { vehicleId: 'v2', driverId: 'd-naing' }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('CAR-202610-0081'), `message must name the trip already holding the driver, got: ${msg}`);
+    assert.strictEqual(sent.length, 0, 'a refused assignment must notify nobody');
+    // window rule mirrors the pickers: only live (not released, not back-at-office)
+    // IN_PROGRESS bookings count, and this request never conflicts with itself
+    const where = capturedWhere[0];
+    assert.strictEqual(where.status, 'IN_PROGRESS');
+    assert.strictEqual(where.requestId.not, 'r1');
+    assert.strictEqual(where.assignment.releasedAt, null);
+    assert.ok(where.startDate.lt instanceof Date, 'overlap net is open-ended on the start side');
+
+    // same driver, a window that ends before 13:30 → no clash, the assignment goes through
+    busy = null;
+    await svcGuard.assign('r1', { vehicleId: 'v2', driverId: 'd-naing' }, { userId: 'u9', username: 'admin' });
+    assert.ok(sent.some((n) => n.type === 'CAR_ASSIGNED'), 'a free driver assigns normally');
+  });
+
   await test('assign(): requester notification includes the driver name', async () => {
     const captured: any[] = [];
     const notifications = { notify: async (p: any) => { captured.push(p); } };
@@ -232,6 +289,7 @@ async function main() {
       vehicleUnavailability: { findFirst: async () => null },
       driverAbsence: { findFirst: async () => null },
       driver: { findUnique: async () => ({ name: 'Kyaw Thiha Maw' }), update: async () => {} },
+      carRequest: { findFirst: async () => null },
       $transaction: async (fn: any) => fn(tx),
     };
     const svcDrv: any = new CarsService(prismaDrv, {} as any, {} as any, notifications, audit, telegram);
