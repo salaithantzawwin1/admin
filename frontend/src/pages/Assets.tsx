@@ -220,7 +220,9 @@ export default function Assets() {
       />
 
       {/* Tabs (URL-driven, same pattern as Inventory / Meeting Rooms) */}
-      <div className="flex gap-1 border-b border-gray-200 mb-4">
+      {/* flex-wrap: two tabs must not overflow a narrow viewport (they pushed
+          the page into horizontal scroll below ~450px) */}
+      <div className="flex flex-wrap gap-1 border-b border-gray-200 mb-4">
         {tabDefs.map((t) => (
           <button
             key={t.key}

@@ -259,16 +259,18 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             </div>
             {canManage && (
               <form
-                className="flex flex-wrap items-end gap-2 shrink-0"
+                className="flex flex-wrap items-end gap-2 w-full lg:w-auto"
                 onSubmit={(e) => { e.preventDefault(); void add(); }}
               >
-                <div>
+                {/* flex-1 + w-full: on a phone the field takes the row and the
+                    Add button sits beside it instead of pushing off-screen */}
+                <div className="flex-1 min-w-0 lg:flex-none">
                   <label htmlFor="asset-setup-new" className="block text-xs font-medium text-gray-500 mb-1">
                     New {section.label.toLowerCase()}
                   </label>
                   <Input
                     id="asset-setup-new"
-                    className="!w-64"
+                    className="!w-full sm:!w-64"
                     placeholder={section.placeholder}
                     value={drafts[active]}
                     onChange={(e) => setDrafts((d) => ({ ...d, [active]: e.target.value }))}
@@ -300,7 +302,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
               id="asset-setup-search"
               aria-label={`Search ${section.plural.toLowerCase()}`}
               placeholder={`Search ${section.plural.toLowerCase()}…`}
-              className="!w-64"
+              className="!w-full sm:!w-64"
               value={q}
               onChange={(e) => setQ(e.target.value)}
               disabled={loading}
@@ -316,12 +318,15 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
               </button>
             )}
           </div>
-          <p className="text-xs text-gray-400 tabular-nums">
+          <p className="text-xs text-gray-400 tabular-nums sm:ml-auto">
             {loading ? 'Loading…' : `${visible.length} of ${rows[active].length} ${section.plural.toLowerCase()}`}
           </p>
         </div>
 
-        <Table head={['NAME', 'USED BY', 'ACTIONS']}>
+        {/* !min-w-0 opts this short 3-column table out of the global mobile
+            min-width:640px rule, so Rename/Delete stay on screen instead of
+            hiding behind a sideways scroll */}
+        <Table head={['NAME', 'USED BY', 'ACTIONS']} className="!min-w-0">
           {loading ? (
             <tr><td colSpan={3}><Empty label="Loading…" /></td></tr>
           ) : rows[active].length === 0 ? (
@@ -330,7 +335,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             <tr><td colSpan={3}><Empty label={`No ${section.label.toLowerCase()} matches “${q.trim()}”`} /></td></tr>
           ) : visible.map((row) => (
             <tr key={row.id} className="hover:bg-gray-50/60">
-              <td className="px-4 py-2.5 font-medium text-gray-900">
+              <td className="px-3 sm:px-4 py-2.5 font-medium text-gray-900 break-words">
                 {row.name}
                 {active === 'categories' && (
                   <span className="block text-[11px] font-mono text-gray-400 mt-0.5">
@@ -338,11 +343,13 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                   </span>
                 )}
               </td>
-              <td className="px-4 py-2.5 text-right tabular-nums text-gray-500" title={row.usage ? `Used by ${row.usage} record(s)` : 'Not used by anything yet'}>
+              <td className="px-3 sm:px-4 py-2.5 text-right tabular-nums text-gray-500 whitespace-nowrap" title={row.usage ? `Used by ${row.usage} record(s)` : 'Not used by anything yet'}>
                 {row.usage ? row.usage : <span className="text-gray-300">—</span>}
               </td>
-              <td className="px-4 py-2.5 text-center">
-                <div className="flex flex-wrap justify-center gap-1.5">
+              {/* ACTIONS stacks vertically below sm so the buttons stay reachable
+                  without scrolling the table sideways on a phone */}
+              <td className="px-3 sm:px-4 py-2.5 text-center">
+                <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-1.5">
                   {canManage ? (
                     <>
                       <Button

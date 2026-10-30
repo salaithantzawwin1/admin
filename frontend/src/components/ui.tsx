@@ -165,10 +165,12 @@ const CENTERED_COLS = new Set(['STATUS', 'ACTIONS']);
  *  tabular-nums, so the header must match or the column reads as ragged. */
 const RIGHT_COLS = new Set(['COST (MMK)', 'AMOUNT (MMK)', 'TOTAL', 'PAID', 'BALANCE', 'USED BY']);
 
-export function Table({ head, children }: { head: string[]; children: ReactNode }) {
+/** `className` reaches the <table> itself — e.g. `!min-w-0` opts a short table
+ *  out of the global mobile min-width:640px scroll rule in index.css. */
+export function Table({ head, children, className = '' }: { head: string[]; children: ReactNode; className?: string }) {
   return (
     <Card>
-      <table className="w-full text-sm">
+      <table className={`w-full text-sm ${className}`}>
         <thead>
           <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wider bg-gray-50/70">
             {head.map((h) => (
