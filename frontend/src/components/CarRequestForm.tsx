@@ -7,8 +7,13 @@ import { ConfirmDialog } from './ConfirmDialog';
 
 const EMPTY = {
   destination: '', purpose: '', startDate: '', endDate: '',
-  passengers: 1, timeSlot: 'FULL_DAY', pickupLocation: '', description: '', specialRequest: '',
+  // kept as TEXT while typing: a controlled number snapped straight back to 1 the
+  // moment the box was cleared, which made the field uneditable on a phone
+  passengers: '1', timeSlot: 'FULL_DAY', pickupLocation: '', description: '', specialRequest: '',
 };
+
+/** Passengers clamp — 1..60, shared by the stepper buttons, blur and submit. */
+const paxOf = (v: string | number) => Math.min(60, Math.max(1, Math.floor(Number(v) || 1)));
 
 /** Local datetime-local string (YYYY-MM-DDTHH:mm) for a Date. */
 function toLocal(d: Date): string {
@@ -174,7 +179,7 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
           specialRequest: form.specialRequest || undefined,
           startDate: new Date(form.startDate).toISOString(),
           endDate: new Date(form.endDate || `${form.startDate.slice(0, 10)}T17:00`).toISOString(),
-          passengers: Number(form.passengers),
+          passengers: paxOf(form.passengers),
           timeSlot: form.timeSlot,
         },
       });
@@ -262,17 +267,44 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
         </div>
         <div>
           <label htmlFor="car-request-form-passengers" className="block text-xs text-gray-500 mb-1">Passengers</label>
-          <Input
-            id="car-request-form-passengers"
-            type="number"
-            min={1}
-            value={form.passengers}
-            onChange={(e) => {
-              // '' / NaN (cleared input) must not poison the JSON body → fall back to 1
-              const n = Number(e.target.value);
-              setForm({ ...form, passengers: Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 });
-            }}
-          />
+          {/* tap-friendly stepper: a plain number box was hard to edit on a phone
+              (clearing it snapped straight back to 1) and on desktop the existing
+              “1” had to be selected before typing — the buttons carry the ±1 change */}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              aria-label="Fewer passengers"
+              title="One passenger less"
+              disabled={paxOf(form.passengers) <= 1}
+              onClick={() => setForm((f) => ({ ...f, passengers: String(paxOf(f.passengers) - 1) }))}
+              className="h-11 w-11 shrink-0 rounded-lg border border-gray-300 bg-white text-xl leading-none text-gray-600 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-40"
+            >
+              −
+            </button>
+            <Input
+              id="car-request-form-passengers"
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              autoComplete="off"
+              value={form.passengers}
+              onChange={(e) => setForm({ ...form, passengers: e.target.value.replace(/[^0-9]/g, '').slice(0, 3) })}
+              onBlur={() => setForm((f) => ({ ...f, passengers: String(paxOf(f.passengers)) }))}
+              className="!w-16 !h-11 !text-center !text-base"
+              aria-label="Passengers, 1 to 60"
+            />
+            <button
+              type="button"
+              aria-label="More passengers"
+              title="One passenger more"
+              disabled={paxOf(form.passengers) >= 60}
+              onClick={() => setForm((f) => ({ ...f, passengers: String(paxOf(f.passengers) + 1) }))}
+              className="h-11 w-11 shrink-0 rounded-lg border border-gray-300 bg-white text-xl leading-none text-gray-600 hover:bg-gray-50 active:bg-gray-100 disabled:opacity-40"
+            >
+              +
+            </button>
+            <span className="text-xs text-gray-400">1–60</span>
+          </div>
         </div>
         <Input placeholder="Purpose (optional)" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} />
         <Input
