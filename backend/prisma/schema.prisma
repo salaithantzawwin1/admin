@@ -320,6 +320,8 @@ enum NotificationType {
   CANCELLED
   ANNOUNCEMENT
   VEHICLE_DOC_EXPIRY
+  /** approved car request passed its start time with no vehicle — one ping to Administration */
+  ADMIN_UNASSIGNED
 }
 
 enum RequestDocType {

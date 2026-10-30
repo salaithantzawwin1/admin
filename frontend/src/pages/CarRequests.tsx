@@ -46,6 +46,8 @@ interface RequestRow {
   department?: { name?: string } | null;
   carRequest?: {
     endDate?: string;
+    /** cleared on release too — null means "no car picked for this request" */
+    vehicleId?: string | null;
     /** assigned driver — shown under the status pill in the list */
     driver?: { name?: string } | null;
     assignment?: {
@@ -497,6 +499,13 @@ export default function CarRequests() {
                   {r.carRequest?.driver?.name && (
                     <div className="text-xs text-sky-700 font-medium mt-1" title="Assigned driver">
                       👤 {r.carRequest.driver.name}
+                    </div>
+                  )}
+                  {/* APPROVED but nobody picked a car — the status cell must say so,
+                      otherwise a green APPROVED pill reads like a finished job */}
+                  {r.status === 'APPROVED' && r.carRequest && !r.carRequest.vehicleId && (
+                    <div className="text-xs text-amber-600 font-medium mt-1" title="No vehicle assigned yet">
+                      🚗 vehicle not assigned
                     </div>
                   )}
                   {r.status === 'IN_PROGRESS' && r.carRequest?.assignment && (

@@ -667,6 +667,48 @@ async function main() {
     assert.ok(capturedWhere.NOT?.request?.carAssignment?.releasedAt === null, 'a live assignment keeps the trip out of this sweep');
   });
 
+  await test('startPassedNudge: approved-unassigned pings Administration once, independent of the requester bell', async () => {
+    const bells: any[] = [];
+    const adminPings: any[] = [];
+    // the requester's START_PASSED already fired (it went out while the request
+    // was still pending) — the ADMIN notice must not be swallowed by that
+    const prismaAU: any = {
+      carRequest: {
+        findMany: async () => [
+          { startDate: new Date(Date.now() - 3600e3), vehicleId: null,
+            request: { id: 'r-app-no-car', docNumber: 'CAR-202610-0080', status: 'APPROVED', requesterId: 'u-req' } },
+        ],
+      },
+      notification: {
+        findFirst: async ({ where }: any) => (where.type === 'START_PASSED' ? { id: 'n-start' } : null),
+      },
+    };
+    const svcAU: any = new TripRemindersService(
+      prismaAU,
+      {
+        notify: async (p: any) => { bells.push(p); return {}; },
+        notifyMany: async (ids: string[], d: any) => { adminPings.push({ ids, d }); },
+      } as any,
+      { sendRaw: async () => ({}), mirrorToUser: async () => ({}) } as any,
+      // requester holds cars.assign too → must be filtered out of the admin broadcast
+      { usersWithPermissions: async () => ['u-admin', 'u-req'] } as any,
+    );
+    await svcAU.startPassedNudge();
+
+    assert.strictEqual(bells.length, 0, 'an existing START_PASSED bell is never repeated');
+    assert.strictEqual(adminPings.length, 1, 'Administration is pinged exactly once');
+    assert.deepStrictEqual(adminPings[0].ids, ['u-admin'], 'the requester is not pinged as an admin');
+    assert.strictEqual(adminPings[0].d.type, 'ADMIN_UNASSIGNED', 'admin ping carries its own type (so its dedupe cannot collide)');
+    assert.ok(adminPings[0].d.title.includes('CAR-202610-0080'), 'ping names the request');
+    assert.ok(adminPings[0].d.body.includes('passed without a car'), 'ping says what is missing');
+
+    // second sweep: the ADMIN_UNASSIGNED row now exists → no repeat
+    prismaAU.notification.findFirst = async ({ where }: any) =>
+      where.type === 'ADMIN_UNASSIGNED' ? { id: 'n-admin' } : { id: 'n-start' };
+    await svcAU.startPassedNudge();
+    assert.strictEqual(adminPings.length, 1, 'the admin ping is once per request, ever');
+  });
+
   await test('renormalizeVehicleStatuses: stale IN_USE vehicle → AVAILABLE + audit; live claims untouched', async () => {
     const ops: Array<[string, any]> = [];
     const prismaRenorm: any = {

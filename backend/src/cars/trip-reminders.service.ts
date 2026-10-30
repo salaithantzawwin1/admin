@@ -408,30 +408,58 @@ export class TripRemindersService {
       });
 
       let sent = 0;
+      let adminPinged = 0;
       for (const r of overdue) {
+        const when = yangonShort(r.startDate);
         // idempotency: at most one START_PASSED bell per request
         const existing = await this.prisma.notification.findFirst({
           where: { requestId: r.request.id, type: 'START_PASSED' as never },
           select: { id: true },
         });
-        if (existing) continue;
+        if (!existing) {
+          const pending = r.request.status !== 'APPROVED';
+          const body = pending
+            ? `Your car request for ${when} is still awaiting approval, so the trip could not start on time. Contact Administration — or submit a new request — if you still need the vehicle.`
+            : `Your car request for ${when} was approved, but no vehicle was assigned before the start time passed. Contact Administration: the trip needs to be re-planned.`;
+          await this.notifications.notify({
+            userId: r.request.requesterId,
+            type: 'START_PASSED' as never,
+            title: `⏳ Start time passed — ${r.request.docNumber}`,
+            body,
+            link: `/requests/${r.request.id}`,
+            requestId: r.request.id,
+          });
+          sent++;
+        }
 
-        const pending = r.request.status !== 'APPROVED';
-        const when = yangonShort(r.startDate);
-        const body = pending
-          ? `Your car request for ${when} is still awaiting approval, so the trip could not start on time. Contact Administration — or submit a new request — if you still need the vehicle.`
-          : `Your car request for ${when} was approved, but no vehicle was assigned before the start time passed. Contact Administration: the trip needs to be re-planned.`;
-        await this.notifications.notify({
-          userId: r.request.requesterId,
-          type: 'START_PASSED' as never,
-          title: `⏳ Start time passed — ${r.request.docNumber}`,
-          body,
-          link: `/requests/${r.request.id}`,
-          requestId: r.request.id,
-        });
-        sent++;
+        // APPROVED + no car at start time: the requester cannot fix this — only
+        // Administration can assign a vehicle (or cancel). Their ping is checked
+        // INDEPENDENTLY of the requester's bell: that one may already have fired
+        // while the request was still pending approval (CAR-202610-0080), which
+        // must not swallow the admin notice. Once per request, ever.
+        if (r.request.status === 'APPROVED') {
+          const adminSeen = await this.prisma.notification.findFirst({
+            where: { requestId: r.request.id, type: 'ADMIN_UNASSIGNED' as never },
+            select: { id: true },
+          });
+          if (!adminSeen) {
+            const admins = (await this.permissions.usersWithPermissions(['cars.assign']))
+              .filter((id) => id !== r.request.requesterId);
+            if (admins.length > 0) {
+              await this.notifications.notifyMany(admins, {
+                type: 'ADMIN_UNASSIGNED' as never,
+                title: `🚗 No vehicle assigned — ${r.request.docNumber}`,
+                body: `Approved, but ${when} passed without a car being assigned. Assign a vehicle or cancel it so the requester is not left waiting.`,
+                link: '/car-requests',
+                requestId: r.request.id,
+              });
+              adminPinged++;
+            }
+          }
+        }
       }
       if (sent > 0) this.logger.log(`sent ${sent} start-passed notice(s) for overdue car request(s)`);
+      if (adminPinged > 0) this.logger.log(`pinged Administration about ${adminPinged} approved-unassigned request(s) past start time`);
     } catch (e) {
       this.logger.warn(`startPassedNudge failed: ${(e as Error).message}`);
     }

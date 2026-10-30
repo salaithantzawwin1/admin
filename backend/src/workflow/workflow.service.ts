@@ -322,6 +322,9 @@ export class WorkflowService {
           ...(params.docType === 'CAR_REQUEST' ? {
             carRequest: {
               select: {
+                // vehicleId: the list flags APPROVED rows with no car yet —
+                // cleared on release too, so it always matches the assign queue
+                vehicleId: true,
                 driver: { select: { name: true } },
                 assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
               },

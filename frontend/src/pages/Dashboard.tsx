@@ -35,8 +35,15 @@ export default function Dashboard() {
         .catch(() => setInboxCount(null));
     }
     if (hasPermission('cars.assign')) {
-      api<unknown[]>('/cars/requests/approved-unassigned')
-        .then((r) => setCarQueueCount(r.length))
+      // count only the SERVE-ABLE queue — past-window rows (window ended, still
+      // awaiting the +24h auto-expiry) live in their own group on the Car page
+      // and must not inflate this tile
+      api<{ carRequest?: { endDate?: string } | null }[]>('/cars/requests/approved-unassigned')
+        .then((r) =>
+          setCarQueueCount(
+            r.filter((q) => !q.carRequest?.endDate || new Date(q.carRequest.endDate).getTime() >= Date.now()).length,
+          ),
+        )
         .catch(() => setCarQueueCount(null));
     }
     if (hasPermission('meeting-rooms.assign')) {
