@@ -240,20 +240,60 @@ export function CarPanel({
       {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
-        <div><div className="text-gray-400 text-xs uppercase">Destination</div><div className="mt-1 font-medium">{car.destination}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Start</div><div className="mt-1">{fmtDateTime(car.startDate)}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">End</div><div className="mt-1">{fmtDateTime(car.endDate)}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Passengers</div><div className="mt-1">{car.passengers}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Time slot</div><div className="mt-1">{car.timeSlot}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Pickup</div><div className="mt-1">{car.pickupLocation ?? '—'}</div></div>
-        <div className="col-span-2 sm:col-span-4"><div className="text-gray-400 text-xs uppercase">Special request</div><div className="mt-1">{car.specialRequest ? <Badge color="yellow">⭐ {car.specialRequest}</Badge> : <span className="text-gray-400">—</span>}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Vehicle required</div><div className="mt-1">{car.vehicleTypeRequired ?? 'Any'}</div></div>
-        <div>
-          <div className="text-gray-400 text-xs uppercase">Assigned</div>
-          <div className="mt-1">
-            {car.vehicle ? <Badge color="blue">{car.vehicle.vehicleNo}</Badge> : <span className="text-gray-400">Not yet</span>}
-            {car.driver && <div className="text-xs text-gray-500 mt-1">Driver: {car.driver.name}</div>}
-          </div>
+        {/* every field sits in the same rounded box (label above, value below) so the
+            row reads as one consistent set — Assigned is the tinted variant of it */}
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Destination</div>
+          <div className="mt-1 font-medium text-gray-800">{car.destination}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Start</div>
+          <div className="mt-1 text-gray-800">{fmtDateTime(car.startDate)}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">End</div>
+          <div className="mt-1 text-gray-800">{fmtDateTime(car.endDate)}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Passengers</div>
+          <div className="mt-1 text-gray-800">{car.passengers}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Time slot</div>
+          <div className="mt-1 text-gray-800">{car.timeSlot}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Pickup</div>
+          <div className="mt-1 text-gray-800">{car.pickupLocation ?? '—'}</div>
+        </div>
+        <div className="col-span-2 sm:col-span-4 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Special request</div>
+          <div className="mt-1">{car.specialRequest ? <Badge color="yellow">⭐ {car.specialRequest}</Badge> : <span className="text-gray-400">—</span>}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Vehicle required</div>
+          <div className="mt-1 text-gray-800">{car.vehicleTypeRequired ?? 'Any'}</div>
+        </div>
+        {/* Assigned takes the rest of the row: plate, driver, ack timeline and the
+            ETA controls all live here — a 1/4-width column used to cram them into an
+            unreadable stack. The tinted box reads as "this ride has a car". */}
+        <div
+          className={`col-span-2 sm:col-span-3 rounded-lg border px-3 py-2 ${
+            car.vehicle ? 'border-blue-100 bg-blue-50/50' : 'border-dashed border-gray-200 bg-gray-50/50'
+          }`}
+        >
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Assigned</div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+              {car.vehicle ? (
+                <>
+                  <Badge color="blue">🚗 {car.vehicle.vehicleNo}</Badge>
+                  {car.vehicle.brandModel && <span className="text-xs text-gray-500">{car.vehicle.brandModel}</span>}
+                </>
+              ) : (
+                <span className="text-sm text-gray-400">No vehicle picked yet</span>
+              )}
+              {car.driver && <span className="text-xs font-medium text-gray-700">👤 {car.driver.name}</span>}
+            </div>
           {/* ack stages describe a live ride (or one closed by its trip record) —
               three pending ⏳ chips next to "Not yet" only confuse after a release */}
           {assignment && (liveAssignment || trip) && <DriverAckStages a={assignment} />}
@@ -272,19 +312,19 @@ export function CarPanel({
               </span>
             </div>
           )}
-          {/* Administration ⏰ ETA control — record a delay the driver reported by phone */}
-          {canAssign && liveAssignment && !assignment?.driverBackAtOfficeAt && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-              <span>⏰ Set ETA:</span>
-              {[
-                { label: '+30 မ', m: 30 },
-                { label: '+1 န', m: 60 },
-                { label: '+3 န', m: 180 },
-              ].map((q) => (
-                <button
-                  key={q.m}
-                  className="px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-                  disabled={etaBusy}
+          {/* Administration ⏰ ETA control — record a delay the driver reported by phone */}            {canAssign && liveAssignment && !assignment?.driverBackAtOfficeAt && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs text-gray-500">
+                <span className="font-medium text-gray-600">⏰ Set ETA</span>
+                {[
+                  { label: '+30 မ', m: 30 },
+                  { label: '+1 န', m: 60 },
+                  { label: '+3 န', m: 180 },
+                ].map((q) => (
+                  <button
+                    key={q.m}
+                    title={`Driver returns ${q.m} minutes from now`}
+                    className="px-2 py-0.5 rounded-full border border-gray-200 text-gray-600 hover:border-gold hover:text-yellow-800 hover:bg-yellow-50 disabled:opacity-40 transition-colors"
+                    disabled={etaBusy}
                   onClick={async () => {
                     setEtaBusy(true); setError('');
                     try {
@@ -301,16 +341,18 @@ export function CarPanel({
                   {q.label}
                 </button>
               ))}
-              <Input
-                type="number"
-                min={1}
-                max={4320}
-                value={etaMinutes}
-                onChange={(e) => setEtaMinutes(e.target.value)}
-                className="!w-20 !py-0.5 !text-xs"
-                placeholder="min"
-              />
-              <Button
+              <span className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  min={1}
+                  max={4320}
+                  value={etaMinutes}
+                  onChange={(e) => setEtaMinutes(e.target.value)}
+                  className="!w-16 !py-0.5 !text-xs"
+                  placeholder="min"
+                  aria-label="ETA minutes from now"
+                />
+                <Button
                 variant="ghost"
                 disabled={etaBusy || !Number(etaMinutes)}
                 onClick={async () => {
@@ -329,6 +371,7 @@ export function CarPanel({
               >
                 Save
               </Button>
+              </span>
             </div>
           )}
           {car.sharedTripId && car.sharedRiders && car.sharedRiders.length > 0 && (
