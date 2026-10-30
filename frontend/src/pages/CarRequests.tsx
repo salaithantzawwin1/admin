@@ -100,6 +100,56 @@ function EtaChip({ eta, plannedEnd }: { eta: string; plannedEnd?: string }) {
 
 
 
+/** Shared head of the approved-unassigned queue tables. */
+function QueueTableHead() {
+  return (
+    <thead>
+      <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+        <th className="px-3 py-2 font-medium">Doc No.</th>
+        <th className="px-3 py-2 font-medium">Requester</th>
+        <th className="px-3 py-2 font-medium">Destination</th>
+        <th className="px-3 py-2 font-medium">Schedule</th>
+        <th className="px-3 py-2 font-medium">Type / Pax</th>
+      </tr>
+    </thead>
+  );
+}
+
+/**
+ * One row of the approved-unassigned queue.
+ * `past` — the trip window already ended without a car: tinted red and tagged,
+ * because it can no longer be served (it auto-closes 24h after the window).
+ * A still-open window whose START time has passed gets a softer amber note —
+ * the trip can still happen late, so it stays in the live group.
+ */
+function QueueRowView({ q, past }: { q: QueueRow; past: boolean }) {
+  const startPassed = !past && !!q.carRequest && new Date(q.carRequest.startDate) < new Date();
+  return (
+    <tr className={`hover:bg-gray-50 ${past ? 'bg-red-50/40' : ''}`}>
+      <td className="px-3 py-2 font-medium">
+        <Link to={`/requests/${q.id}`} className="text-blue-600 hover:underline">{q.docNumber}</Link>
+        {past && (
+          <span className="block text-[11px] font-medium text-red-600 mt-0.5">⌛ window passed</span>
+        )}
+      </td>
+      <td className="px-3 py-2">
+        {q.requester?.fullName ?? '—'}
+        <div className="text-xs text-gray-400">{q.department?.name ?? '—'}</div>
+      </td>
+      <td className="px-3 py-2">{q.carRequest?.destination ?? '—'}</td>
+      <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
+        {q.carRequest && `${fmtDateTime(q.carRequest.startDate)} → ${fmtDateTime(q.carRequest.endDate)}`}
+        {startPassed && (
+          <div className="text-xs text-amber-600 mt-0.5">⚠ start time passed — still no vehicle</div>
+        )}
+      </td>
+      <td className="px-3 py-2 text-gray-500">
+        {q.carRequest?.vehicleTypeRequired ?? 'Any'} · {q.carRequest?.passengers ?? 1} pax
+      </td>
+    </tr>
+  );
+}
+
 type CarTab = 'availability' | 'requests' | 'handover';
 
 /** Shift-handover summary — Administration sees what the next shift inherits. */
@@ -159,6 +209,14 @@ export default function CarRequests() {
   }, []);
 
   useEffect(load, [load]);
+
+  // Split the Administration queue: trips that can still be served, versus trips
+  // whose window already ended with no car ever assigned. The stale ones stay in
+  // the API response until the +24h auto-expiry closes them, but they must not
+  // masquerade as serve-able work in the live list — they get their own group.
+  const now = Date.now();
+  const liveQueue = queue.filter((q) => !q.carRequest || new Date(q.carRequest.endDate).getTime() >= now);
+  const pastQueue = queue.filter((q) => q.carRequest && new Date(q.carRequest.endDate).getTime() < now);
 
   // auto-refresh: new requests/approvals/assignments appear without manual reload
   useEffect(() => {
@@ -347,45 +405,50 @@ export default function CarRequests() {
       {canAssign && (
         <Card className="mb-5 p-5">
           <h2 className="font-semibold text-gray-800 mb-1 text-sm uppercase tracking-wide">
-            Approved — waiting for vehicle assignment ({queue.length})
+            Approved — waiting for vehicle assignment ({liveQueue.length})
           </h2>
           <p className="text-xs text-gray-400 mb-3">
             Approved requests that still need a car. Open one and assign a vehicle + driver in the Car panel.
+            {pastQueue.length > 0 && ' Trips whose window has already passed are listed separately below.'}
           </p>
           {queue.length === 0 ? (
             <Empty label="No approved requests waiting — all caught up 🎉" />
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
-                  <th className="px-3 py-2 font-medium">Doc No.</th>
-                  <th className="px-3 py-2 font-medium">Requester</th>
-                  <th className="px-3 py-2 font-medium">Destination</th>
-                  <th className="px-3 py-2 font-medium">Schedule</th>
-                  <th className="px-3 py-2 font-medium">Type / Pax</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {queue.map((q) => (
-                  <tr key={q.id} className="hover:bg-gray-50">
-                    <td className="px-3 py-2 font-medium">
-                      <Link to={`/requests/${q.id}`} className="text-blue-600 hover:underline">{q.docNumber}</Link>
-                    </td>
-                    <td className="px-3 py-2">
-                      {q.requester?.fullName ?? '—'}
-                      <div className="text-xs text-gray-400">{q.department?.name ?? '—'}</div>
-                    </td>
-                    <td className="px-3 py-2">{q.carRequest?.destination ?? '—'}</td>
-                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
-                      {q.carRequest && `${fmtDateTime(q.carRequest.startDate)} → ${fmtDateTime(q.carRequest.endDate)}`}
-                    </td>
-                    <td className="px-3 py-2 text-gray-500">
-                      {q.carRequest?.vehicleTypeRequired ?? 'Any'} · {q.carRequest?.passengers ?? 1} pax
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              {liveQueue.length === 0 ? (
+                <Empty label="Nothing serve-able waiting — only past-window requests below" />
+              ) : (
+                <table className="w-full text-sm">
+                  <QueueTableHead />
+                  <tbody className="divide-y divide-gray-100">
+                    {liveQueue.map((q) => (
+                      <QueueRowView key={q.id} q={q} past={false} />
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {pastQueue.length > 0 && (
+                <div className="mt-6 pt-4 border-t border-red-200">
+                  <h3 className="font-semibold text-red-600 mb-1 text-sm uppercase tracking-wide">
+                    ⌛ Window passed — no vehicle was assigned ({pastQueue.length})
+                  </h3>
+                  <p className="text-xs text-gray-400 mb-3">
+                    The trip time is over and these can no longer be served. They are kept out of the live list
+                    above; open one to cancel it, or leave it — it closes itself 24h after the window ended and
+                    the requester was already told.
+                  </p>
+                  <table className="w-full text-sm">
+                    <QueueTableHead />
+                    <tbody className="divide-y divide-gray-100">
+                      {pastQueue.map((q) => (
+                        <QueueRowView key={q.id} q={q} past />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </Card>
       )}
