@@ -819,7 +819,9 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
   const a = car.assignment;
   const approved = ['APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(status);
   const refused = ['REJECTED', 'CANCELLED', 'RETURNED'].includes(status);
-  const assigned = !!(car.vehicle || a || car.sharedRide?.vehicleNo);
+  // a RELEASED row is history, not a car: the request is back in the assign queue
+  // (CAR-202610-0083 showed "✓ Car assigned" next to "No vehicle picked yet")
+  const assigned = !!(car.vehicle || car.sharedRide?.vehicleNo || (a && (!a.releasedAt || status === 'COMPLETED')));
   const chip = (state: 'done' | 'pending' | 'off', text: string, at?: string | null) => (
     <span
       key={text}
