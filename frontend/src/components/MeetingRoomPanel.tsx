@@ -85,26 +85,62 @@ export function MeetingRoomPanel({
       {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
-        <div><div className="text-gray-400 text-xs uppercase">Meeting</div><div className="mt-1 font-medium">{mr.title}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Attendees</div><div className="mt-1">{mr.attendees}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Start</div><div className="mt-1">{fmtDateTime(mr.startTime)}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">End</div><div className="mt-1">{fmtDateTime(mr.endTime)}</div></div>
+        {/* same boxed field row as the Car panel: label above value inside a rounded
+            box, and Assigned room is its tinted variant */}
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Meeting</div>
+          <div className="mt-1 font-medium text-gray-800">{mr.title}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Attendees</div>
+          <div className="mt-1 text-gray-800">{mr.attendees}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Start</div>
+          <div className="mt-1 text-gray-800">{fmtDateTime(mr.startTime)}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">End</div>
+          <div className="mt-1 text-gray-800">{fmtDateTime(mr.endTime)}</div>
+        </div>
         {mr.meetingType && (
-          <div><div className="text-gray-400 text-xs uppercase">Meeting type</div><div className="mt-1">{mr.meetingType}</div></div>
+          <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+            <div className="text-gray-400 text-xs uppercase tracking-wide">Meeting type</div>
+            <div className="mt-1 text-gray-800">{mr.meetingType}</div>
+          </div>
         )}
         {mr.meetingType === 'EXTERNAL' && mr.externalCompanies && (
-          <div><div className="text-gray-400 text-xs uppercase">External company / person</div><div className="mt-1">{mr.externalCompanies}</div></div>
+          <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+            <div className="text-gray-400 text-xs uppercase tracking-wide">External company / person</div>
+            <div className="mt-1 text-gray-800">{mr.externalCompanies}</div>
+          </div>
         )}
         {mr.attendeeNames && (
-          <div className="sm:col-span-2"><div className="text-gray-400 text-xs uppercase">Attendee names</div><div className="mt-1">{mr.attendeeNames}</div></div>
+          <div className="sm:col-span-2 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+            <div className="text-gray-400 text-xs uppercase tracking-wide">Attendee names</div>
+            <div className="mt-1 text-gray-800">{mr.attendeeNames}</div>
+          </div>
         )}
-        <div><div className="text-gray-400 text-xs uppercase">IT assist</div><div className="mt-1">{mr.itAssist ? 'Yes' : 'No'}</div></div>
-        <div><div className="text-gray-400 text-xs uppercase">Reserved driver</div><div className="mt-1">{mr.reservedDriver ? 'Yes' : 'No'}</div></div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">IT assist</div>
+          <div className="mt-1 text-gray-800">{mr.itAssist ? 'Yes' : 'No'}</div>
+        </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Reserved driver</div>
+          <div className="mt-1 text-gray-800">{mr.reservedDriver ? 'Yes' : 'No'}</div>
+        </div>
         {mr.services && (
-          <div className="sm:col-span-2"><div className="text-gray-400 text-xs uppercase">Services</div><div className="mt-1">{mr.services}</div></div>
+          <div className="sm:col-span-2 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+            <div className="text-gray-400 text-xs uppercase tracking-wide">Services</div>
+            <div className="mt-1 text-gray-800">{mr.services}</div>
+          </div>
         )}
-        <div>
-          <div className="text-gray-400 text-xs uppercase">Assigned room</div>
+        <div
+          className={`rounded-lg border px-3 py-2 ${
+            mr.room ? 'border-blue-100 bg-blue-50/50' : 'border-dashed border-gray-200 bg-gray-50/50'
+          }`}
+        >
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Assigned room</div>
           <div className="mt-1">
             {mr.room ? (
               <>
@@ -112,7 +148,7 @@ export function MeetingRoomPanel({
                 {mr.room.location && <div className="text-xs text-gray-500 mt-1">{mr.room.location} · seats {mr.room.capacity}</div>}
               </>
             ) : (
-              <span className="text-gray-400">Not yet</span>
+              <span className="text-sm text-gray-400">No room picked yet</span>
             )}
           </div>
         </div>
