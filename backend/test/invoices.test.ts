@@ -80,7 +80,12 @@ function makePrisma(opts: any = {}) {
         state.invoices.push(row);
         return row;
       },
-      findUnique: async ({ where: { id } }: any) => state.invoices.find((i: any) => i.id === id) ?? null,
+      // the POSTED hook reads the lines (include: { items: true }) to copy the
+      // asset-tagged ones into the cost ledger, so the spy must answer with them
+      findUnique: async ({ where: { id } }: any) => {
+        const row = state.invoices.find((i: any) => i.id === id);
+        return row ? { ...row, items: row.items ?? [] } : null;
+      },
       count: async () => state.invoices.length,
       update: async (a: any) => {
         const row = state.invoices.find((i: any) => i.id === a.where.id);
@@ -112,7 +117,8 @@ function makePrisma(opts: any = {}) {
         items: row.items ?? [],
       };
     }
-    return row;
+    // the POSTED hook asks for the lines only (include: { items: true })
+    return { ...row, items: row.items ?? [] };
   };
   return prisma;
 }

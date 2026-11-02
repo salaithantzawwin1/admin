@@ -50,6 +50,9 @@ const navGroups = [
     title: 'Finance',
     items: [
       { to: '/petty-cash', label: 'Petty Cash', icon: '💵', show: () => hasPermission('pettycash.read') },
+      // one form for money out: petty cash, the asset it was for, the service
+      // it paid for and any stock it consumed — mirrors POST /spending/entries
+      { to: '/spend', label: 'Spend Entry', icon: '🧮', show: () => hasPermission('pettycash.manage') || hasPermission('assets.manage') },
       { to: '/payments', label: 'Payments', icon: '🏦', show: () => hasPermission('payments.read') },
     ],
   },
