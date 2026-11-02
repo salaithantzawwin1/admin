@@ -36,6 +36,18 @@ export interface SpecField {
   options?: string[];
 }
 
+/**
+ * Category_Code for categories the office wants spelled out rather than derived
+ * from the first three letters of the name. Keyed by the name with everything
+ * but letters/digits stripped, so "Printer / Copier" becomes printercopier.
+ */
+const CATEGORY_CODES: Record<string, string> = {
+  printer: 'PRI',
+  copier: 'PRI',
+  printercopier: 'PRI',
+  copierprinter: 'PRI',
+};
+
 const SPEC_TYPES = ['text', 'number', 'select'] as const;
 const MAX_SPEC_FIELDS = 30;
 const MAX_SPEC_VALUE = 200;
@@ -474,17 +486,25 @@ export class AssetsService {
   }
 
   /**
-   * Auto codes are scoped to the asset's category: "IT Equipment" → AST-ITE-2610-0001
-   * instead of the generic AST-2610-0001, so codes sort and read by type.
-   * The year is two digits (YYMM, e.g. 2610) — short enough to read, still
-   * ordered by month.
-   * The segment is the first three A-Z/0-9 characters of the name uppercased;
-   * a Latin-free (Burmese) name or no category keeps the plain AST- prefix.
-   * Categories that share a segment share one counter — codes stay unique either way.
+   * Auto codes are scoped to the asset's category: "IT Equipment" → AST-ITE-2611-0001
+   * instead of the generic AST-2611-0001, so codes sort and read by type.
+   * The year is two digits (YYMM, e.g. 2611) — short enough to read, still
+   * ordered by month. Only the stamp follows the month: the running number is
+   * one global counter that never restarts (NumberingService.nextAssetCode).
+   * A Latin-free (Burmese) name or no category keeps the plain AST- prefix.
    */
   private autoPrefix(categoryName?: string | null): string {
-    const seg = (categoryName ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+    const seg = this.categorySegment(categoryName);
     return seg ? `AST-${seg}` : 'AST';
+  }
+
+  /** The Category_Code printed between AST and the stamp: fixed for the names in
+   *  CATEGORY_CODES (Printer / Copier → PRI), otherwise the first three A-Z/0-9
+   *  characters of the category name uppercased. */
+  private categorySegment(categoryName?: string | null): string {
+    const name = categoryName ?? '';
+    const fixed = CATEGORY_CODES[name.toLowerCase().replace(/[^a-z0-9]/g, '')];
+    return fixed ?? name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
   }
 
   /** The sequence only knows its own rows: a hand-typed code can already occupy
@@ -492,7 +512,7 @@ export class AssetsService {
   private async nextAutoCode(categoryName?: string | null): Promise<string> {
     const prefix = this.autoPrefix(categoryName);
     for (let i = 0; i < 10; i++) {
-      const code = await this.numbering.next(prefix, new Date(), 2);
+      const code = await this.numbering.nextAssetCode(prefix);
       const taken = await this.prisma.asset.findUnique({ where: { assetCode: code } });
       if (!taken) return code;
     }

@@ -34,6 +34,38 @@ export class NumberingService {
   }
 
   /**
+   * Allocate the next asset code, e.g. AST-PRI-2611-0010.
+   * The register has ONE continuous counter: the YYMM stamp still follows the
+   * issue date, but the number no longer restarts at 0001 when the month
+   * changes — AST-PRI-2611-0009 is followed by AST-ITE-2612-0010.
+   * The counter is seeded on first use from the highest 4-digit tail already in
+   * the register, so codes minted under the old monthly-reset rule continue
+   * where they left off instead of starting over.
+   */
+  async nextAssetCode(prefix: string, when: Date = new Date()): Promise<string> {
+    const stamp = `${String(when.getFullYear()).slice(-2)}${String(when.getMonth() + 1).padStart(2, '0')}`;
+    return this.prisma.$transaction(async (tx) => {
+      const [row] = await tx.$queryRaw<Array<{ counter: number }>>`
+        INSERT INTO document_sequences ("id", "key", "counter", "updatedAt")
+        VALUES (
+          gen_random_uuid(),
+          'AST-SEQ',
+          COALESCE((
+            SELECT MAX(substring("assetCode" from '([0-9]{4})$')::int)
+            FROM assets
+            WHERE "assetCode" ~ '([0-9]{4})$'
+          ), 0) + 1,
+          now()
+        )
+        ON CONFLICT ("key") DO UPDATE
+          SET "counter" = "document_sequences"."counter" + 1, "updatedAt" = now()
+        RETURNING "counter"
+      `;
+      return `${prefix}-${stamp}-${String(Number(row.counter)).padStart(4, '0')}`;
+    });
+  }
+
+  /**
    * Allocate the next number from a stable (never-resetting) sequence —
    * e.g. nextStable('ITM') → "ITM-0042". Used for codes that must stay unique
    * forever, unlike the monthly-reset document numbers above.

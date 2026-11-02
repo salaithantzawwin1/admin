@@ -94,9 +94,18 @@ const SECTIONS: Section[] = [
 const sectionOf = (kind: SetupKind) => SECTIONS.find((s) => s.kind === kind) ?? SECTIONS[0];
 const errText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 
-/** Mirrors assets.service.ts autoPrefix: first three A-Z/0-9 chars of the name.
- *  Kept in lockstep so the row can show the code segment a category will mint. */
-const codeSeg = (name: string) => name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+/** Category_Code overrides — mirrors CATEGORY_CODES in assets.service.ts, so a
+ *  Printer / Copier category shows PRI exactly as the backend will mint it. */
+const FIXED_CATEGORY_CODES: Record<string, string> = {
+  printer: 'PRI', copier: 'PRI', printercopier: 'PRI', copierprinter: 'PRI',
+};
+
+/** Mirrors assets.service.ts categorySegment: a fixed Category_Code for known
+ *  names, else the first three A-Z/0-9 chars of the name. Kept in lockstep so
+ *  the row can show the code segment a category will mint. */
+const codeSeg = (name: string) =>
+  FIXED_CATEGORY_CODES[name.toLowerCase().replace(/[^a-z0-9]/g, '')]
+  ?? name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
 
 export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
   const canManage = hasPermission('assets.manage');

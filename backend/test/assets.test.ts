@@ -177,11 +177,12 @@ function makeEnv(opts: {
   const audit = { log: async (e: any) => { audits.push(e); } };
   const numbering = {
     // the real NumberingService bumps its counter on every call — model that,
-    // so a retry (occupied slot) gets a DIFFERENT code like production does
-    // (and the 2-digit-year request: AST-… → AST-2610-0001, not AST-202610-…)
-    next: async (prefix: string, _when?: Date, yearDigits: 2 | 4 = 4) =>
-      `${prefix}-${yearDigits === 2 ? '2610' : '202610'}-${String(1000 + ++nseq).slice(1)}`,
-    /** test helper: the value the next next() will return, without consuming it */
+    // so a retry (occupied slot) gets a DIFFERENT code like production does.
+    // One continuous counter: 2610 here is just the issue-month stamp; the tail
+    // never restarts at 0001 when the month changes.
+    nextAssetCode: async (prefix: string) =>
+      `${prefix}-2610-${String(1000 + ++nseq).slice(1)}`,
+    /** test helper: the value the next nextAssetCode() will return, without consuming it */
     peek: () => String(1000 + nseq + 1).slice(1),
   };
   if (opts.takenCode) assets.set('a-taken', { id: 'a-taken', assetCode: opts.takenCode, name: 'Pre-existing' });
