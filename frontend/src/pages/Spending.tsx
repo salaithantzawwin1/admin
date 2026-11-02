@@ -18,6 +18,7 @@ interface SpendResult {
   assetCost: { id: string; kind: string; amount: string } | null;
   maintenance: { id: string; code: string } | null;
   stock: { itemCode: string; quantity: number; balanceAfter: number }[];
+  purchases: { itemCode: string; quantity: number; balanceAfter: number }[];
   total: number;
 }
 
@@ -33,6 +34,7 @@ const emptyForm = () => ({
   paidFrom: 'PETTY_CASH',
   assetId: '',
   costKind: 'SERVICE',
+  accountId: '',
   logService: false,
   serviceType: 'CORRECTIVE',
   problem: '',
@@ -47,9 +49,12 @@ export default function Spending() {
 
   const [form, setForm] = useState(emptyForm());
   const [stockLines, setStockLines] = useState<{ itemId: string; quantity: number }[]>([]);
+  const [purchaseLines, setPurchaseLines] = useState<{ itemId: string; quantity: number; unitPrice: number }[]>([]);
   const [assets, setAssets] = useState<AssetOption[]>([]);
   const [items, setItems] = useState<ItemOption[]>([]);
   const [pick, setPick] = useState({ itemId: '', quantity: 1 });
+  const [buy, setBuy] = useState({ itemId: '', quantity: 1, unitPrice: '' });
+  const [accounts, setAccounts] = useState<{ id: string; code?: string | null; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<SpendResult | null>(null);
@@ -61,11 +66,13 @@ export default function Spending() {
       }
       if (canStock) {
         try { setItems(await api<ItemOption[]>('/inventory/items')); } catch { /* same */ }
+        try { setAccounts(await api<{ id: string; code?: string | null; name: string }[]>('/procurement/accounts')); } catch { /* optional */ }
       }
     })();
   }, [canAssets, canStock]);
 
   const usingStock = stockLines.length > 0;
+  const usingPurchase = purchaseLines.length > 0;
   const amount = Number(form.amount || 0);
 
   const addLine = () => {
@@ -77,6 +84,18 @@ export default function Spending() {
         : [...prev, { itemId: pick.itemId, quantity: pick.quantity }];
     });
     setPick({ itemId: '', quantity: 1 });
+  };
+
+  /** Bought into the store: the entry pays for it and the stock rises. */
+  const addPurchase = () => {
+    if (!buy.itemId || buy.quantity <= 0) return;
+    setPurchaseLines((prev) => {
+      const found = prev.find((l) => l.itemId === buy.itemId);
+      return found
+        ? prev.map((l) => (l.itemId === buy.itemId ? { ...l, quantity: l.quantity + buy.quantity } : l))
+        : [...prev, { itemId: buy.itemId, quantity: buy.quantity, unitPrice: Number(buy.unitPrice || 0) }];
+    });
+    setBuy({ itemId: '', quantity: 1, unitPrice: '' });
   };
 
   const submit = async () => {
@@ -91,11 +110,15 @@ export default function Spending() {
         paidFrom: form.paidFrom,
         assetId: form.assetId || undefined,
       };
-      if (!usingStock) {
+      body.accountId = form.accountId || undefined;
+      if (usingStock) {
+        body.stockLines = stockLines;
+      } else if (usingPurchase) {
+        body.purchaseLines = purchaseLines;
+        if (amount > 0) body.amount = amount;
+      } else {
         body.amount = amount;
         body.costKind = form.costKind;
-      } else {
-        body.stockLines = stockLines;
       }
       if (form.logService && form.assetId) {
         body.maintenance = {
@@ -109,6 +132,7 @@ export default function Spending() {
       setResult(res);
       setForm(emptyForm());
       setStockLines([]);
+      setPurchaseLines([]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save');
     } finally {
@@ -116,9 +140,11 @@ export default function Spending() {
     }
   };
 
-  const ready = form.assetId
-    ? usingStock || amount > 0
-    : usingStock ? false : amount > 0;
+  const ready = usingPurchase
+    ? true
+    : form.assetId
+      ? usingStock || amount > 0
+      : usingStock ? false : amount > 0;
 
   if (!canSpend && !canAssets) {
     return (
@@ -147,6 +173,9 @@ export default function Spending() {
             {result.pettyCash && <li>Petty cash EXPENSE <span className="font-mono">{result.pettyCash.code}</span> — {Number(result.pettyCash.amount).toLocaleString()} Ks</li>}
             {result.assetCost && <li>Asset cost row — {result.assetCost.kind}, {Number(result.assetCost.amount).toLocaleString()} Ks</li>}
             {result.maintenance && <li>Service log <span className="font-mono">{result.maintenance.code}</span></li>}
+            {result.purchases?.map((p) => (
+              <li key={`buy-${p.itemCode}`}>{p.itemCode} — {p.quantity} bought, {p.balanceAfter} in the store</li>
+            ))}
             {result.stock.map((s) => (
               <li key={s.itemCode}>{s.itemCode} — {s.quantity} issued, {s.balanceAfter} left in the store</li>
             ))}
@@ -198,7 +227,7 @@ export default function Spending() {
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">Asset (optional)</label>
-            <Select value={form.assetId} onChange={(e) => setForm({ ...form, assetId: e.target.value })}>
+            <Select value={form.assetId} disabled={usingPurchase} onChange={(e) => setForm({ ...form, assetId: e.target.value })}>
               <option value="">— none —</option>
               {assets.map((a) => <option key={a.id} value={a.id}>{a.assetCode} · {a.name}</option>)}
             </Select>
@@ -215,6 +244,17 @@ export default function Spending() {
           </div>
         </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+          <div className="md:col-span-2">
+            <label className="block text-xs font-medium text-gray-500 mb-1">Budget account</label>
+            <Select value={form.accountId} onChange={(e) => setForm({ ...form, accountId: e.target.value })}>
+              <option value="">— none —</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.code ? `${a.code} · ${a.name}` : a.name}</option>)}
+            </Select>
+            <p className="text-xs text-gray-400 mt-1">Without an account the spend stays out of the month's budget.</p>
+          </div>
+        </div>
+
         {!form.assetId && amount > 0 && (
           <p className="text-xs text-gray-500 mt-2">
             No asset chosen — the money goes to petty cash only. Pick a machine to put it on its cost history.
@@ -227,7 +267,7 @@ export default function Spending() {
             <input
               type="checkbox"
               checked={form.logService}
-              disabled={!form.assetId || usingStock}
+              disabled={!form.assetId || usingStock || usingPurchase}
               onChange={(e) => setForm({ ...form, logService: e.target.checked })}
             />
             Also log this as a service on that asset
@@ -261,6 +301,57 @@ export default function Spending() {
             </p>
           )}
         </div>
+
+        {/* bought into the store */}
+        {canStock && (
+          <div className="mt-4 border-t pt-3">
+            <p className="text-sm text-gray-700 mb-2">
+              Bought into the store{' '}
+              <span className="text-xs text-gray-400">(the stock rises; the money is the purchase, not an asset charge)</span>
+            </p>
+            {usingPurchase ? (
+              <ul className="text-sm text-gray-700 space-y-1 mb-2">
+                {purchaseLines.map((l) => {
+                  const item = items.find((i) => i.id === l.itemId);
+                  return (
+                    <li key={l.itemId} className="flex items-center gap-3">
+                      <span className="font-mono text-xs">{item?.code}</span>
+                      <span>{item?.name}</span>
+                      <span className="text-gray-500">{l.quantity} {item?.unit} @ {Number(l.unitPrice).toLocaleString()} Ks</span>
+                      <button
+                        className="text-red-600 hover:underline text-xs"
+                        onClick={() => setPurchaseLines(purchaseLines.filter((x) => x.itemId !== l.itemId))}
+                      >
+                        remove
+                      </button>
+                    </li>
+                  );
+                })}
+                <li className="text-xs text-gray-500">
+                  Purchase value: {purchaseLines.reduce((s, l) => s + Number(l.unitPrice) * l.quantity, 0).toLocaleString()} Ks
+                </li>
+              </ul>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                <div className="md:col-span-2">
+                  <Select value={buy.itemId} onChange={(e) => setBuy({ ...buy, itemId: e.target.value })}>
+                    <option value="">— choose an item —</option>
+                    {items.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name}</option>)}
+                  </Select>
+                </div>
+                <div>
+                  <Input type="number" min={1} value={buy.quantity} onChange={(e) => setBuy({ ...buy, quantity: Number(e.target.value) })} />
+                </div>
+                <div>
+                  <Input type="number" min={0} placeholder="Unit price" value={buy.unitPrice} onChange={(e) => setBuy({ ...buy, unitPrice: e.target.value })} />
+                </div>
+                <div>
+                  <Button variant="ghost" disabled={!buy.itemId || buy.quantity <= 0} onClick={addPurchase}>Add purchase</Button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* stock taken from the store */}
         {canStock && (
@@ -319,7 +410,7 @@ export default function Spending() {
         )}
 
         <div className="flex justify-end gap-2 mt-4">
-          <Button variant="ghost" onClick={() => { setForm(emptyForm()); setStockLines([]); setError(''); }}>Clear</Button>
+          <Button variant="ghost" onClick={() => { setForm(emptyForm()); setStockLines([]); setPurchaseLines([]); setError(''); }}>Clear</Button>
           <Button disabled={!ready || busy} onClick={() => void submit()}>
             {busy ? 'Saving…' : 'Record spend'}
           </Button>

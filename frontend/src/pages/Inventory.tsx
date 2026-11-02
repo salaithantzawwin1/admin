@@ -173,7 +173,9 @@ export default function Inventory() {
   const [showCart, setShowCart] = useState(false);
 
   // restock form
-  const [restock, setRestock] = useState({ itemId: '', quantity: 1, reference: '', unitPrice: '', supplierId: '' });
+  const [restock, setRestock] = useState({ itemId: '', quantity: 1, reference: '', unitPrice: '', supplierId: '', accountId: '' });
+  // budget account for purchases (§9/§17) — optional, loaded on first use
+  const [accounts, setAccounts] = useState<{ id: string; code?: string | null; name: string }[]>([]);
 
   // spending report + low-stock alert (management)
   const [spending, setSpending] = useState<Spending | null>(null);
@@ -232,6 +234,18 @@ export default function Inventory() {
     api<Spending>(`/inventory/spending?start=${w.start}&end=${w.end}`).then(setSpending).catch(() => setSpending(null));
     api<ReorderRow[]>('/inventory/reorder-suggestions').then(setReorder).catch(() => setReorder([]));
   }, [spendMonth, canManage]);
+
+  // accounts feed the purchase's budget classification — optional, so a
+  // missing grant or an empty master never blocks a restock
+  useEffect(() => {
+    void (async () => {
+      try {
+        setAccounts(await api<{ id: string; code?: string | null; name: string }[]>('/procurement/accounts'));
+      } catch {
+        // no accounts.read → the picker stays empty and the purchase records without one
+      }
+    })();
+  }, []);
 
   const loadSuppliers = useCallback(() => {
     if (!canManage) return;
@@ -489,9 +503,10 @@ export default function Inventory() {
           reference: restock.reference.trim() || undefined,
           unitPrice: restock.unitPrice !== '' ? Number(restock.unitPrice) : undefined,
           supplierId: restock.supplierId || undefined,
+          accountId: restock.accountId || undefined,
         },
       });
-      setRestock({ itemId: '', quantity: 1, reference: '', unitPrice: '', supplierId: '' });
+      setRestock({ itemId: '', quantity: 1, reference: '', unitPrice: '', supplierId: '', accountId: '' });
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -502,7 +517,7 @@ export default function Inventory() {
 
   /** Pre-fill the restock form from a low-stock suggestion (jumps to the Restock sub-tab). */
   const suggestRestock = (i: Item) => {
-    setRestock({ itemId: i.id, quantity: Math.max(i.minStock * 3 - i.balance, i.minStock), reference: `Restock suggestion — ${i.code}`, unitPrice: i.lastUnitPrice != null ? String(i.lastUnitPrice) : '', supplierId: '' });
+    setRestock({ itemId: i.id, quantity: Math.max(i.minStock * 3 - i.balance, i.minStock), reference: `Restock suggestion — ${i.code}`, unitPrice: i.lastUnitPrice != null ? String(i.lastUnitPrice) : '', supplierId: '', accountId: '' });
     setMgmtTab('restock');
   };
 
@@ -960,7 +975,11 @@ export default function Inventory() {
                     <Input placeholder="Reference (PO / invoice / donor)" value={restock.reference} onChange={(e) => setRestock({ ...restock, reference: e.target.value })} />
                   </div>
                 </div>
-                <p className="text-xs text-gray-400">Unit price + supplier are recorded on each PURCHASE entry — used by the Purchases report. Manage suppliers in the Purchases tab.</p>
+                <Select value={restock.accountId} onChange={(e) => setRestock({ ...restock, accountId: e.target.value })}>
+                  <option value="">— Budget account (optional) —</option>
+                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.code ? `${a.code} · ${a.name}` : a.name}</option>)}
+                </Select>
+                <p className="text-xs text-gray-400">Unit price, supplier and budget account are recorded on each PURCHASE entry — the account is what makes the purchase count in the month's budget.</p>
                 <Button onClick={doRestock} disabled={!restock.itemId || restock.quantity <= 0 || busy}>+ Add stock</Button>
               </div>
             </Card>
@@ -1038,7 +1057,7 @@ export default function Inventory() {
                           className="text-xs text-blue-600 hover:underline whitespace-nowrap"
                           title="Pre-fill the restock form with the suggested quantity"
                           onClick={() => {
-                            setRestock({ itemId: r.itemId, quantity: r.suggestedQty, reference: `Reorder suggestion — ${r.code}`, unitPrice: r.lastUnitPrice != null ? String(r.lastUnitPrice) : '', supplierId: '' });
+                            setRestock({ itemId: r.itemId, quantity: r.suggestedQty, reference: `Reorder suggestion — ${r.code}`, unitPrice: r.lastUnitPrice != null ? String(r.lastUnitPrice) : '', supplierId: '', accountId: '' });
                             setMgmtTab('restock');
                           }}
                         >

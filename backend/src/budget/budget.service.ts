@@ -124,28 +124,59 @@ export class BudgetService {
 
   /** Budget vs actual for a month — every report/table surfaces this shape. */
   async usageFor(accountId: string, year: number, month: number, budgetAmount: number) {
-    const spend = await this.spendFor(accountId, year, month);
+    const breakdown = await this.spendBreakdown(accountId, year, month);
+    const spend = breakdown.total;
     return {
       amount: Number(budgetAmount),
       spent: spend,
       remaining: Number(budgetAmount) - spend,
       usedPercent: Number(budgetAmount) > 0 ? Math.round((spend / Number(budgetAmount)) * 1000) / 10 : 0,
+      breakdown,
     };
   }
 
-  /** Real spend data source: APPROVED/POSTED invoice lines for the account in that month. */
+  /** Total spend for the account in that month, across every way money leaves. */
   async spendFor(accountId: string, year: number, month: number) {
-    const lines = await this.prisma.invoiceItem.findMany({
-      where: {
-        accountId,
-        invoice: {
-          status: { in: ['APPROVED', 'POSTED'] },
-          invoiceDate: { gte: new Date(Date.UTC(year, month - 1, 1)), lt: new Date(Date.UTC(year, month, 1)) },
+    return (await this.spendBreakdown(accountId, year, month)).total;
+  }
+
+  /**
+   * Real spend, split by where the money came from — a total nobody can explain
+   * is not much better than one that is missing a source.
+   *
+   *   invoice   APPROVED/POSTED supplier bills attributed to the account
+   *   pettyCash cash paid out of the float (EXPENSE rows)
+   *   stock     stock bought against the account, EXCEPT purchases paid from the
+   *             float — that expense already counted them, and counting both is
+   *             how a month reads as overspent when it is not
+   */
+  async spendBreakdown(accountId: string, year: number, month: number) {
+    const from = new Date(Date.UTC(year, month - 1, 1));
+    const to = new Date(Date.UTC(year, month, 1));
+
+    const [lines, cash, stock] = await Promise.all([
+      this.prisma.invoiceItem.findMany({
+        where: {
+          accountId,
+          invoice: { status: { in: ['APPROVED', 'POSTED'] }, invoiceDate: { gte: from, lt: to } },
         },
-      },
-      select: { quantity: true, unitPrice: true },
-    });
-    return round2(lines.reduce((s, l) => s + Number(l.unitPrice) * l.quantity, 0));
+        select: { quantity: true, unitPrice: true },
+      }),
+      this.prisma.pettyCashTransaction.findMany({
+        where: { accountId, type: 'EXPENSE', date: { gte: from, lt: to } },
+        select: { amount: true },
+      }),
+      this.prisma.stockTransaction.findMany({
+        where: { accountId, type: 'PURCHASE', pettyCashId: null, createdAt: { gte: from, lt: to } },
+        select: { quantity: true, unitPrice: true },
+      }),
+    ]);
+
+    const invoice = round2(lines.reduce((s, l) => s + Number(l.unitPrice) * l.quantity, 0));
+    const pettyCash = round2(cash.reduce((s, c) => s + Number(c.amount), 0));
+    // a purchase with no recorded price adds usage, never invented kyat
+    const stockSpend = round2(stock.reduce((s, t) => s + (t.unitPrice != null ? Number(t.unitPrice) * t.quantity : 0), 0));
+    return { invoice, pettyCash, stock: stockSpend, total: round2(invoice + pettyCash + stockSpend) };
   }
 
   /**

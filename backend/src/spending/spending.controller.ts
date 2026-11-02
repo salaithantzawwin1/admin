@@ -31,6 +31,8 @@ export class SpendEntryDto {
   };
   /** Stock taken from the store: [{ itemId, quantity }]. */
   @IsOptional() @IsArray() stockLines?: { itemId: string; quantity: number }[];
+  /** Bought into the store: [{ itemId, quantity, unitPrice }]. */
+  @IsOptional() @IsArray() purchaseLines?: { itemId: string; quantity: number; unitPrice?: number }[];
 }
 
 @ApiTags('spending')

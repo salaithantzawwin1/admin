@@ -1090,7 +1090,13 @@ model StockTransaction {
   requestId          String?     @db.Uuid // link to the supply request that caused an ISSUE
   issuedToEmployeeId String?     @db.Uuid // employee who physically received an ISSUE (ledger)
   assetId            String?     @db.Uuid // machine this ISSUE was consumed by (§14/§24)
-  purpose            String? // ASSET_USE / MAINTENANCE / ISSUE_TO_STAFF / GENERAL
+  purpose            String? // ASSET_USE / MAINTENANCE / ISSUE_TO_STAFF / GENERAL / PURCHASE
+  /// Budget account that paid for a PURCHASE (§9/§17) — stock items carry no
+  /// account of their own, so without this a purchase is missing from the budget.
+  accountId          String?     @db.Uuid
+  /// Set when the money came out of the petty cash float: that EXPENSE already
+  /// counts in the budget, so these rows are excluded to avoid counting twice.
+  pettyCashId        String?     @db.Uuid
   createdById        String      @db.Uuid
   createdAt          DateTime    @default(now())
 
@@ -1105,6 +1111,7 @@ model StockTransaction {
   @@index([requestId])
   @@index([issuedToEmployeeId])
   @@index([assetId])
+  @@index([accountId])
   @@map("stock_transactions")
 }
 

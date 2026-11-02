@@ -56,6 +56,9 @@ function makePrisma(opts: { budgets?: Record<string, number>; invoiceLines?: { a
       findMany: async () => [],
       findFirst: async () => null,
     },
+    // the spend rollup now also reads the float and stock purchases
+    pettyCashTransaction: { findMany: async () => [] },
+    stockTransaction: { findMany: async () => [] },
     invoiceItem: {
       findMany: async ({ where }: any) => {
         const from = where?.invoice?.invoiceDate?.gte?.getTime() ?? 0;
@@ -91,8 +94,11 @@ function makeSvc(opts: any) {
   return { svc: new BudgetService(spy.prisma as any, audit as any), spy };
 }
 
-const YEAR = 2026;
-const OCT = 10;
+// checkTotals enforces the CURRENT month, so the fixtures follow the clock
+// instead of a hard-coded month (this test used to rot every November).
+const NOW = new Date();
+const YEAR = NOW.getUTCFullYear();
+const OCT = NOW.getUTCMonth() + 1;
 
 async function main() {
   console.log('\n== §9 budget validation hook ==');
@@ -101,8 +107,8 @@ async function main() {
     const { svc } = makeSvc({
       budgets: { [`acc-1:${YEAR}:${OCT}`]: 50000 },
       invoiceLines: [
-        { accountId: 'acc-1', quantity: 1, unitPrice: 20000, invoice: { status: 'POSTED', invoiceDate: new Date(Date.UTC(YEAR, 9, 2)) } },
-        { accountId: 'acc-1', quantity: 1, unitPrice: 999, invoice: { status: 'DRAFT', invoiceDate: new Date(Date.UTC(YEAR, 9, 3)) } }, // not counted
+        { accountId: 'acc-1', quantity: 1, unitPrice: 20000, invoice: { status: 'POSTED', invoiceDate: new Date(Date.UTC(YEAR, OCT - 1, 2)) } },
+        { accountId: 'acc-1', quantity: 1, unitPrice: 999, invoice: { status: 'DRAFT', invoiceDate: new Date(Date.UTC(YEAR, OCT - 1, 3)) } }, // not counted
       ],
     });
     const verdict = await svc.checkRequestSubmission('req-budget');
@@ -118,7 +124,7 @@ async function main() {
   await test('pass: PR within remaining budget gets no verdict', async () => {
     const { svc } = makeSvc({
       budgets: { [`acc-1:${YEAR}:${OCT}`]: 100000 },
-      invoiceLines: [{ accountId: 'acc-1', quantity: 1, unitPrice: 20000, invoice: { status: 'POSTED', invoiceDate: new Date(Date.UTC(YEAR, 9, 2)) } }],
+      invoiceLines: [{ accountId: 'acc-1', quantity: 1, unitPrice: 20000, invoice: { status: 'POSTED', invoiceDate: new Date(Date.UTC(YEAR, OCT - 1, 2)) } }],
     });
     const verdict = await svc.checkRequestSubmission('req-budget');
     assert.strictEqual(verdict, undefined);

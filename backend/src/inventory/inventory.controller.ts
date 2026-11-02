@@ -43,6 +43,8 @@ export class RestockDto {
   @IsOptional() @Min(0) unitPrice?: number; // price per unit (spending report)
   @IsOptional() @IsString() @MaxLength(120) supplier?: string; // legacy free-text fallback
   @IsOptional() @IsString() supplierId?: string; // Supplier master id (preferred)
+  /** Budget account this purchase belongs to (§9/§17) — optional. */
+  @IsOptional() @IsString() accountId?: string;
 }
 
 export class IssueToAssetDto {

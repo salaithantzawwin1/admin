@@ -226,6 +226,8 @@ export class InventoryService {
     issuedToEmployeeId?: string | null,
     assetId?: string,
     purpose?: string,
+    accountId?: string,
+    pettyCashId?: string,
   ) {
     const run = async (tx: Prisma.TransactionClient) => {
       // row lock so concurrent issues cannot both pass the balance check
@@ -247,6 +249,8 @@ export class InventoryService {
           ...(issuedToEmployeeId ? { issuedToEmployeeId } : {}),
           ...(assetId ? { assetId } : {}),
           ...(purpose ? { purpose } : {}),
+          ...(accountId ? { accountId } : {}),
+          ...(pettyCashId ? { pettyCashId } : {}),
           ...(unitPrice !== undefined ? { unitPrice } : {}),
           ...(supplier ? { supplier } : {}),
           ...(supplierId ? { supplierId } : {}),
@@ -575,7 +579,7 @@ export class InventoryService {
 
   // ---------- restock / purchases ----------
 
-  async restock(data: { itemId: string; quantity: number; reference?: string; unitPrice?: number; supplier?: string; supplierId?: string }, actor: Actor) {
+  async restock(data: { itemId: string; quantity: number; reference?: string; unitPrice?: number; supplier?: string; supplierId?: string; accountId?: string }, actor: Actor) {
     if (!Number.isInteger(data.quantity) || data.quantity <= 0) {
       throw new BadRequestException('Quantity must be a positive whole number');
     }
@@ -592,12 +596,18 @@ export class InventoryService {
       supplierId = s.id;
       supplierName = s.name;
     }
-    const tx = await this.applyTransaction(data.itemId, 'PURCHASE', data.quantity, data.reference || 'Restock', undefined, actor, undefined, price, supplierName, supplierId);
+    // budget classification (§9/§17) — optional, so a stock purchase can land in
+    // the month's spend instead of disappearing from Finance's view
+    if (data.accountId) {
+      const account = await this.prisma.account.findUnique({ where: { id: data.accountId } });
+      if (!account) throw new BadRequestException('Account not found');
+    }
+    const tx = await this.applyTransaction(data.itemId, 'PURCHASE', data.quantity, data.reference || 'Restock', undefined, actor, undefined, price, supplierName, supplierId, undefined, undefined, undefined, data.accountId);
     const item = await this.prisma.inventoryItem.findUnique({ where: { id: data.itemId } });
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'INVENTORY_RESTOCK', module: 'INVENTORY', recordId: data.itemId,
-      newValue: { quantity: data.quantity, balanceAfter: tx.balanceAfter, reference: data.reference, unitPrice: price, supplier: supplierName },
+      newValue: { quantity: data.quantity, balanceAfter: tx.balanceAfter, reference: data.reference, unitPrice: price, supplier: supplierName, accountId: data.accountId },
     });
     return { transaction: tx, item };
   }

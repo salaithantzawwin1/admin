@@ -233,6 +233,40 @@ const SpendingService = require('../src/spending/spending.service').SpendingServ
     assert.strictEqual(env.stockTx.length, 0);
   });
 
+  await test('a purchase into the store pays from the float and rises the balance', async () => {
+    const env = makeEnv();
+    const out = await svc(env).create({
+      date: '2026-11-02',
+      description: 'Bought 5 toners',
+      accountId: 'acc-1',
+      paidFrom: 'PETTY_CASH',
+      purchaseLines: [{ itemId: 'i-1', quantity: 5, unitPrice: 20000 }],
+    }, ACTOR);
+
+    assert.strictEqual(env.pettyCash.length, 1, 'the money is recorded once');
+    assert.strictEqual(Number(env.pettyCash[0].amount), 100000, 'amount derived from the lines');
+    assert.strictEqual(env.items.get('i-1').balance, 10, 'stock rises');
+    assert.strictEqual(env.items.get('i-1').lastUnitPrice, 20000, 'last price follows the purchase');
+    assert.strictEqual(env.stockTx.length, 1);
+    assert.strictEqual(env.stockTx[0].type, 'PURCHASE');
+    assert.strictEqual(env.stockTx[0].quantity, 5);
+    assert.strictEqual(env.stockTx[0].accountId, 'acc-1', 'budget account on the purchase');
+    assert.strictEqual(env.stockTx[0].pettyCashId, env.pettyCash[0].id, 'link stops the budget counting it twice');
+    assert.strictEqual(env.costs.length, 0, 'store stock is not an asset charge');
+    assert.strictEqual(out.total, 100000);
+  });
+
+  await test('a purchase cannot also be charged to an asset, nor mixed with usage', async () => {
+    const env = makeEnv();
+    await svc(env).create({ amount: 1000, assetId: 'a-1', purchaseLines: [{ itemId: 'i-1', quantity: 1, unitPrice: 1000 }] }, ACTOR)
+      .then(() => { throw new Error('asset charge accepted'); })
+      .catch((e: any) => assert.ok(/cannot also be charged to an asset/.test(e.message), e.message));
+    await svc(env).create({ assetId: 'a-1', purchaseLines: [{ itemId: 'i-1', quantity: 1, unitPrice: 1000 }], stockLines: [{ itemId: 'i-1', quantity: 1 }] }, ACTOR)
+      .then(() => { throw new Error('mixed entry accepted'); })
+      .catch((e: any) => assert.ok(/separate entries/.test(e.message), e.message));
+    assert.strictEqual(env.pettyCash.length + env.stockTx.length, 0, 'nothing written');
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) {
     failures.forEach((f) => console.error(f));

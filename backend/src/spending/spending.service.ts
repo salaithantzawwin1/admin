@@ -43,8 +43,11 @@ export class SpendingService {
     assetId?: string; costKind?: string;
     maintenance?: { type?: string; problem?: string; workDone?: string; nextDueDate?: string };
     stockLines?: { itemId: string; quantity: number }[];
+    /** Bought into the store this time: [{ itemId, quantity, unitPrice }]. */
+    purchaseLines?: { itemId: string; quantity: number; unitPrice?: number }[];
   }, actor: Actor) {
     const stockLines = Array.isArray(data.stockLines) ? data.stockLines : [];
+    const purchaseLines = Array.isArray(data.purchaseLines) ? data.purchaseLines : [];
     const amount = Number(data.amount ?? 0);
     const paidFrom = String(data.paidFrom ?? 'PETTY_CASH').toUpperCase();
     if (!['PETTY_CASH', 'OTHER'].includes(paidFrom)) {
@@ -55,14 +58,20 @@ export class SpendingService {
         'Stock taken from the store was already paid for when it was bought — record the usage without an amount',
       );
     }
-    if (!stockLines.length && !(amount > 0)) {
+    if (purchaseLines.length && stockLines.length) {
+      throw new BadRequestException('Buying stock and using stock are separate entries — record the purchase, then issue it');
+    }
+    if (!stockLines.length && !purchaseLines.length && !(amount > 0)) {
       throw new BadRequestException('Enter the amount spent, or the stock being used');
     }
+    // buying into the store: the lines price the money when no total is typed
+    const purchaseValue = round2(purchaseLines.reduce((s, l) => s + Number(l.unitPrice ?? 0) * l.quantity, 0));
+    const money = amount > 0 ? amount : purchaseValue;
     const date = data.date ? new Date(data.date) : new Date();
     if (Number.isNaN(date.getTime())) throw new BadRequestException('Invalid date');
 
     const costKind = String(data.costKind ?? 'OTHER').toUpperCase();
-    if (amount > 0 && !(COST_KINDS as readonly string[]).includes(costKind)) {
+    if (money > 0 && !(COST_KINDS as readonly string[]).includes(costKind)) {
       throw new BadRequestException(`Unknown cost kind "${data.costKind}" (${COST_KINDS.join(', ')})`);
     }
 
@@ -89,6 +98,18 @@ export class SpendingService {
       }
       if (!asset) throw new BadRequestException('Stock can only be issued to a named asset');
     }
+    for (const line of purchaseLines) {
+      if (!line?.itemId) throw new BadRequestException('Every purchase line needs an item');
+      if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+        throw new BadRequestException('Purchase quantity must be a positive whole number');
+      }
+      if (!Number.isFinite(Number(line.unitPrice ?? 0)) || Number(line.unitPrice ?? 0) < 0) {
+        throw new BadRequestException('Purchase unit price must be zero or more');
+      }
+    }
+    if (purchaseLines.length && asset) {
+      throw new BadRequestException('A purchase into the store cannot also be charged to an asset — issue it to the asset when it is used');
+    }
     const mType = data.maintenance
       ? String(data.maintenance.type ?? 'CORRECTIVE').toUpperCase()
       : null;
@@ -102,7 +123,7 @@ export class SpendingService {
     // Codes are allocated BEFORE the transaction: NumberingService opens its own
     // transaction, and nesting one inside another would hold two connections for
     // the same work.
-    const pcCode = paidFrom === 'PETTY_CASH' && amount > 0
+    const pcCode = paidFrom === 'PETTY_CASH' && money > 0
       ? await this.numbering.next('PC')
       : null;
     const mrcCode = mType ? await this.numbering.next('MRC', date, 2) : null;
@@ -111,7 +132,8 @@ export class SpendingService {
       const out: {
         pettyCash: any; assetCost: any; maintenance: any;
         stock: { itemId: string; itemCode: string; quantity: number; balanceAfter: number }[];
-      } = { pettyCash: null, assetCost: null, maintenance: null, stock: [] };
+        purchases: { itemId: string; itemCode: string; quantity: number; balanceAfter: number }[];
+      } = { pettyCash: null, assetCost: null, maintenance: null, stock: [], purchases: [] };
 
       // 1. the money itself
       if (pcCode) {
@@ -120,7 +142,7 @@ export class SpendingService {
             code: pcCode,
             date,
             type: 'EXPENSE',
-            amount,
+            amount: money,
             payee: data.payee?.trim() || data.supplierId || undefined,
             accountId: data.accountId || undefined,
             description: data.description?.trim() || undefined,
@@ -130,7 +152,7 @@ export class SpendingService {
       }
 
       // 2. attribute the money to the machine (never alongside a stock issue)
-      if (asset && amount > 0 && !stockLines.length) {
+      if (asset && money > 0 && !stockLines.length && !purchaseLines.length) {
         out.assetCost = await tx.assetCost.create({
           data: {
             assetId: asset.id,
@@ -211,6 +233,36 @@ export class SpendingService {
         out.stock.push({ itemId: item.id, itemCode: item.code, quantity: line.quantity, balanceAfter: newBalance });
       }
 
+      // 5. stock bought into the store, against the same account
+      for (const line of purchaseLines) {
+        const rows = await tx.$queryRaw<Array<{ id: string; balance: number; code: string; name: string }>>`
+          SELECT id, balance, code, name FROM inventory_items WHERE id = ${line.itemId}::uuid FOR UPDATE`;
+        const item = rows[0];
+        if (!item) throw new NotFoundException('Item not found');
+        const unitPrice = round2(Number(line.unitPrice ?? 0));
+        const newBalance = item.balance + line.quantity;
+        await tx.inventoryItem.update({
+          where: { id: item.id },
+          data: { balance: newBalance, ...(unitPrice > 0 ? { lastUnitPrice: unitPrice } : {}) },
+        });
+        await tx.stockTransaction.create({
+          data: {
+            itemId: item.id,
+            type: 'PURCHASE',
+            quantity: line.quantity,
+            balanceAfter: newBalance,
+            reference: `Purchase${out.pettyCash ? ` ${pcCode}` : ''} — ${data.description?.trim() || item.name}`,
+            ...(unitPrice > 0 ? { unitPrice } : {}),
+            ...(data.supplierId ? { supplierId: data.supplierId } : {}),
+            ...(data.accountId ? { accountId: data.accountId } : {}),
+            ...(out.pettyCash ? { pettyCashId: out.pettyCash.id } : {}),
+            purpose: 'PURCHASE',
+            createdById: actor.userId,
+          },
+        });
+        out.purchases.push({ itemId: item.id, itemCode: item.code, quantity: line.quantity, balanceAfter: newBalance });
+      }
+
       return out;
     });
 
@@ -218,9 +270,10 @@ export class SpendingService {
       userId: actor.userId, username: actor.username,
       action: 'SPEND_ENTRY_CREATED', module: 'ADMINISTRATION', recordId: result.pettyCash?.id ?? asset?.id ?? 'n/a',
       newValue: {
-        amount, paidFrom, pettyCashCode: pcCode, assetCode: asset?.assetCode ?? null,
+        amount: money, paidFrom, pettyCashCode: pcCode, assetCode: asset?.assetCode ?? null,
         costKind: amount > 0 && !stockLines.length ? costKind : null,
-        maintenanceCode: mrcCode, stock: result.stock, description: data.description ?? null,
+        maintenanceCode: mrcCode, stock: result.stock, purchases: result.purchases,
+        description: data.description ?? null,
       },
     });
 
@@ -229,7 +282,8 @@ export class SpendingService {
       assetCost: result.assetCost,
       maintenance: result.maintenance,
       stock: result.stock,
-      total: amount,
+      purchases: result.purchases,
+      total: money,
     };
   }
 }
