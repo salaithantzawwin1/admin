@@ -83,6 +83,8 @@ model User {
   monthlyBudgetsCreated  MonthlyBudget[]         @relation("BudgetCreatedBy")
   assetMovementsCreated  AssetMovement[]         @relation("AssetMovements")
   assetCostsCreated      AssetCost[]             @relation("AssetCostCreator")
+  maintenanceCreated     MaintenanceRecord[]     @relation("MaintenanceCreatedBy")
+  maintenanceSchedulesCreated MaintenanceSchedule[] @relation("MaintenanceScheduleCreatedBy")
   pettyCashCreated       PettyCashTransaction[]  @relation("PettyCashTransactions")
   paymentsCreated        Payment[]               @relation("PaymentCreatedBy")
   telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
@@ -1015,6 +1017,7 @@ model Supplier {
   invoices          Invoice[]               @relation("InvoiceSupplier")
   rfqVendors        RfqVendor[]             @relation("RfqVendorSupplier")
   assetCosts        AssetCost[]
+  maintenanceRecords MaintenanceRecord[]      @relation("MaintenanceVendor")
   quotations        Quotation[]             @relation("QuotationSupplier")
   recommendedIn     QuotationComparison[]   @relation("ComparisonSupplier")
 
@@ -1439,6 +1442,8 @@ model Asset {
   poItems      PurchaseOrderItem[]   @relation("PoItemAsset") // PO lines this asset was registered from (§39)
   movements    AssetMovement[]
   costs        AssetCost[] // every later cost event (service, parts, consumables)
+  maintenanceRecords   MaintenanceRecord[]   // service history (§13/§14)
+  maintenanceSchedules MaintenanceSchedule[] // preventive due dates (§15)
 
   @@index([categoryId])
   @@index([locationId])
@@ -1505,6 +1510,67 @@ model AssetCost {
   @@unique([sourceType, sourceId])
   @@index([assetId, date])
   @@map("asset_costs")
+}
+
+// Maintenance management (§13–§15) — the permanent service history of ONE
+// maintainable unit (an Aircon, a generator, a printer). Every job records what
+// broke, what was done, who did it and what it cost, so opening the asset shows
+// its whole service life. A record whose parts+labor+other is more than zero
+// also writes a SERVICE row into `asset_costs`, which keeps "what has this unit
+// cost us" in ONE place instead of a second, hand-kept total.
+model MaintenanceRecord {
+  id              String   @id @default(uuid()) @db.Uuid
+  code            String   @unique // MRC-2611-0001 via DocumentSequence
+  assetId         String   @db.Uuid
+  type            String   @default("CORRECTIVE") // PREVENTIVE / CORRECTIVE / INSPECTION / WARRANTY_SERVICE / EMERGENCY
+  status          String   @default("COMPLETED") // OPEN / IN_PROGRESS / COMPLETED / CANCELLED
+  /// When the work happened — drives the MRC-YYMM stamp, not createdAt.
+  date            DateTime @default(now())
+  problem         String?
+  workDone        String?
+  vendorId        String?  @db.Uuid // service provider (Supplier master)
+  technician      String?
+  costParts       Decimal  @default(0) @db.Decimal(12, 2)
+  costLabor       Decimal  @default(0) @db.Decimal(12, 2)
+  costOther       Decimal  @default(0) @db.Decimal(12, 2)
+  downtimeHours   Decimal? @db.Decimal(6, 1)
+  warrantyEndDate DateTime?
+  nextDueDate     DateTime? // feeds the next preventive visit
+  note            String?
+  createdById     String   @db.Uuid
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  asset     Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  vendor    Supplier? @relation("MaintenanceVendor", fields: [vendorId], references: [id])
+  createdBy User      @relation("MaintenanceCreatedBy", fields: [createdById], references: [id])
+
+  @@index([assetId, date])
+  @@index([nextDueDate])
+  @@map("maintenance_records")
+}
+
+// Preventive maintenance schedule (§15): "service the Aircon every 6 months".
+// lastDoneAt/nextDueAt are the pair the page sorts on — nextDueAt is derived
+// from last done + interval when it is not typed in by hand.
+model MaintenanceSchedule {
+  id             String    @id @default(uuid()) @db.Uuid
+  assetId        String    @db.Uuid
+  title          String // e.g. "Aircon gas service"
+  intervalMonths Int
+  lastDoneAt     DateTime?
+  nextDueAt      DateTime
+  active         Boolean   @default(true)
+  note           String?
+  createdById    String    @db.Uuid
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  asset     Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  createdBy User   @relation("MaintenanceScheduleCreatedBy", fields: [createdById], references: [id])
+
+  @@index([nextDueAt])
+  @@map("maintenance_schedules")
 }
 
 // Petty cash (§21/§36) — append-only ledger of TOPUP/EXPENSE rows; the balance

@@ -28,6 +28,8 @@ export const PERMISSIONS = {
   PROCUREMENT_MANAGE: 'procurement.manage',
   ASSETS_READ: 'assets.read',
   ASSETS_MANAGE: 'assets.manage',
+  MAINTENANCE_READ: 'maintenance.read',
+  MAINTENANCE_MANAGE: 'maintenance.manage',
   PETTYCASH_READ: 'pettycash.read',
   PETTYCASH_MANAGE: 'pettycash.manage',
   PAYMENTS_READ: 'payments.read',

@@ -60,6 +60,7 @@ const navGroups = [
       // NOTE: route must NOT be '/assets' — that path is Vite's static chunk
       // directory; nginx 301s it into /assets/ (403) and the page never loads.
       { to: '/asset-register', label: 'Assets', icon: '🏷️', show: () => hasPermission('assets.read') },
+      { to: '/maintenance', label: 'Maintenance', icon: '🛠️', show: () => hasPermission('maintenance.read') },
       { to: '/fleet', label: 'Fleet', icon: '🚐', show: () => hasPermission('fleet.read') },
     ],
   },

@@ -28,6 +28,7 @@ import { InvoicesModule } from './procurement/invoices.module';
 import { PaymentsModule } from './procurement/payments.module';
 import { BudgetModule, BudgetService } from './budget/budget.module';
 import { AssetsModule } from './assets/assets.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
 import { PettyCashModule } from './pettycash/pettycash.module';
 import { ReportsModule } from './reports/reports.module';
 import { SettingsModule } from './settings/settings.module';
@@ -62,6 +63,7 @@ import { HealthController } from './health/health.controller';
     PaymentsModule,
     BudgetModule,
     AssetsModule,
+    MaintenanceModule,
     PettyCashModule,
     ReportsModule,
     TelegramModule,

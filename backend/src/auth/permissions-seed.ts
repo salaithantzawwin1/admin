@@ -10,20 +10,20 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   // Plan §12: Administration runs the store; employees read the catalog + request
   // org.read → department/branch pickers (announcement targeting, employee forms)
   // departments.manage → Administration owns department CRUD (Plan §3)
-  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'suppliers.read', 'suppliers.manage', 'procurement.read', 'procurement.manage', 'assets.read', 'assets.manage', 'pettycash.read', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
+  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'suppliers.read', 'suppliers.manage', 'procurement.read', 'procurement.manage', 'assets.read', 'assets.manage', 'maintenance.read', 'maintenance.manage', 'pettycash.read', 'announcements.read', 'announcements.manage', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
   EMPLOYEE: ['inventory.read', 'announcements.read'],
   DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
-  MANAGEMENT: ['inventory.read', 'announcements.read', 'assets.read', 'pettycash.read', 'payments.read'],
-  MAINTENANCE_COORDINATOR: ['inventory.read', 'announcements.read'],
+  MANAGEMENT: ['inventory.read', 'announcements.read', 'assets.read', 'maintenance.read', 'pettycash.read', 'payments.read'],
+  MAINTENANCE_COORDINATOR: ['inventory.read', 'announcements.read', 'assets.read', 'maintenance.read', 'maintenance.manage'],
   // PURCHASING/FINANCE browse the catalog to raise purchase requests (Plan §6);
   // PURCHASING also owns the vendor master. Procurement (Design §41): PURCHASING
   // runs the PR/PO flow, ADMINISTRATION approves/oversees, FINANCE reads for
   // account/budget visibility (deny-memory still protects any matrix revocation).
-  PURCHASING: ['announcements.read', 'inventory.read', 'suppliers.read', 'suppliers.manage', 'procurement.read', 'procurement.manage', 'assets.read'],
+  PURCHASING: ['announcements.read', 'inventory.read', 'suppliers.read', 'suppliers.manage', 'procurement.read', 'procurement.manage', 'assets.read', 'maintenance.read'],
   // GLG ERP §W1: FINANCE records/edits payments (payments.manage) and reads
   // everything payables; MANAGEMENT only reads the register — Administration
   // deliberately does NOT get payments.* (invoices but never marks them paid).
-  FINANCE: ['announcements.read', 'inventory.read', 'suppliers.read', 'procurement.read', 'assets.read', 'pettycash.read', 'pettycash.manage', 'payments.read', 'payments.manage'],
+  FINANCE: ['announcements.read', 'inventory.read', 'suppliers.read', 'procurement.read', 'assets.read', 'maintenance.read', 'pettycash.read', 'pettycash.manage', 'payments.read', 'payments.manage'],
   SYSTEM_ADMIN: [], // superuser — every code is granted dynamically
 };
 

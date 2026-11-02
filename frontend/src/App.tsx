@@ -30,6 +30,7 @@ const Rfqs = lazy(() => import('./pages/Rfqs'));
 const Invoices = lazy(() => import('./pages/Invoices'));
 const Reports = lazy(() => import('./pages/Reports'));
 const Assets = lazy(() => import('./pages/Assets'));
+const Maintenance = lazy(() => import('./pages/Maintenance'));
 const PettyCash = lazy(() => import('./pages/PettyCash'));
 const Payments = lazy(() => import('./pages/Payments'));
 const RbacMatrix = lazy(() => import('./pages/RbacMatrix'));
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="invoices" element={<Invoices />} />
           <Route path="purchase-reports" element={<Reports />} />
           <Route path="asset-register" element={<Assets />} />
+          <Route path="maintenance" element={<Maintenance />} />
           <Route path="petty-cash" element={<PettyCash />} />
           <Route path="payments" element={<Payments />} />
           <Route path="users" element={<Users />} />
