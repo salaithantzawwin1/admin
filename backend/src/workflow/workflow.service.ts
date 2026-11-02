@@ -325,8 +325,9 @@ export class WorkflowService {
                 // vehicleId: the list flags APPROVED rows with no car yet —
                 // cleared on release too, so it always matches the assign queue
                 vehicleId: true,
-                // shared-trip group: the list shows the group's taps on every
-                // member (one driver, one ride) — see attachSharedRideAcks()
+                // shared-trip group: the list badges every member (🔗 Shared trip)
+                // and shows the group's taps (one driver, one ride)
+                // — see attachSharedRideAcks()
                 sharedTripId: true,
                 driver: { select: { name: true } },
                 assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
@@ -337,19 +338,20 @@ export class WorkflowService {
       }),
       this.prisma.requestDocument.count({ where }),
     ]);
-    if (params.docType === 'CAR_REQUEST') await this.attachSharedRideAcks(items as Array<{ carRequest?: any }>);
+    if (params.docType === 'CAR_REQUEST') await this.attachSharedRideAcks(items as Array<{ docNumber?: string; carRequest?: any }>);
     return { items, total, page: params.page, pageSize: params.pageSize };
   }
 
   /**
    * Shared ride = ONE car, ONE driver, ONE set of taps (sharedTripId group).
-   * A group member can carry no assignment row of its own, or a fresh one with
-   * no taps yet, while the driver already tapped on the partner row — the list
-   * then drew "⏳ Noted" as if nothing happened. Attach the group's taps as
-   * `sharedRide` (the same shape the car detail panel uses) so every member
-   * shows the ride's real progress in the Car Requests list.
+   * Two things are attached to every member row:
+   *  - `sharedWith`: doc numbers of the OTHER members, so the list can show a
+   *    "🔗 Shared trip" badge — group membership used to be visible only through
+   *    the inherited taps, so a shared trip with no taps yet looked solo.
+   *  - `sharedRide`: the group's taps, for a member whose own assignment row has
+   *    none (the list used to draw "⏳ Noted" as if nothing happened).
    */
-  private async attachSharedRideAcks(items: Array<{ carRequest?: any }>) {
+  private async attachSharedRideAcks(items: Array<{ docNumber?: string; carRequest?: any }>) {
     const groups = Array.from(
       new Set(items.map((i) => i.carRequest?.sharedTripId).filter((g: unknown): g is string => typeof g === 'string')),
     );
@@ -363,6 +365,15 @@ export class WorkflowService {
         assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true } },
       },
     });
+    // group membership is independent of taps/status: every member learns who
+    // else is on the ride, so the badge survives an untouched or finished trip
+    const docNumbers = new Map<string, string[]>();
+    for (const m of members) {
+      if (!m.sharedTripId) continue;
+      const list = docNumbers.get(m.sharedTripId) ?? [];
+      list.push(m.request.docNumber);
+      docNumbers.set(m.sharedTripId, list);
+    }
     // one representative per group: the member with the most driver taps
     const best = new Map<string, { docNumber: string; notedAt: Date | null; arrivedAt: Date | null; backAtOfficeAt: Date | null; taps: number }>();
     for (const m of members) {
@@ -383,6 +394,9 @@ export class WorkflowService {
     for (const item of items) {
       const cr = item.carRequest;
       if (!cr?.sharedTripId) continue;
+      // every group member carries the badge, own taps or not
+      const others = (docNumbers.get(cr.sharedTripId) ?? []).filter((d) => d !== item.docNumber);
+      if (others.length > 0) cr.sharedWith = others;
       const own = cr.assignment;
       if (own?.driverNotedAt || own?.driverArrivedAt || own?.driverBackAtOfficeAt) continue; // own taps win
       const partner = best.get(cr.sharedTripId);

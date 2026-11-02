@@ -90,9 +90,12 @@ async function main() {
     assert.strictEqual(member.carRequest.sharedRide.arrivedAt, ready);
     assert.strictEqual(member.carRequest.sharedRide.docNumber, 'CAR-202610-0081', 'the lane names the row the taps came from');
     assert.strictEqual(member.carRequest.sharedTripId, GROUP, 'the list keeps the group id so the client can label the ride');
+    assert.deepStrictEqual(member.carRequest.sharedWith, ['CAR-202610-0081'], 'the row carries the 🔗 Shared trip badge partner');
+    const partner = items.find((i) => i.docNumber === 'CAR-202610-0081')!;
+    assert.deepStrictEqual(partner.carRequest.sharedWith, ['CAR-202610-0084'], 'the badge is symmetrical — every member names the others');
   });
 
-  await test('own taps always win — no sharedRide is attached (and never overrides)', async () => {
+  await test('own taps always win — no sharedRide, but the 🔗 Shared trip badge still shows', async () => {
     const ownNoted = new Date('2026-10-30T05:00:00Z');
     const rows = [
       {
@@ -105,8 +108,10 @@ async function main() {
     ];
     const items = await list(rows, [
       { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0081' }, assignment: { driverNotedAt: new Date('2026-10-30T09:00:00Z'), driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0084' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
     ]);
     assert.strictEqual(items[0].carRequest.sharedRide, undefined, 'own row keeps its own taps');
+    assert.deepStrictEqual(items[0].carRequest.sharedWith, ['CAR-202610-0084'], 'the badge does not depend on who carries the taps');
   });
 
   await test('a solo (unshared) row is untouched — no group lookup, no sharedRide', async () => {
@@ -118,6 +123,7 @@ async function main() {
     ];
     const items = await list(rows, []);
     assert.strictEqual(items[0].carRequest.sharedRide, undefined);
+    assert.strictEqual(items[0].carRequest.sharedWith, undefined, 'a solo request is never badged as shared');
   });
 
   await test('a shared group where NOBODY has tapped yet stays pending (no phantom ✓)', async () => {
@@ -129,8 +135,10 @@ async function main() {
     ];
     const items = await list(rows, [
       { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0095' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0096' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
     ]);
     assert.strictEqual(items[0].carRequest.sharedRide, undefined, 'an untouched group must still read as waiting');
+    assert.deepStrictEqual(items[0].carRequest.sharedWith, ['CAR-202610-0096'], 'an untouched group is still visibly shared');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

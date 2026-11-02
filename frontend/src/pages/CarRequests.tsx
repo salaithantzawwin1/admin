@@ -52,6 +52,8 @@ interface RequestRow {
     driver?: { name?: string } | null;
     /** shared-trip group — every member shows the ONE ride's driver taps */
     sharedTripId?: string | null;
+    /** the OTHER trips on this shared ride — rendered as the 🔗 Shared trip badge */
+    sharedWith?: string[];
     sharedRide?: {
       docNumber?: string;
       notedAt?: string | null;
@@ -493,7 +495,19 @@ export default function CarRequests() {
                     <div className="text-xs text-gray-400">{r.department?.name ?? '—'}</div>
                   </td>
                 )}
-                <td className="px-4 py-3">{r.title}</td>
+                <td className="px-4 py-3">
+                  {r.title}
+                  {r.carRequest?.sharedWith && r.carRequest.sharedWith.length > 0 && (
+                    <div className="mt-1">
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-50 border border-purple-200 text-purple-700"
+                        title={`One car and driver also serves ${r.carRequest.sharedWith.join(', ')}`}
+                      >
+                        🔗 Shared trip · {r.carRequest.sharedWith.join(', ')}
+                      </span>
+                    </div>
+                  )}
+                </td>
                 <td className="px-4 py-3 text-center">
                   <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${
                     r.status === 'APPROVED' ? 'bg-green-100 text-green-700'

@@ -151,11 +151,13 @@ export class CarsService {
       if (!isAckManager) throw new ForbiddenException('No access');
     }
     // shared trip: the other riders of the same car+driver (panel badge + Telegram card)
+    // COMPLETED members are included — a shared trip that has finished is still a
+    // shared trip, and the badge used to vanish the moment the group completed.
     if (car.sharedTripId) {
       const riders = await this.prisma.requestDocument.findMany({
         where: {
           docType: 'CAR_REQUEST',
-          status: { in: ['APPROVED', 'IN_PROGRESS'] },
+          status: { in: ['APPROVED', 'IN_PROGRESS', 'COMPLETED'] },
           carRequest: { sharedTripId: car.sharedTripId },
         },
         select: { id: true, docNumber: true, requester: { select: { fullName: true } } },
