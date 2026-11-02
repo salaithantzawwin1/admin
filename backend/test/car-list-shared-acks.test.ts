@@ -81,8 +81,8 @@ async function main() {
       },
     ];
     const items = await list(rows, [
-      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0081' }, assignment: { driverNotedAt: noted, driverArrivedAt: ready, driverBackAtOfficeAt: null } },
-      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0084' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0081', status: 'IN_PROGRESS' }, assignment: { driverNotedAt: noted, driverArrivedAt: ready, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0084', status: 'IN_PROGRESS' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
     ]);
     const member = items.find((i) => i.docNumber === 'CAR-202610-0084')!;
     assert.ok(member.carRequest.sharedRide, 'the shared member must carry the group taps');
@@ -107,8 +107,8 @@ async function main() {
       },
     ];
     const items = await list(rows, [
-      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0081' }, assignment: { driverNotedAt: new Date('2026-10-30T09:00:00Z'), driverArrivedAt: null, driverBackAtOfficeAt: null } },
-      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0084' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0081', status: 'IN_PROGRESS' }, assignment: { driverNotedAt: new Date('2026-10-30T09:00:00Z'), driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0084', status: 'IN_PROGRESS' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
     ]);
     assert.strictEqual(items[0].carRequest.sharedRide, undefined, 'own row keeps its own taps');
     assert.deepStrictEqual(items[0].carRequest.sharedWith, ['CAR-202610-0084'], 'the badge does not depend on who carries the taps');
@@ -134,11 +134,25 @@ async function main() {
       },
     ];
     const items = await list(rows, [
-      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0095' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
-      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0096' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0095', status: 'IN_PROGRESS' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0096', status: 'IN_PROGRESS' }, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null } },
     ]);
     assert.strictEqual(items[0].carRequest.sharedRide, undefined, 'an untouched group must still read as waiting');
     assert.deepStrictEqual(items[0].carRequest.sharedWith, ['CAR-202610-0096'], 'an untouched group is still visibly shared');
+  });
+
+  await test('a CANCELLED member of the group is not listed as a shared trip (it never rode)', async () => {
+    const rows = [
+      {
+        id: 'r-44', docNumber: 'CAR-202610-0044', status: 'COMPLETED',
+        carRequest: { vehicleId: 'v4', sharedTripId: GROUP, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, estimatedReturnAt: null } },
+      },
+    ];
+    const items = await list(rows, [
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0044', status: 'COMPLETED' }, assignment: { driverNotedAt: new Date(), driverArrivedAt: null, driverBackAtOfficeAt: null } },
+      { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0045', status: 'CANCELLED' }, assignment: null },
+    ]);
+    assert.strictEqual(items[0].carRequest.sharedWith, undefined, 'a cancelled companion must not badge the ride');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

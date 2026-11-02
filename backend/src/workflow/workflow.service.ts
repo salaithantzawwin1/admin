@@ -361,15 +361,17 @@ export class WorkflowService {
       orderBy: { startDate: 'asc' },
       select: {
         sharedTripId: true,
-        request: { select: { docNumber: true } },
+        request: { select: { docNumber: true, status: true } },
         assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true } },
       },
     });
+    // a CANCELLED / REJECTED member never rode: it must not be badged as shared
+    const rides = (status: string) => ['APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(status);
     // group membership is independent of taps/status: every member learns who
     // else is on the ride, so the badge survives an untouched or finished trip
     const docNumbers = new Map<string, string[]>();
     for (const m of members) {
-      if (!m.sharedTripId) continue;
+      if (!m.sharedTripId || !rides(m.request.status)) continue;
       const list = docNumbers.get(m.sharedTripId) ?? [];
       list.push(m.request.docNumber);
       docNumbers.set(m.sharedTripId, list);
@@ -377,7 +379,7 @@ export class WorkflowService {
     // one representative per group: the member with the most driver taps
     const best = new Map<string, { docNumber: string; notedAt: Date | null; arrivedAt: Date | null; backAtOfficeAt: Date | null; taps: number }>();
     for (const m of members) {
-      if (!m.sharedTripId || !m.assignment) continue;
+      if (!m.sharedTripId || !m.assignment || !rides(m.request.status)) continue;
       const a = m.assignment;
       const taps = (a.driverNotedAt ? 1 : 0) + (a.driverArrivedAt ? 1 : 0) + (a.driverBackAtOfficeAt ? 1 : 0);
       if (taps === 0) continue;
