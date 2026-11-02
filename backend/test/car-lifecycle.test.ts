@@ -35,6 +35,7 @@ const GROUP = '22222222-2222-4222-8222-222222222222';
 
 const { CarsService } = require('../src/cars/cars.service');
 const { TelegramService } = require('../src/telegram/telegram.service');
+const { TripRemindersService } = require('../src/cars/trip-reminders.service');
 
 function cars(prisma: any, extra: { permissions?: any; notifications?: any; telegram?: any; audit?: any; events?: any } = {}) {
   return new CarsService(
@@ -223,6 +224,75 @@ async function main() {
     await svc.freeVehicle('a1');
     assert.ok(updates.some((u) => u.table === 'vehicle' && u.data.status === 'AVAILABLE'));
     assert.ok(updates.some((u) => u.table === 'driver' && u.data.status === 'AVAILABLE'));
+  });
+
+  // ------------------------------------------------ 5) expired-trip janitor
+  function janitor(over: { holders?: any[]; row?: any } = {}) {
+    const writes: any[] = [];
+    const row = over.row ?? {
+      id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1',
+      driverBackAtOfficeAt: null, driverNotedAt: null, driverArrivedAt: null, estimatedReturnAt: null,
+      vehicle: { vehicleNo: 'YGN-1' }, driver: { name: 'U Aung' },
+      request: {
+        docNumber: 'CAR-1', requesterId: 'u-req',
+        carRequest: { endDate: new Date('2026-11-01T00:00:00Z'), sharedTripId: null },
+      },
+    };
+    const op = (table: string) => (a: any) => ({ __w: table, ...a });
+    const prisma: any = {
+      carAssignment: {
+        // `id: { not: … }` is the holder query; the sweep query has no id filter
+        findMany: async (args: any) => (args?.where?.id ? over.holders ?? [] : [row]),
+        update: op('carAssignment'),
+      },
+      vehicle: { findMany: async () => [], update: op('vehicle') },
+      driver: { findMany: async () => [], update: op('driver') },
+      carRequest: { update: op('carRequest') },
+      requestDocument: { update: op('requestDocument') },
+      notification: { create: async (a: any) => writes.push({ __w: 'notification', ...a }) },
+      auditLog: { create: async (a: any) => writes.push({ __w: 'audit', ...a }) },
+      $transaction: async (ops: any[]) => writes.push(...ops),
+    };
+    const svc: any = new TripRemindersService(
+      prisma,
+      { notifyMany: async () => undefined, notify: async () => undefined },
+      { mirrorToUser: async () => undefined },
+      { usersWithPermissions: async () => ['u-admin'] },
+    );
+    return { svc, writes };
+  }
+
+  await test('janitor keeps the car IN_USE when the next trip already took it', async () => {
+    const { svc, writes } = janitor({ holders: [{ vehicleId: 'v1', driverId: null, request: { carRequest: { sharedTripId: null } } }] });
+    await svc.releaseExpired();
+    assert.ok(!writes.some((w) => w.__w === 'vehicle'), 'the re-assigned car must stay IN_USE');
+    assert.ok(writes.some((w) => w.__w === 'driver' && w.data.status === 'AVAILABLE'), 'the free driver still returns to the pool');
+    assert.ok(writes.some((w) => w.__w === 'carRequest' && w.data.status === 'APPROVED'), 'the request is still re-queued for a new car');
+  });
+
+  await test('janitor frees the car and driver when nothing else holds them', async () => {
+    const { svc, writes } = janitor({ holders: [] });
+    await svc.releaseExpired();
+    assert.ok(writes.some((w) => w.__w === 'vehicle' && w.data.status === 'AVAILABLE'));
+    assert.ok(writes.some((w) => w.__w === 'driver' && w.data.status === 'AVAILABLE'));
+  });
+
+  await test('janitor auto-close keeps a car IN_USE when another live trip holds it', async () => {
+    const { svc, writes } = janitor({
+      holders: [{ vehicleId: 'v1', driverId: null, request: { carRequest: { sharedTripId: null } } }],
+      row: {
+        id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1',
+        driverBackAtOfficeAt: null, driverNotedAt: new Date(), driverArrivedAt: null, estimatedReturnAt: null,
+        vehicle: { vehicleNo: 'YGN-1' }, driver: { name: 'U Aung' },
+        request: {
+          docNumber: 'CAR-1', requesterId: 'u-req',
+          carRequest: { endDate: new Date('2026-11-01T00:00:00Z'), sharedTripId: null },
+        },
+      },
+    });
+    await svc.releaseExpired();
+    assert.ok(!writes.some((w) => w.__w === 'vehicle'), 'a completed ride must not free a car still on the road');
+    assert.ok(writes.some((w) => w.__w === 'requestDocument' && w.data.status === 'COMPLETED'), 'the ride itself still closes');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

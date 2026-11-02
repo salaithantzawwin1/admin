@@ -219,10 +219,18 @@ export class TripRemindersService {
     });
 
     for (const a of stuck) {
+      // The sweep can be looking at a dead row while the SAME car or driver has
+      // already been handed to the next trip. Writing AVAILABLE there made the
+      // fleet show an in-use car as free; the janitor now only frees what nobody
+      // else still holds (a shared-ride partner is the same ride, not a rival).
+      const held = await this.otherLiveHolders(a);
       // built lazily: the shared-trip branch below skips the driver release, and
       // creating the promise up-front would still run it in a mocked/test client
-      const freedDriver = () => (a.driverId
+      const freedDriver = () => (a.driverId && !held.driver
         ? [this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } })]
+        : []);
+      const freedVehicle = () => (a.vehicleId && !held.vehicle
+        ? [this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } })]
         : []);
       if (a.driverBackAtOfficeAt) {
         // Driver DID tap "🏁 Back at Office" — the car was freed and the request
@@ -231,7 +239,7 @@ export class TripRemindersService {
         // contradictory 🏁-then-🤖 message pair (CAR-202610-0022).
         await this.prisma.$transaction([
           this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
-          this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+          ...freedVehicle(),
           ...freedDriver(),
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
@@ -296,7 +304,7 @@ export class TripRemindersService {
         // driver confirmed the ride → complete it, do NOT re-await a car
         await this.prisma.$transaction([
           this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
-          this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+          ...freedVehicle(),
           ...freedDriver(),
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { status: 'COMPLETED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'COMPLETED' } }),
@@ -340,7 +348,7 @@ export class TripRemindersService {
         // awaiting a new assignment)
         await this.prisma.$transaction([
           this.prisma.carAssignment.update({ where: { id: a.id }, data: { releasedAt: now, estimatedReturnAt: null } }),
-          this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }),
+          ...freedVehicle(),
           ...freedDriver(),
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'APPROVED' } }),
@@ -352,6 +360,47 @@ export class TripRemindersService {
     }
     await this.freeOrphanedDrivers();
     await this.renormalizeVehicleStatuses();
+  }
+
+  /**
+   * Does another live assignment still hold this car or driver? Rows already
+   * released, or already back at the office, are done; a peer in the SAME
+   * sharedTripId group is the same physical ride, not a rival claim.
+   *
+   * Deliberately conservative: a row the current sweep has not touched yet
+   * still counts as a holder, so the janitor never yanks a car out from under
+   * a trip — renormalizeVehicleStatuses/freeOrphanedDrivers correct the flag
+   * afterwards if nothing really holds it.
+   */
+  private async otherLiveHolders(a: {
+    id: string;
+    vehicleId: string | null;
+    driverId: string | null;
+    request: { carRequest?: { sharedTripId: string | null } | null };
+  }): Promise<{ vehicle: boolean; driver: boolean }> {
+    if (!a.vehicleId && !a.driverId) return { vehicle: false, driver: false };
+    const group = a.request.carRequest?.sharedTripId ?? null;
+    const rows = await this.prisma.carAssignment.findMany({
+      where: {
+        id: { not: a.id },
+        releasedAt: null,
+        driverBackAtOfficeAt: null,
+        OR: [
+          ...(a.vehicleId ? [{ vehicleId: a.vehicleId }] : []),
+          ...(a.driverId ? [{ driverId: a.driverId }] : []),
+        ],
+      },
+      select: {
+        vehicleId: true,
+        driverId: true,
+        request: { select: { carRequest: { select: { sharedTripId: true } } } },
+      },
+    });
+    const others = rows.filter((r) => !(group && r.request?.carRequest?.sharedTripId === group));
+    return {
+      vehicle: !!a.vehicleId && others.some((r) => r.vehicleId === a.vehicleId),
+      driver: !!a.driverId && others.some((r) => r.driverId === a.driverId),
+    };
   }
 
   /**

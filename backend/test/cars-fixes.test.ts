@@ -689,7 +689,12 @@ async function main() {
     let capturedWhere: any = null;
     const prisma: any = {
       carAssignment: {
-        findMany: async ({ where }: any) => { capturedWhere = where; return rows; },
+        findMany: async ({ where }: any) => {
+          // the janitor's "who else holds this car?" query filters by id: { not }
+          if (where?.id) return rows.filter((r) => r.id !== where.id.not && r.releasedAt === null && r.driverBackAtOfficeAt === null);
+          capturedWhere = where;
+          return rows;
+        },
         update: async (p: any) => { ops.push(['carAssignment.update', p.data]); return {}; },
       },
       vehicle: { update: async (p: any) => { ops.push(['vehicle.update', p.data]); return {}; } },
@@ -942,7 +947,7 @@ async function main() {
     const endPast = new Date(Date.now() - 3600e3);
     const prismaAuto: any = {
       carAssignment: {
-        findMany: async () => [
+        findMany: async (args: any) => (args?.where?.id ? [] : [
           {
             id: 'a-end', requestId: 'r-auto', vehicleId: 'v1', driverId: 'd1',
             driverNotedAt: new Date(), driverArrivedAt: null, driverBackAtOfficeAt: null,
@@ -951,7 +956,7 @@ async function main() {
             request: { docNumber: 'CAR-202610-0098', requesterId: 'u-req', carRequest: { endDate: endPast } },
             trip: null,
           },
-        ],
+        ]),
         update: async () => ({}),
       },
       $transaction: async (list: any[]) => { for (const op of list) await op; },
@@ -988,8 +993,9 @@ async function main() {
     const prismaShared: any = {
       carAssignment: {
         findMany: async (args: any) =>
-          // first call = the stuck sweep, second = the peer lookup
+          // the stuck sweep, then the peer lookup, then the janitor's holder query
           args?.where?.requestId ? [{ releasedAt: peerReleased, driverBackAtOfficeAt: null, driverNotedAt: null, driverArrivedAt: null, request: { docNumber: 'CAR-202610-0081' } }]
+            : args?.where?.id ? []
             : [{
                 id: 'a-84', requestId: 'r-84', vehicleId: 'v1', driverId: 'd1',
                 driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null,
@@ -1022,6 +1028,7 @@ async function main() {
     prismaShared.carAssignment.findMany = async (args: any) =>
       args?.where?.requestId
         ? [{ releasedAt: new Date(), driverBackAtOfficeAt: new Date(), driverNotedAt: new Date(), driverArrivedAt: null, request: { docNumber: 'CAR-202610-0081' } }]
+        : args?.where?.id ? []
         : [{
             id: 'a-84', requestId: 'r-84', vehicleId: 'v1', driverId: 'd1',
             driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null,
