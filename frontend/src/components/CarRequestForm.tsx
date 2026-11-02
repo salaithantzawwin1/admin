@@ -165,27 +165,53 @@ export function CarRequestForm({ onCreated }: { onCreated?: (id: string) => void
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.startDate, form.endDate, form.timeSlot, valid]);
 
+  // A car request is created and then submitted in two calls. If the submit call
+  // failed (network / scanner timeout), pressing Submit again used to POST the
+  // whole thing a second time — a duplicate request for the same trip, which
+  // Administration then had to cancel. Remember the created id and retry only
+  // the submit, pushing any edits made in between onto that same draft.
+  const createdRef = useRef('');
+
+  const payload = () => ({
+    destination: form.destination,
+    purpose: form.purpose,
+    description: form.description,
+    pickupLocation: form.pickupLocation,
+    specialRequest: form.specialRequest || undefined,
+    startDate: new Date(form.startDate).toISOString(),
+    endDate: new Date(form.endDate || `${form.startDate.slice(0, 10)}T17:00`).toISOString(),
+    passengers: paxOf(form.passengers),
+    timeSlot: form.timeSlot,
+  });
+
+  /** Submit an already-created draft; a lost response is not an error. */
+  const submitCreated = async (id: string) => {
+    try {
+      await api(`/requests/${id}/submit`, { method: 'POST' });
+    } catch (e) {
+      // the submit may have landed while its response was lost — only a request
+      // still sitting in DRAFT needs the retry, anything else is already in
+      const current = await api<{ status?: string }>(`/requests/${id}`).catch(() => null);
+      if (!current || current.status === 'DRAFT') throw e;
+    }
+  };
+
   const doSubmit = async () => {
     setError('');
     setBusy(true);
     try {
-      const created = await api<{ id?: string; request?: { id: string } }>('/cars/requests', {
-        method: 'POST',
-        body: {
-          destination: form.destination,
-          purpose: form.purpose,
-          description: form.description,
-          pickupLocation: form.pickupLocation,
-          specialRequest: form.specialRequest || undefined,
-          startDate: new Date(form.startDate).toISOString(),
-          endDate: new Date(form.endDate || `${form.startDate.slice(0, 10)}T17:00`).toISOString(),
-          passengers: paxOf(form.passengers),
-          timeSlot: form.timeSlot,
-        },
-      });
-      const id = created.id ?? created.request?.id;
-      if (!id) throw new Error('Unexpected response');
-      await api(`/requests/${id}/submit`, { method: 'POST' });
+      let id = createdRef.current;
+      if (id) {
+        // same draft, freshly edited values (only allowed while it is DRAFT)
+        await api(`/cars/requests/${id}`, { method: 'PATCH', body: payload() }).catch(() => undefined);
+      } else {
+        const created = await api<{ id?: string; request?: { id: string } }>('/cars/requests', { method: 'POST', body: payload() });
+        id = created.id ?? created.request?.id ?? '';
+        if (!id) throw new Error('Unexpected response');
+        createdRef.current = id;
+      }
+      await submitCreated(id);
+      createdRef.current = '';
       setForm({ ...EMPTY, startDate: toLocal(new Date()) });
       setBusy(false);
       if (onCreated) onCreated(id); // modal usage: let the caller close + toast

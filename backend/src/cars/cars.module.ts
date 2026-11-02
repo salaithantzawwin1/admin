@@ -44,6 +44,13 @@ export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
       tx.carRequest.update({ where: { requestId }, data: { status } }).then(() => undefined),
     );
 
+    // Final approval → the dispatcher's queue must light up immediately. The
+    // approval path itself only rings the requester's bell, so without this the
+    // trip waited for the "start time passed, no vehicle" nudge hours later.
+    this.workflow.registerFinalApproveHook('CAR_REQUEST', (requestId) =>
+      this.cars.notifyReadyToAssign(requestId),
+    );
+
     // Viewer: the requester's department manager may OPEN a car request they
     // neither own nor approve — they are the ones asked for the optional ack.
     // Their eligibility is exactly managerAckUserIds() (same query the

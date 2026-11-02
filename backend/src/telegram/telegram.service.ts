@@ -1030,10 +1030,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   /** "Back at Office": free the vehicle + driver immediately (also on re-assign paths). */
   private async freeVehicle(assignmentId: string) {
-    const a = await this.prisma.carAssignment.findUnique({ where: { id: assignmentId } });
+    const a = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { vehicleId: true, driverId: true, estimatedReturnAt: true, carRequest: { select: { sharedTripId: true } } },
+    });
     if (!a) return;
-    await this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
-    if (a.driverId) {
+    // Another LIVE assignment may still hold this car or driver — a stale driver
+    // card (its request was released and the car re-assigned to someone else)
+    // must not hand that trip's vehicle back to the pool. Convoy members of the
+    // SAME group are one ride (one Back at Office ends it for all), so they do
+    // not block. The guard is best-effort: a failed lookup keeps the old freeing
+    // behaviour rather than blocking the driver's acknowledgement.
+    const group = a.carRequest?.sharedTripId ?? null;
+    let blocking: Array<{ vehicleId: string; driverId: string | null }> = [];
+    try {
+      const others = await this.prisma.carAssignment.findMany({
+        where: {
+          id: { not: assignmentId },
+          releasedAt: null,
+          driverBackAtOfficeAt: null,
+          OR: [{ vehicleId: a.vehicleId }, ...(a.driverId ? [{ driverId: a.driverId }] : [])],
+        },
+        select: { vehicleId: true, driverId: true, carRequest: { select: { sharedTripId: true } } },
+      });
+      blocking = others
+        .filter((o) => !(group && o.carRequest?.sharedTripId === group))
+        .map((o) => ({ vehicleId: o.vehicleId, driverId: o.driverId }));
+    } catch {
+      /* guard is best-effort — never break the ack because a lookup failed */
+    }
+    if (!blocking.some((o) => o.vehicleId === a.vehicleId)) {
+      await this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+    }
+    if (a.driverId && !blocking.some((o) => o.driverId === a.driverId)) {
       await this.prisma.driver.update({ where: { id: a.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
     }
     // Back at Office is the physical truth — clear any ⏰ ETA so the car's

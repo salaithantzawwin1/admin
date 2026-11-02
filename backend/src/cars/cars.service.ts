@@ -592,8 +592,8 @@ export class CarsService {
    * driver on purpose; those callers skip the guard themselves, so this helper
    * only answers "is this driver holding another overlapping trip?".
    */
-  private async driverClash(driverId: string, window: { start: Date; end: Date }, opts: { excludeRequestId?: string } = {}) {
-    return this.prisma.carRequest.findFirst({
+  private async driverClash(driverId: string, window: { start: Date; end: Date }, opts: { excludeRequestId?: string; sharedTripId?: string | null } = {}) {
+    const hit = await this.prisma.carRequest.findFirst({
       where: {
         driverId,
         ...(opts.excludeRequestId ? { requestId: { not: opts.excludeRequestId } } : {}),
@@ -606,10 +606,56 @@ export class CarsService {
       select: {
         startDate: true,
         endDate: true,
+        sharedTripId: true,
         request: { select: { docNumber: true } },
         assignment: { select: { estimatedReturnAt: true } },
       },
     });
+    // convoy members share one driver on purpose — a same-group row is not a clash
+    if (hit && opts.sharedTripId && hit.sharedTripId === opts.sharedTripId) return null;
+    return hit;
+  }
+
+  /**
+   * Final approval → tell Administration NOW that this trip is waiting for a
+   * vehicle. Only the requester used to get a bell on approval, so an approved
+   * car request could sit untouched in the assign queue until the "start time
+   * passed" nudge hours later. This is the approver → dispatcher hand-off.
+   */
+  async notifyReadyToAssign(requestId: string) {
+    const request = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      select: {
+        docNumber: true,
+        requesterId: true,
+        carRequest: {
+          select: { destination: true, pickupLocation: true, startDate: true, endDate: true, passengers: true, vehicleTypeRequired: true },
+        },
+      },
+    });
+    if (!request?.carRequest) return; // not a car request (or the extension row is missing)
+    const admins = (await this.permissions.usersWithPermissions(['cars.assign'])).filter((id) => id !== request.requesterId);
+    if (admins.length === 0) return;
+    const c = request.carRequest;
+    const title = `🚗 Ready to assign — ${request.docNumber}`;
+    const body = [
+      `${c.destination}${c.pickupLocation ? ` (pickup ${c.pickupLocation})` : ''}`,
+      `${yangonShort(c.startDate)} → ${yangonShort(c.endDate)}`,
+      `${c.passengers ?? 1} pax${c.vehicleTypeRequired ? ` · ${c.vehicleTypeRequired}` : ''}`,
+      'Approved — pick a vehicle and driver.',
+    ].join(' · ');
+    await this.notifications.notifyMany(admins, {
+      type: 'APPROVED',
+      title,
+      body,
+      link: '/car-requests',
+      requestId,
+    });
+    // dispatchers also live in Telegram — mirror the same line there
+    for (const userId of admins) {
+      await this.telegram.mirrorToUser(userId, title, body, '/car-requests').catch(() => undefined);
+    }
+    this.push(requestId, 'request.updated');
   }
 
   /** Administration assigns vehicle (+ optional driver) to an APPROVED car request.
@@ -1123,9 +1169,18 @@ export class CarsService {
   async release(requestId: string, actor: Actor) {
     const assignment = await this.prisma.carAssignment.findUnique({
       where: { requestId },
-      include: { trip: true },
+      include: { trip: true, request: { select: { status: true } } },
     });
     if (!assignment) throw new NotFoundException('No assignment for this request');
+    // A released row is history. Calling release again (or on a request that has
+    // since been completed / cancelled) used to rewrite the status back to
+    // APPROVED and hand the car to the pool — a COMPLETED trip silently re-opened.
+    if (assignment.releasedAt) {
+      throw new BadRequestException('This assignment was already released — assign a vehicle instead');
+    }
+    if (!['APPROVED', 'IN_PROGRESS'].includes(assignment.request.status)) {
+      throw new BadRequestException(`Cannot release from status ${assignment.request.status}`);
+    }
     if (assignment.trip && assignment.trip.status === 'STARTED') {
       throw new BadRequestException('Trip already started — complete or cancel the trip first');
     }
@@ -1134,9 +1189,23 @@ export class CarsService {
       await tx.carAssignment.update({ where: { id: assignment.id }, data: { releasedAt: new Date(), estimatedReturnAt: null } });
       await tx.carRequest.update({ where: { requestId }, data: { vehicleId: null, driverId: null, sharedTripId: null, status: 'APPROVED' } });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'APPROVED' } });
-      await tx.vehicle.update({ where: { id: assignment.vehicleId }, data: { status: 'AVAILABLE' } });
+      // the car may still be held by another LIVE booking (a shared convoy member,
+      // or the next trip the fleet already gave it) — hand it to the pool only
+      // when nothing else is riding it. Same rule adminCancelApproved() applies.
+      const activeStates: WorkflowStatus[] = ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'];
+      const othersOnVehicle = await tx.carRequest.count({
+        where: { vehicleId: assignment.vehicleId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
+      });
+      if (othersOnVehicle === 0) {
+        await tx.vehicle.update({ where: { id: assignment.vehicleId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+      }
       if (assignment.driverId) {
-        await tx.driver.update({ where: { id: assignment.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        const othersForDriver = await tx.carRequest.count({
+          where: { driverId: assignment.driverId, requestId: { not: requestId }, request: { status: { in: activeStates } } },
+        });
+        if (othersForDriver === 0) {
+          await tx.driver.update({ where: { id: assignment.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        }
       }
     });
 
@@ -1273,6 +1342,23 @@ export class CarsService {
       const avail = await this.overlaps(request.carRequest.vehicleId, start, end, requestId);
       if (!avail.available) {
         throw new ConflictException('The vehicle is already booked in the new window — release it or pick another window');
+      }
+    }
+
+    // the DRIVER moves with the trip: a shift can slide this booking straight
+    // into another trip the same driver already holds (assign()/reassign() guard
+    // their windows, but the shift path only checked the vehicle). Convoy members
+    // of this request's own group ride one driver on purpose and are skipped.
+    if (request.carRequest?.driverId) {
+      const clash = await this.driverClash(
+        request.carRequest.driverId,
+        { start, end },
+        { excludeRequestId: requestId, sharedTripId: request.carRequest.sharedTripId ?? null },
+      );
+      if (clash) {
+        throw new ConflictException(
+          `The driver is already on ${clash.request.docNumber} ${yangonShort(clash.startDate)} → ${yangonShort(this.effectiveEnd(clash.endDate, clash.assignment?.estimatedReturnAt))} — pick a window that does not overlap, or change the driver first`,
+        );
       }
     }
 

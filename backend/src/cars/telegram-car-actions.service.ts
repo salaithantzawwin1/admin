@@ -1360,21 +1360,43 @@ export class TelegramCarActionsService {
       if (!wf || wf.steps.length === 0) {
         throw new Error('Workflow for car requests is not configured — ask Administration to enable it (Settings → Workflows).');
       }
-      const created = await this.cars.createCarRequest(
-        {
-          destination: destination!,
-          startDate: startIso!,
-          endDate: endIso ?? undefined,
-          timeSlot: (draft.slot as 'FULL_DAY' | 'HALF_DAY_AM' | 'HALF_DAY_PM' | 'CUSTOM_HOURS' | undefined) ?? 'FULL_DAY',
-          passengers: num('passengers') ?? 1,
-          vehicleTypeRequired: str('vehicle'),
-          pickupLocation: str('pickup'),
-          purpose: str('purpose'),
-          description: str('notes'),
-        },
-        actor as never,
-      );
-      await this.workflow.submit(created.id, actor as never);
+      const carData = {
+        destination: destination!,
+        startDate: startIso!,
+        endDate: endIso ?? undefined,
+        timeSlot: (draft.slot as 'FULL_DAY' | 'HALF_DAY_AM' | 'HALF_DAY_PM' | 'CUSTOM_HOURS' | undefined) ?? 'FULL_DAY',
+        passengers: num('passengers') ?? 1,
+        vehicleTypeRequired: str('vehicle'),
+        pickupLocation: str('pickup'),
+        purpose: str('purpose'),
+      };
+      // create → submit is two calls. A failed submit used to leave the DRAFT
+      // behind and the next tap created a SECOND car request for the same trip.
+      // Keep the created id on the draft and retry the submit against it.
+      let draftId = typeof draft.createdId === 'string' ? draft.createdId : '';
+      let docNumber = typeof draft.docNumber === 'string' ? draft.docNumber : undefined;
+      if (draftId) {
+        // the user may have fixed a field between attempts — same draft, new values
+        await this.cars.updateCarRequest(draftId, carData, actor as never).catch(() => undefined);
+      } else {
+        const created = await this.cars.createCarRequest({ ...carData, description: str('notes') }, actor as never);
+        draftId = created.id;
+        draft.createdId = created.id;
+        docNumber = created.docNumber;
+        draft.docNumber = created.docNumber;
+      }
+      try {
+        const submitted = (await this.workflow.submit(draftId, actor as never)) as { docNumber?: string } | undefined;
+        docNumber = submitted?.docNumber ?? docNumber;
+      } catch (e) {
+        // the submit may have landed while its response was lost — only a request
+        // still sitting in DRAFT needs the retry, anything else is already in
+        const doc = await this.prisma.requestDocument
+          .findUnique({ where: { id: draftId }, select: { status: true, docNumber: true } })
+          .catch(() => null);
+        if (!doc || doc.status === 'DRAFT') throw e;
+        docNumber = doc.docNumber;
+      }
       this.pendingCarRequests.delete(chatId);
       // the conversation is OVER — forget the card id too, or the NEXT /car
       // would silently EDIT this scroll-away message instead of posting a fresh
@@ -1383,8 +1405,8 @@ export class TelegramCarActionsService {
       await this.telegram.answer(callbackId, 'တောင်းခံလိုက်ပါပြီ');
       await this.telegram.sendRaw(
         chatId,
-        `✅ တောင်းခံလိုက်ပါပြီ — <b>${escapeHtml(created.docNumber)}</b> — ခွင့်ပြုချက် စောင့်နေပါသည်။\n(Submitted — waiting for approval.)`,
-        await this.openInAmsRow(`/requests/${created.id}`),
+        `✅ တောင်းခံလိုက်ပါပြီ — <b>${escapeHtml(docNumber ?? draftId)}</b> — ခွင့်ပြုချက် စောင့်နေပါသည်။\n(Submitted — waiting for approval.)`,
+        await this.openInAmsRow(`/requests/${draftId}`),
       );
     } catch (e) {
       // creation/validation errors stay on the card; the conversation stays open for fixing

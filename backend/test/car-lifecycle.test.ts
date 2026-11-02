@@ -1,0 +1,235 @@
+/**
+ * Car request lifecycle guards (approval → assign → release / shift / back-at-office).
+ *
+ * These pin the four gaps a deep pass over "request → approved" found:
+ *   1. final approval never told Administration a car is waiting → the trip sat in
+ *      the assign queue until the "start time passed" nudge hours later;
+ *   2. release() re-opened a COMPLETED request (status written back to APPROVED)
+ *      and handed a car to the pool while a shared/next booking still held it;
+ *   3. Shift time only checked the VEHICLE, so it could slide a trip into another
+ *      trip the same driver already holds;
+ *   4. the driver's "Back at Office" on a stale card freed a car that had already
+ *      been re-assigned to someone else.
+ *
+ * Run:  cd backend && node -r ts-node/register/transpile-only test/car-lifecycle.test.ts
+ */
+const assert = require('assert');
+
+let passed = 0;
+const failures: string[] = [];
+function test(name: string, fn: () => void | Promise<void>) {
+  return Promise.resolve()
+    .then(fn)
+    .then(() => {
+      passed++;
+      console.log(`  ✓ ${name}`);
+    })
+    .catch((e: unknown) => {
+      failures.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+      console.error(`  ✗ ${name}\n    ${e instanceof Error ? e.message : e}`);
+    });
+}
+
+const ACTOR = { userId: 'u-admin', username: 'sysadmin' };
+const GROUP = '22222222-2222-4222-8222-222222222222';
+
+const { CarsService } = require('../src/cars/cars.service');
+const { TelegramService } = require('../src/telegram/telegram.service');
+
+function cars(prisma: any, extra: { permissions?: any; notifications?: any; telegram?: any; audit?: any; events?: any } = {}) {
+  return new CarsService(
+    prisma,
+    extra.permissions ?? ({} as any),
+    {} as any,
+    extra.notifications ?? ({} as any),
+    extra.audit ?? ({ log: async () => undefined } as any),
+    extra.telegram ?? ({} as any),
+    {} as any,
+    extra.events ?? ({ publish: () => 0 } as any),
+  );
+}
+
+async function main() {
+  // ------------------------------------------------ 1) approval → dispatcher hand-off
+  await test('approval notifies cars.assign holders (minus the requester) that a car is needed', async () => {
+    const notes: any[] = [];
+    const mirrored: any[] = [];
+    const svc: any = cars(
+      { requestDocument: { findUnique: async () => ({
+        docNumber: 'CAR-202611-0100', requesterId: 'u-req',
+        carRequest: {
+          destination: 'Mandalay', pickupLocation: 'Head Office',
+          startDate: new Date('2026-11-03T02:30:00Z'), endDate: new Date('2026-11-03T10:30:00Z'),
+          passengers: 4, vehicleTypeRequired: 'SUV',
+        },
+      }) } },
+      {
+        permissions: { usersWithPermissions: async () => ['u-admin', 'u-other', 'u-req'] },
+        notifications: { notifyMany: async (ids: string[], p: any) => notes.push({ ids, p }) },
+        telegram: { mirrorToUser: async (id: string, title: string) => mirrored.push({ id, title }) },
+      },
+    );
+    await svc.notifyReadyToAssign('req-1');
+    assert.strictEqual(notes.length, 1, 'one bell fan-out');
+    assert.deepStrictEqual(notes[0].ids, ['u-admin', 'u-other'], 'the requester is not told to assign their own car');
+    assert.strictEqual(notes[0].p.link, '/car-requests');
+    assert.ok(notes[0].p.title.includes('CAR-202611-0100'), 'names the document');
+    assert.ok(notes[0].p.body.includes('Mandalay') && notes[0].p.body.includes('SUV'), 'carries what the dispatcher needs');
+    assert.strictEqual(mirrored.length, 2, 'each dispatcher also gets the Telegram mirror');
+  });
+
+  await test('approval hand-off is silent for a non-car document', async () => {
+    const notes: any[] = [];
+    const svc: any = cars(
+      { requestDocument: { findUnique: async () => ({ docNumber: 'GEN-1', requesterId: 'u-req', carRequest: null }) } },
+      { permissions: { usersWithPermissions: async () => ['u-admin'] }, notifications: { notifyMany: async (ids: string[], p: any) => notes.push(p) } },
+    );
+    await svc.notifyReadyToAssign('req-1');
+    assert.strictEqual(notes.length, 0);
+  });
+
+  // ------------------------------------------------ 2) release() guards
+  function releasePrisma(over: {
+    requestStatus?: string;
+    releasedAt?: Date | null;
+    trip?: any;
+    othersOnVehicle?: number;
+    othersForDriver?: number;
+  } = {}) {
+    const calls: any[] = [];
+    const tx: any = {
+      carAssignment: { update: async (a: any) => calls.push({ table: 'carAssignment', ...a }) },
+      carRequest: {
+        update: async (a: any) => calls.push({ table: 'carRequest', ...a }),
+        count: async (a: any) => (a.where.vehicleId ? over.othersOnVehicle ?? 0 : over.othersForDriver ?? 0),
+      },
+      requestDocument: { update: async (a: any) => calls.push({ table: 'requestDocument', ...a }) },
+      vehicle: { update: async (a: any) => calls.push({ table: 'vehicle', ...a }) },
+      driver: { update: async (a: any) => calls.push({ table: 'driver', ...a }) },
+    };
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1', releasedAt: over.releasedAt ?? null,
+          trip: over.trip ?? null,
+          request: { status: over.requestStatus ?? 'IN_PROGRESS' },
+        }),
+      },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    return { prisma, calls };
+  }
+
+  await test('release() refuses to re-open a COMPLETED request', async () => {
+    const { prisma } = releasePrisma({ requestStatus: 'COMPLETED' });
+    let msg = '';
+    try { await cars(prisma).release('r1', ACTOR); } catch (e: any) { msg = e.message; }
+    assert.ok(/Cannot release from status COMPLETED/.test(msg), `expected a status guard, got "${msg}"`);
+  });
+
+  await test('release() refuses a second release of the same assignment', async () => {
+    const { prisma } = releasePrisma({ releasedAt: new Date() });
+    let msg = '';
+    try { await cars(prisma).release('r1', ACTOR); } catch (e: any) { msg = e.message; }
+    assert.ok(/already released/.test(msg), `expected an already-released guard, got "${msg}"`);
+  });
+
+  await test('release() keeps the car IN_USE while another live booking still rides it (shared convoy)', async () => {
+    const { prisma, calls } = releasePrisma({ othersOnVehicle: 1, othersForDriver: 1 });
+    await cars(prisma).release('r1', ACTOR);
+    assert.ok(!calls.some((c) => c.table === 'vehicle'), 'the car must not be flipped to AVAILABLE');
+    assert.ok(!calls.some((c) => c.table === 'driver'), 'the driver must stay ON_TRIP');
+    assert.ok(calls.some((c) => c.table === 'requestDocument' && c.data.status === 'APPROVED'), 'the request itself is still re-queued');
+  });
+
+  await test('release() frees the car and driver when nothing else holds them', async () => {
+    const { prisma, calls } = releasePrisma({ othersOnVehicle: 0, othersForDriver: 0 });
+    await cars(prisma).release('r1', ACTOR);
+    assert.ok(calls.some((c) => c.table === 'vehicle' && c.data.status === 'AVAILABLE'));
+    assert.ok(calls.some((c) => c.table === 'driver' && c.data.status === 'AVAILABLE'));
+  });
+
+  // ------------------------------------------------ 3) shift re-checks the driver
+  function shiftPrisma(clash: any) {
+    const calls: any[] = [];
+    const prisma: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requesterId: 'u-req', docNumber: 'CAR-202611-0200',
+          carRequest: { vehicleId: null, driverId: 'd1', sharedTripId: null, startDate: new Date('2026-11-04T02:00:00Z'), endDate: new Date('2026-11-04T04:00:00Z') },
+        }),
+      },
+      carAssignment: { findUnique: async () => ({ trip: null }) },
+      carRequest: {
+        findFirst: async () => clash,
+        update: async (a: any) => calls.push(a),
+      },
+      notifications: { notify: async () => undefined },
+    };
+    return { prisma, calls };
+  }
+
+  await test('Shift time refuses a window that overlaps another trip of the same driver', async () => {
+    const { prisma, calls } = shiftPrisma({
+      startDate: new Date('2026-11-04T03:00:00Z'), endDate: new Date('2026-11-04T05:00:00Z'),
+      sharedTripId: null, request: { docNumber: 'CAR-202611-0201' }, assignment: { estimatedReturnAt: null },
+    });
+    let msg = '';
+    try { await cars(prisma).adminShiftTime('r1', { startDate: '2026-11-04T03:30:00Z' }, ACTOR); } catch (e: any) { msg = e.message; }
+    assert.ok(/already on CAR-202611-0201/.test(msg), `expected a driver-clash refusal, got "${msg}"`);
+    assert.strictEqual(calls.length, 0, 'the window must not move');
+  });
+
+  await test('Shift time: a convoy member of the same group is not a driver clash', async () => {
+    const { prisma, calls } = shiftPrisma({
+      startDate: new Date('2026-11-04T03:00:00Z'), endDate: new Date('2026-11-04T05:00:00Z'),
+      sharedTripId: GROUP, request: { docNumber: 'CAR-202611-0202' }, assignment: { estimatedReturnAt: null },
+    });
+    (prisma.requestDocument.findUnique as any) = async () => ({
+      id: 'r1', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requesterId: 'u-req', docNumber: 'CAR-202611-0200',
+      carRequest: { vehicleId: null, driverId: 'd1', sharedTripId: GROUP, startDate: new Date('2026-11-04T02:00:00Z'), endDate: new Date('2026-11-04T04:00:00Z') },
+    });
+    await cars(prisma, {
+      notifications: { notify: async () => undefined },
+      telegram: { notifyDriverOfTimeChange: async () => undefined },
+    }).adminShiftTime('r1', { startDate: '2026-11-04T03:30:00Z' }, ACTOR);
+    assert.strictEqual(calls.length, 1, 'the same shared ride may move as a unit');
+  });
+
+  // ------------------------------------------------ 4) Back at Office frees only a car nobody else holds
+  function telegramSvc(others: any[]) {
+    const updates: any[] = [];
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => ({ vehicleId: 'v1', driverId: 'd1', estimatedReturnAt: null, carRequest: { sharedTripId: null } }),
+        findMany: async () => others,
+        update: async (a: any) => updates.push({ table: 'carAssignment', ...a }),
+      },
+      vehicle: { update: async (a: any) => updates.push({ table: 'vehicle', ...a }) },
+      driver: { update: async (a: any) => updates.push({ table: 'driver', ...a }) },
+    };
+    const svc: any = new TelegramService(prisma, { log: async () => undefined }, {}, { publish: () => 0 });
+    return { svc, updates };
+  }
+
+  await test('Back at Office does not free a car that another live trip still uses', async () => {
+    const { svc, updates } = telegramSvc([{ vehicleId: 'v1', driverId: null, carRequest: { sharedTripId: null } }]);
+    await svc.freeVehicle('a1');
+    assert.ok(!updates.some((u) => u.table === 'vehicle'), 'the re-assigned car must stay IN_USE');
+  });
+
+  await test('Back at Office still frees a solo trip', async () => {
+    const { svc, updates } = telegramSvc([]);
+    await svc.freeVehicle('a1');
+    assert.ok(updates.some((u) => u.table === 'vehicle' && u.data.status === 'AVAILABLE'));
+    assert.ok(updates.some((u) => u.table === 'driver' && u.data.status === 'AVAILABLE'));
+  });
+
+  console.log(`\n${passed} passed, ${failures.length} failed`);
+  if (failures.length) process.exit(1);
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
