@@ -55,7 +55,7 @@ const SECTIONS: Section[] = [
     param: 'category',
     label: 'Category',
     plural: 'Categories',
-    hint: 'Drives the register filter and the auto asset code — "IT Equipment" becomes AST-ITE-202610-0001.',
+    hint: 'Drives the register filter and the auto asset code — "IT Equipment" becomes AST-ITE-2610-0001.',
     placeholder: 'e.g. Office Equipment',
     empty: 'No categories yet — add the first one above.',
     renameNote: 'Assets already registered keep their current code; the new name seeds codes from now on.',
@@ -282,7 +282,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                     <p className="text-xs text-gray-400 mt-1">
                       new assets get codes like{' '}
                       <span className="font-mono text-gray-500">
-                        AST-{codeSeg(drafts.categories) || ''}{codeSeg(drafts.categories) ? '-' : ''}202610-0001
+                        AST-{codeSeg(drafts.categories) || ''}{codeSeg(drafts.categories) ? '-' : ''}2610-0001
                       </span>
                     </p>
                   )}

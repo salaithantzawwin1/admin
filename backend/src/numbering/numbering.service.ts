@@ -9,11 +9,16 @@ export class NumberingService {
    * Allocate the next document number, e.g. CAR-202609-0007 (year + month).
    * Key is per prefix+yearMonth so numbering resets monthly (plan §8).
    * Uses an atomic upsert+increment inside a transaction to avoid duplicates.
+   *
+   * `yearDigits` 2 prints only the last two digits of the year (AST-2610-0001
+   * instead of AST-202610-0001) while the sequence key keeps the full year, so
+   * old and new rows still share one monthly counter.
    */
-  async next(prefix: string, when: Date = new Date()): Promise<string> {
+  async next(prefix: string, when: Date = new Date(), yearDigits: 2 | 4 = 4): Promise<string> {
     const year = when.getFullYear();
     const month = String(when.getMonth() + 1).padStart(2, '0');
     const key = `${prefix}-${year}${month}`;
+    const stamp = yearDigits === 2 ? `${String(year).slice(-2)}${month}` : `${year}${month}`;
 
     return this.prisma.$transaction(async (tx) => {
       // atomic counter bump; row is created with counter=1 on first use
@@ -24,7 +29,7 @@ export class NumberingService {
         RETURNING "counter"
       `;
       const seq = Number(row.counter);
-      return `${prefix}-${year}${month}-${String(seq).padStart(4, '0')}`;
+      return `${prefix}-${stamp}-${String(seq).padStart(4, '0')}`;
     });
   }
 

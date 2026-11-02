@@ -343,8 +343,10 @@ export class AssetsService {
   }
 
   /**
-   * Auto codes are scoped to the asset's category: "IT Equipment" → AST-ITE-202610-0001
-   * instead of the generic AST-202610-0001, so codes sort and read by type.
+   * Auto codes are scoped to the asset's category: "IT Equipment" → AST-ITE-2610-0001
+   * instead of the generic AST-2610-0001, so codes sort and read by type.
+   * The year is two digits (YYMM, e.g. 2610) — short enough to read, still
+   * ordered by month.
    * The segment is the first three A-Z/0-9 characters of the name uppercased;
    * a Latin-free (Burmese) name or no category keeps the plain AST- prefix.
    * Categories that share a segment share one counter — codes stay unique either way.
@@ -359,7 +361,7 @@ export class AssetsService {
   private async nextAutoCode(categoryName?: string | null): Promise<string> {
     const prefix = this.autoPrefix(categoryName);
     for (let i = 0; i < 10; i++) {
-      const code = await this.numbering.next(prefix);
+      const code = await this.numbering.next(prefix, new Date(), 2);
       const taken = await this.prisma.asset.findUnique({ where: { assetCode: code } });
       if (!taken) return code;
     }

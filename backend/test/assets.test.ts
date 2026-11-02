@@ -155,7 +155,9 @@ function makeEnv(opts: {
   const numbering = {
     // the real NumberingService bumps its counter on every call — model that,
     // so a retry (occupied slot) gets a DIFFERENT code like production does
-    next: async (prefix: string) => `${prefix}-202610-${String(1000 + ++nseq).slice(1)}`,
+    // (and the 2-digit-year request: AST-… → AST-2610-0001, not AST-202610-…)
+    next: async (prefix: string, _when?: Date, yearDigits: 2 | 4 = 4) =>
+      `${prefix}-${yearDigits === 2 ? '2610' : '202610'}-${String(1000 + ++nseq).slice(1)}`,
     /** test helper: the value the next next() will return, without consuming it */
     peek: () => String(1000 + nseq + 1).slice(1),
   };
@@ -196,6 +198,7 @@ async function main() {
     const { svc, env } = makeSvc();
     const asset = await svc.create({ name: 'Laptop', locationId: 'loc-1' }, ACTOR);
     assert.ok(asset.assetCode.startsWith('AST-'), `auto code, got ${asset.assetCode}`);
+    assert.ok(/^AST-\d{4}-\d+$/.test(asset.assetCode), `auto code must be AST-YYMM-NNNN, got ${asset.assetCode}`);
     assert.strictEqual(env.movements.length, 1);
     assert.strictEqual(env.movements[0].type, 'REGISTER');
     assert.strictEqual(env.movements[0].toLocationId, 'loc-1');
@@ -325,7 +328,7 @@ async function main() {
     // the dialog silently failed to save
     const payload = {
       name: 'Dell OptiPlex 7090',
-      assetCode: 'AST-202610-0001',
+      assetCode: 'AST-2610-0001',
       categoryId: null,
       brand: 'Dell', model: '', serialNumber: '', custodian: '',
       locationId: null,
@@ -380,27 +383,27 @@ async function main() {
   await test('auto code carries the category segment (IT Equipment → AST-ITE-…)', async () => {
     const { svc } = makeSvc();
     const pc = await svc.create({ name: 'Laptop', categoryId: 'cat-1' }, ACTOR);
-    assert.match(pc.assetCode, /^AST-ITE-202610-\d+$/, `got ${pc.assetCode}`);
+    assert.match(pc.assetCode, /^AST-ITE-2610-\d+$/, `got ${pc.assetCode}`);
     const chair = await svc.create({ name: 'Chair', categoryId: 'cat-2' }, ACTOR);
-    assert.match(chair.assetCode, /^AST-OFF-202610-\d+$/, `got ${chair.assetCode}`);
+    assert.match(chair.assetCode, /^AST-OFF-2610-\d+$/, `got ${chair.assetCode}`);
   });
 
   await test('a Latin-free (Burmese) category name keeps the plain AST- prefix', async () => {
     const { svc } = makeSvc();
     const a = await svc.create({ name: 'စက်ပစ္စည်း', categoryId: 'cat-mm' }, ACTOR);
-    assert.match(a.assetCode, /^AST-202610-\d+$/, `plain prefix expected, got ${a.assetCode}`);
+    assert.match(a.assetCode, /^AST-2610-\d+$/, `plain prefix expected, got ${a.assetCode}`);
     // no category at all behaves the same way
     const b = await svc.create({ name: 'Loose' }, ACTOR);
-    assert.match(b.assetCode, /^AST-202610-\d+$/, `got ${b.assetCode}`);
+    assert.match(b.assetCode, /^AST-2610-\d+$/, `got ${b.assetCode}`);
   });
 
   await test('a hand-typed code occupying the next slot is skipped, not a 500', async () => {
     const { svc, env } = makeSvc();
-    const occupied = `AST-ITE-202610-${env.numbering.peek()}`; // exactly what next() yields first
+    const occupied = `AST-ITE-2610-${env.numbering.peek()}`; // exactly what next() yields first
     await svc.create({ name: 'Pre-occupied', assetCode: occupied }, ACTOR);
     const a = await svc.create({ name: 'Laptop', categoryId: 'cat-1' }, ACTOR);
     assert.notStrictEqual(a.assetCode, occupied, 'the occupied slot must be skipped');
-    assert.match(a.assetCode, /^AST-ITE-202610-\d+$/, `got ${a.assetCode}`);
+    assert.match(a.assetCode, /^AST-ITE-2610-\d+$/, `got ${a.assetCode}`);
   });
 
   console.log('\n== Asset Setup CRUD (categories / locations / custodians) ==');
@@ -472,6 +475,27 @@ async function main() {
     assert.strictEqual((await validate(plainToInstance(SetupNameDto, { name: 'Printer' }), opts)).length, 0);
     assert.ok((await validate(plainToInstance(SetupNameDto, { name: '' }), opts)).length > 0, 'blank rejected');
     assert.ok((await validate(plainToInstance(SetupNameDto, { name: 'X', extra: 1 }), opts)).length > 0, 'extra prop rejected');
+  });
+
+  await test('NumberingService.next(…, 2): two-digit year, same monthly counter key', async () => {
+    const { NumberingService } = require('../src/numbering/numbering.service');
+    const keys: string[] = [];
+    let counter = 0;
+    const prisma: any = {
+      $transaction: async (fn: any) =>
+        fn({
+          $queryRaw: async (strings: any, ...values: any[]) => {
+            keys.push(values[0]);
+            return [{ counter: ++counter }];
+          },
+        }),
+    };
+    const svc = new NumberingService(prisma);
+    const when = new Date('2026-10-20T05:00:00Z');
+    assert.strictEqual(await svc.next('AST', when, 2), 'AST-2610-0001');
+    assert.strictEqual(await svc.next('AST', when, 2), 'AST-2610-0002');
+    assert.strictEqual(await svc.next('AST', when), 'AST-202610-0003', 'other documents keep the four-digit year');
+    assert.deepStrictEqual(keys, ['AST-202610', 'AST-202610', 'AST-202610'], 'one monthly counter for old and new styles');
   });
 
   const summary = failures.length ? `\nFAILED (${failures.length}): ${failures.join(' | ')}` : `\n${passed} passed, 0 failed`;

@@ -334,7 +334,7 @@ export default function Assets() {
                 placeholder="Leave blank → auto from category"
                 describe={form.assetCode
                   ? 'Custom code must be unique'
-                  : `Auto code: ${autoSeg ? `AST-${autoSeg}-YYYYMM-0001` : 'AST-YYYYMM-0001'}`}
+                  : `Auto code: ${autoSeg ? `AST-${autoSeg}-YYMM-0001` : 'AST-YYMM-0001'}`}
               />
             </div>
             <div>
