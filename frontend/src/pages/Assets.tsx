@@ -18,8 +18,19 @@ interface AssetRow {
   purchaseCost?: string | null;
   status: 'ACTIVE' | 'IN_STORAGE' | 'MAINTENANCE' | 'DISPOSED';
   description?: string | null;
-  category?: { id: string; name: string } | null;
+  /** category-specific answers, keyed by the category's spec field keys */
+  specs?: Record<string, string> | null;
+  category?: { id: string; name: string; specFields?: SpecField[] | null } | null;
   location?: { id: string; name: string } | null;
+}
+
+/** A specification field a category asks for (a printer's Connection: USB /
+ *  Network). Defined per category in the Asset Setup tab. */
+interface SpecField {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  options?: string[];
 }
 
 interface MovementRow {
@@ -37,7 +48,7 @@ interface AssetDetail extends AssetRow {
   poItems: { purchaseOrder: { poNumber: string; supplier: { name: string } } }[];
 }
 
-interface Category { id: string; name: string }
+interface Category { id: string; name: string; specFields?: SpecField[] | null }
 interface Location { id: string; name: string }
 interface Custodian { id: string; name: string }
 
@@ -48,7 +59,7 @@ const STATUS_COLORS: Record<string, 'green' | 'gray' | 'yellow' | 'red'> = {
 const emptyForm = {
   name: '', assetCode: '', categoryId: '', brand: '', model: '', serialNumber: '',
   custodian: '', locationId: '', purchaseDate: '', purchaseCost: '', description: '',
-  status: 'ACTIVE',
+  status: 'ACTIVE', specs: {} as Record<string, string>,
 };
 
 export default function Assets() {
@@ -99,7 +110,9 @@ export default function Assets() {
   const loadPickers = useCallback(async () => {
     try {
       const [cats, locs, custs] = await Promise.all([
-        api<Category[]>('/procurement/asset-categories'),
+        // /assets/categories carries each category's specification fields, so
+        // the form can ask the right questions as soon as one is picked
+        api<Category[]>('/assets/categories'),
         api<Location[]>('/procurement/asset-locations'),
         api<Custodian[]>('/assets/custodians'),
       ]);
@@ -141,6 +154,11 @@ export default function Assets() {
       purchaseDate: form.purchaseDate || blank,
       purchaseCost: form.purchaseCost === '' ? blank : Number(form.purchaseCost),
       description: form.description || blank,
+      // specifications: send the filled ones; edit with none left clears them
+      specs: (() => {
+        const filled = Object.entries(form.specs ?? {}).filter(([, v]) => String(v ?? '').trim());
+        return filled.length ? Object.fromEntries(filled) : blank;
+      })(),
       // status is editable only on an existing row (create always starts ACTIVE)
       ...(form.id ? { status: form.status } : {}),
     };
@@ -203,6 +221,10 @@ export default function Assets() {
   // ("IT Equipment" → AST-ITE-…), mirrored here so the dialog can preview it
   const autoSeg = (categories.find((c) => c.id === form?.categoryId)?.name ?? '')
     .toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+  // fields the chosen category defines — the questions this asset must answer
+  const formSpecFields: SpecField[] = categories.find((c) => c.id === form?.categoryId)?.specFields ?? [];
+  const setSpec = (key: string, value: string) =>
+    setForm((f) => (f ? { ...f, specs: { ...f.specs, [key]: value } } : f));
 
   return (
     <div>
@@ -300,6 +322,7 @@ export default function Assets() {
                       locationId: a.location?.id ?? '', status: a.status,
                       purchaseDate: a.purchaseDate ? a.purchaseDate.slice(0, 10) : '',
                       purchaseCost: a.purchaseCost ?? '', description: a.description ?? '',
+                      specs: { ...(a.specs ?? {}) },
                     })}>Edit</Button>
                     <Button variant="danger" onClick={() => setToDelete(a)}>Delete</Button>
                   </>
@@ -381,6 +404,35 @@ export default function Assets() {
               <label className="block text-xs font-medium text-gray-500 mb-1">Serial number</label>
               <Input value={form.serialNumber} onChange={(e) => setForm({ ...form, serialNumber: e.target.value })} />
             </div>
+            {/* Category-specific questions (a printer's USB vs Network, a
+                projector's connection…). Defined per category in Asset Setup,
+                so the form only asks what this kind of asset actually has. */}
+            {formSpecFields.length > 0 && (
+              <div className="sm:col-span-2 rounded-lg border border-gray-100 bg-gray-50/60 p-3">
+                <p className="text-xs font-medium text-gray-500 mb-2">
+                  Specifications — {categories.find((c) => c.id === form.categoryId)?.name}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {formSpecFields.map((f) => (
+                    <div key={f.key}>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">{f.label}</label>
+                      {f.type === 'select' ? (
+                        <Select value={form.specs[f.key] ?? ''} onChange={(e) => setSpec(f.key, e.target.value)}>
+                          <option value="">— not set —</option>
+                          {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+                        </Select>
+                      ) : (
+                        <Input
+                          type={f.type === 'number' ? 'number' : 'text'}
+                          value={form.specs[f.key] ?? ''}
+                          onChange={(e) => setSpec(f.key, e.target.value)}
+                        />
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Custodian</label>
               <Select value={form.custodian} onChange={(e) => setForm({ ...form, custodian: e.target.value })}>
@@ -428,6 +480,19 @@ export default function Assets() {
             <div><span className="text-gray-400 text-xs block">Purchase date</span>{detail.purchaseDate ? detail.purchaseDate.slice(0, 10) : '—'}</div>
             <div><span className="text-gray-400 text-xs block">Acquired via</span>{detail.poItems.map((p) => p.purchaseOrder.poNumber).join(', ') || '—'}</div>
           </div>
+          {detail.category?.specFields?.length ? (
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Specifications</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                {detail.category.specFields.map((f) => (
+                  <div key={f.key}>
+                    <span className="text-gray-400 text-xs block">{f.label}</span>
+                    {detail.specs?.[f.key] ?? <span className="text-gray-300">—</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {detail.description && <p className="text-sm text-gray-600 mb-4">{detail.description}</p>}
           <h3 className="text-sm font-semibold text-gray-700 mb-2">Movement history</h3>
           {detail.movements.length === 0 ? (

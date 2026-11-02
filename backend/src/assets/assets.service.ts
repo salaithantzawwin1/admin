@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
@@ -25,6 +26,25 @@ const MOVEMENT_FOR_TRANSITION: Record<string, string> = {
   '>MAINTENANCE': 'MAINTENANCE',
   'MAINTENANCE>': 'RESTORE',
 };
+
+/** One field a category asks for on its assets (e.g. a printer's Connection:
+ *  USB / Network). `key` is the stable handle the stored values use. */
+export interface SpecField {
+  key: string;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  options?: string[];
+}
+
+const SPEC_TYPES = ['text', 'number', 'select'] as const;
+const MAX_SPEC_FIELDS = 30;
+const MAX_SPEC_VALUE = 200;
+
+/** "Connection type" → "connection_type" — the key stored on every asset. */
+function specKeyFrom(label: string): string {
+  const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40);
+  return key || 'field';
+}
 
 @Injectable()
 export class AssetsService {
@@ -79,7 +99,7 @@ export class AssetsService {
   async create(data: {
     name: string; assetCode?: string; categoryId?: string; brand?: string; model?: string;
     serialNumber?: string; custodian?: string; locationId?: string; purchaseDate?: string;
-    purchaseCost?: number; description?: string;
+    purchaseCost?: number; description?: string; specs?: Record<string, string> | null;
   }, actor: Actor) {
     const assetCode = data.assetCode?.trim();
     if (assetCode) {
@@ -104,6 +124,8 @@ export class AssetsService {
         purchaseDate: data.purchaseDate ? new Date(data.purchaseDate) : undefined,
         purchaseCost: data.purchaseCost ?? undefined,
         description: data.description?.trim() || undefined,
+        // only the fields this category defines survive; blanks are dropped
+        specs: this.normalizeSpecs(category?.specFields, data.specs) ?? undefined,
       },
       include: { category: true, location: true },
     });
@@ -116,7 +138,7 @@ export class AssetsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ASSET_CREATED', module: 'ASSETS', recordId: asset.id,
-      newValue: { assetCode: asset.assetCode, name: asset.name, assetId: asset.id },
+      newValue: { assetCode: asset.assetCode, name: asset.name, assetId: asset.id, specs: asset.specs },
     });
     return asset;
   }
@@ -128,6 +150,7 @@ export class AssetsService {
     name?: string; assetCode?: string; categoryId?: string | null; brand?: string | null; model?: string | null;
     serialNumber?: string | null; custodian?: string | null; locationId?: string | null;
     purchaseDate?: string | null; purchaseCost?: number | null; description?: string | null; status?: string;
+    specs?: Record<string, string> | null;
   }, actor: Actor) {
     const asset = await this.prisma.asset.findUnique({ where: { id } });
     if (!asset) throw new NotFoundException('Asset not found');
@@ -146,6 +169,19 @@ export class AssetsService {
       throw new BadRequestException('Purchase cost must be non-negative');
     }
 
+    // Specifications follow the category: a changed category re-validates the
+    // stored answers (stale keys from the old category are dropped), and a
+    // blank `specs` clears them.
+    const specsTouched = data.specs !== undefined || data.categoryId !== undefined;
+    const nextCategoryId = data.categoryId !== undefined ? (data.categoryId || null) : asset.categoryId;
+    let nextSpecs: Record<string, string> | null = null;
+    if (specsTouched) {
+      const fields = nextCategoryId
+        ? (await this.prisma.assetCategory.findUnique({ where: { id: nextCategoryId }, select: { specFields: true } }))?.specFields
+        : null;
+      nextSpecs = this.normalizeSpecs(fields, data.specs !== undefined ? data.specs : asset.specs);
+    }
+
     const updated = await this.prisma.asset.update({
       where: { id },
       data: {
@@ -162,6 +198,7 @@ export class AssetsService {
         purchaseDate: data.purchaseDate !== undefined ? (data.purchaseDate ? new Date(data.purchaseDate) : null) : undefined,
         purchaseCost: data.purchaseCost !== undefined ? data.purchaseCost : undefined,
         description: data.description !== undefined ? (data.description?.trim() || null) : undefined,
+        specs: specsTouched ? (nextSpecs ?? Prisma.DbNull) : undefined,
         status: data.status ?? asset.status,
       },
       include: { category: true, location: true },
@@ -178,8 +215,8 @@ export class AssetsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ASSET_UPDATED', module: 'ASSETS', recordId: id,
-      oldValue: { status: asset.status, locationId: asset.locationId, name: asset.name, assetCode: asset.assetCode },
-      newValue: { status: updated.status, locationId: updated.locationId, name: updated.name, assetCode: updated.assetCode },
+      oldValue: { status: asset.status, locationId: asset.locationId, name: asset.name, assetCode: asset.assetCode, specs: asset.specs },
+      newValue: { status: updated.status, locationId: updated.locationId, name: updated.name, assetCode: updated.assetCode, specs: updated.specs },
     });
     return updated;
   }
@@ -240,6 +277,7 @@ export class AssetsService {
   async registerFromPoLine(poItemId: string, data: {
     name?: string; categoryId?: string; locationId?: string; serialNumber?: string;
     brand?: string; model?: string; custodian?: string; purchaseCost?: number;
+    specs?: Record<string, string> | null;
   }, actor: Actor) {
     const item = await this.prisma.purchaseOrderItem.findUnique({
       where: { id: poItemId },
@@ -273,6 +311,7 @@ export class AssetsService {
         locationId: data.locationId || undefined,
         purchaseDate: item.purchaseOrder.goodsReceipts[0]?.receivedAt ?? new Date(),
         purchaseCost: cost,
+        specs: this.normalizeSpecs(poCategory?.specFields, data.specs) ?? undefined,
         description: `Registered from ${item.purchaseOrder.poNumber} (line: ${item.description})`,
       },
       include: { category: true, location: true },
@@ -305,10 +344,11 @@ export class AssetsService {
       const s = v == null ? '' : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    const lines = ['Asset Code,Name,Category,Brand,Model,Serial,Custodian,Location,Status,Purchase Date,Cost MMK,Acquired via'];
+    const lines = ['Asset Code,Name,Category,Specifications,Brand,Model,Serial,Custodian,Location,Status,Purchase Date,Cost MMK,Acquired via'];
     for (const a of rows) {
       lines.push([
-        a.assetCode, a.name, a.category?.name ?? '', a.brand ?? '', a.model ?? '',
+        a.assetCode, a.name, a.category?.name ?? '', this.specsText(a.category?.specFields, a.specs),
+        a.brand ?? '', a.model ?? '',
         a.serialNumber ?? '', a.custodian ?? '', a.location?.name ?? '', a.status,
         a.purchaseDate ? a.purchaseDate.toISOString().slice(0, 10) : '',
         a.purchaseCost != null ? a.purchaseCost.toFixed(2) : '',
@@ -316,6 +356,17 @@ export class AssetsService {
       ].map(esc).join(','));
     }
     return lines.join('\n');
+  }
+
+  /** "Connection: Network (LAN); Color: Mono" — labels from the category so the
+   *  sheet reads without a key, in the order the category defines. */
+  private specsText(fields: unknown, specs: unknown): string {
+    const defs = Array.isArray(fields) ? (fields as SpecField[]) : [];
+    const values = (specs && typeof specs === 'object' && !Array.isArray(specs) ? specs : {}) as Record<string, string>;
+    return defs
+      .filter((f) => f?.key && values[f.key])
+      .map((f) => `${f.label}: ${values[f.key]}`)
+      .join('; ');
   }
 
   private async move(assetId: string, type: string, fromLocationId: string | null, toLocationId: string | null, note: string | undefined, actor: Actor) {
@@ -329,8 +380,8 @@ export class AssetsService {
 
   /** Validates the optional category/location links and returns the category row
    *  (callers need its name to build a category-scoped asset code). */
-  private async assertRefs(categoryId?: string, locationId?: string): Promise<{ name: string } | null> {
-    let category: { name: string } | null = null;
+  private async assertRefs(categoryId?: string, locationId?: string): Promise<{ name: string; specFields?: unknown } | null> {
+    let category: { name: string; specFields?: unknown } | null = null;
     if (categoryId) {
       category = await this.prisma.assetCategory.findUnique({ where: { id: categoryId } });
       if (!category) throw new BadRequestException('Unknown asset category');
@@ -340,6 +391,86 @@ export class AssetsService {
       if (!loc) throw new BadRequestException('Unknown location');
     }
     return category;
+  }
+
+  // ---------- category specification fields ----------
+
+  /** Replace a category's specification field definitions (Asset Setup tab).
+   *  Empty input clears them; existing asset values are kept as-is — they are
+   *  only pruned when that asset is next saved with its (new) field list. */
+  async setCategorySpecFields(id: string, input: unknown, actor: Actor) {
+    const prev = await this.prisma.assetCategory.findUnique({ where: { id } });
+    if (!prev) throw new NotFoundException('Asset category not found');
+    const fields = this.normalizeSpecFields(input);
+    const row = await this.prisma.assetCategory.update({
+      where: { id },
+      data: { specFields: fields.length ? (fields as unknown as Prisma.InputJsonValue) : Prisma.DbNull },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ASSET_CATEGORY_SPECS_UPDATED', module: 'ASSETS', recordId: id,
+      oldValue: { name: prev.name, specFields: prev.specFields },
+      newValue: { name: row.name, specFields: row.specFields },
+    });
+    const { total } = await this.setupUsage('categories', row);
+    return { ...row, usage: total };
+  }
+
+  /** Validate + normalise the field list a category defines. Keys stay stable:
+   *  a field keeps the key it was saved with, so existing values survive a
+   *  label edit; a brand-new field derives its key from the label. */
+  private normalizeSpecFields(input: unknown): SpecField[] {
+    if (!Array.isArray(input)) throw new BadRequestException('Specification fields must be a list');
+    if (input.length > MAX_SPEC_FIELDS) {
+      throw new BadRequestException(`At most ${MAX_SPEC_FIELDS} specification fields per category`);
+    }
+    const out: SpecField[] = [];
+    const seen = new Set<string>();
+    for (const raw of input) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new BadRequestException('Each specification field must be an object');
+      }
+      const src = raw as Record<string, unknown>;
+      const label = String(src.label ?? '').trim();
+      if (!label) throw new BadRequestException('Every specification field needs a label');
+      if (label.length > 60) throw new BadRequestException(`Field label "${label}" is too long (max 60)`);
+      const type = String(src.type ?? 'text') as SpecField['type'];
+      if (!(SPEC_TYPES as readonly string[]).includes(type)) {
+        throw new BadRequestException(`Unknown field type "${type}"`);
+      }
+      const base = String(src.key ?? '').trim() ? specKeyFrom(String(src.key)) : specKeyFrom(label);
+      let key = base;
+      for (let n = 2; seen.has(key); n++) key = `${base}_${n}`;
+      seen.add(key);
+      const field: SpecField = { key, label, type };
+      if (type === 'select') {
+        const options = (Array.isArray(src.options) ? src.options : [])
+          .map((o) => String(o ?? '').trim()).filter(Boolean);
+        if (!options.length) throw new BadRequestException(`Field "${label}" needs at least one option`);
+        if (options.length > MAX_SPEC_FIELDS) {
+          throw new BadRequestException(`Field "${label}" has too many options (max ${MAX_SPEC_FIELDS})`);
+        }
+        field.options = options;
+      }
+      out.push(field);
+    }
+    return out;
+  }
+
+  /** Keep only the values whose key the category defines, trimmed; blanks and
+   *  an empty result are stored as NULL so "not filled in" stays visible. */
+  private normalizeSpecs(fields: unknown, input: unknown): Record<string, string> | null {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+    const defs = Array.isArray(fields) ? (fields as SpecField[]) : [];
+    const out: Record<string, string> = {};
+    for (const f of defs) {
+      if (!f?.key) continue;
+      const raw = (input as Record<string, unknown>)[f.key];
+      if (raw === undefined || raw === null) continue;
+      const value = String(raw).trim().slice(0, MAX_SPEC_VALUE);
+      if (value) out[f.key] = value;
+    }
+    return Object.keys(out).length ? out : null;
   }
 
   /**

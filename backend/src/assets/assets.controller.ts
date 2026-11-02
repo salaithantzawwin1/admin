@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
@@ -23,6 +23,9 @@ export class AssetDto {
   @IsOptional() @IsDateString() purchaseDate?: string;
   @IsOptional() @IsNumber() @Min(0) purchaseCost?: number;
   @IsOptional() @IsString() @MaxLength(500) description?: string;
+  /** Category-specific answers: { [fieldKey]: string }. Keys the chosen
+   *  category does not define are dropped by the service. */
+  @IsOptional() @IsObject() specs?: Record<string, string>;
 }
 
 export class AssetUpdateDto {
@@ -47,6 +50,15 @@ export class AssetUpdateDto {
   @IsOptional() @IsNumber() @Min(0) purchaseCost?: number | null;
   @IsOptional() @IsString() @MaxLength(500) description?: string | null;
   @IsOptional() @IsIn(['ACTIVE', 'IN_STORAGE', 'MAINTENANCE', 'DISPOSED']) status?: string;
+  /** null clears every specification answer; undefined leaves them alone. */
+  @IsOptional() @IsObject() specs?: Record<string, string> | null;
+}
+
+/** Asset Setup → Category: the specification fields that category asks for. */
+export class CategorySpecFieldsDto {
+  /** [{ key?, label, type: 'text'|'number'|'select', options? }] — validated
+   *  and normalised in the service (keys, limits, options). */
+  @IsArray() fields!: unknown[];
 }
 
 export class AssetTransferDto {
@@ -105,6 +117,14 @@ export class AssetsController {
   @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
   createCategory(@Req() req, @Body() dto: SetupNameDto) {
     return this.assets.createSetup('categories', dto, this.actor(req));
+  }
+
+  /** Which specification fields do assets of this category carry? (a printer:
+   *  USB vs Network, colour vs mono…). Replaces the whole list. */
+  @Patch('categories/:id/specs')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  setCategorySpecFields(@Req() req, @Param('id') id: string, @Body() dto: CategorySpecFieldsDto) {
+    return this.assets.setCategorySpecFields(id, dto.fields, this.actor(req));
   }
 
   @Get('locations')

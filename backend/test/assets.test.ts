@@ -59,7 +59,15 @@ function makeEnv(opts: {
   // update, delete). Seeded so the existing reference checks keep working.
   const setupStores = {
     assetCategory: new Map<string, any>([
-      ['cat-1', { id: 'cat-1', name: 'IT Equipment' }],
+      ['cat-1', {
+        id: 'cat-1', name: 'IT Equipment',
+        // category-specific fields: what the asset form asks for this type
+        specFields: [
+          { key: 'connection', label: 'Connection', type: 'select', options: ['Wired', 'Wi-Fi'] },
+          { key: 'ram', label: 'RAM', type: 'text' },
+          { key: 'os', label: 'OS', type: 'text' },
+        ],
+      }],
       ['cat-2', { id: 'cat-2', name: 'Office Furniture' }],
       ['cat-mm', { id: 'cat-mm', name: 'စက်ပစ္စည်း' }], // no A-Z0-9 → plain AST-
     ]),
@@ -96,18 +104,33 @@ function makeEnv(opts: {
     },
   });
 
+  /** Attach the category/location rows an `include` asked for — the service
+   *  reads category.specFields to label specifications (CSV, detail). */
+  const withRefs = (row: any, include: any) => ({
+    ...row,
+    ...(include?.category
+      ? { category: row.categoryId ? setupStores.assetCategory.get(row.categoryId) ?? null : null }
+      : {}),
+    ...(include?.location
+      ? { location: row.locationId ? setupStores.location.get(row.locationId) ?? null : null }
+      : {}),
+    ...(include?.poItems ? { poItems: [] } : {}),
+  });
+
   const prisma: any = {
     asset: {
       // return copies like real Prisma — the service's before-state compares
       // must not see the same object update() mutates
-      findUnique: async ({ where }: any) => {
+      findUnique: async ({ where, include }: any) => {
         const row =
           (where.id ? assets.get(where.id) : undefined) ??
           (where.assetCode ? [...assets.values()].find((a) => a.assetCode === where.assetCode) ?? null : null);
-        return row ? { ...row } : null;
+        return row ? withRefs({ ...row }, include) : null;
       },
-      findMany: async ({ where }: any) =>
-        [...assets.values()].filter((a) => !where?.status || a.status === where.status).map((a) => ({ ...a })),
+      findMany: async ({ where, include }: any) =>
+        [...assets.values()]
+          .filter((a) => !where?.status || a.status === where.status)
+          .map((a) => withRefs({ ...a }, include)),
       count: async ({ where }: any) =>
         [...assets.values()].filter((a) => Object.entries(where ?? {}).every(([k, v]) => a[k] === v)).length,
       create: async ({ data }: any) => {
@@ -463,6 +486,58 @@ async function main() {
     assert.ok(!(await svc.listSetup('categories')).some((c: any) => c.id === spare.id));
     assert.strictEqual(env.audits.at(-1).action, 'ASSET_CATEGORY_DELETED');
     assert.strictEqual(env.audits.at(-1).severity, 'WARNING');
+  });
+
+  console.log('\n== category specification fields ==');
+
+  await test('create keeps only the fields the category defines (and trims them)', async () => {
+    const { svc } = makeSvc();
+    const pc = await svc.create({
+      name: 'Dell OptiPlex', categoryId: 'cat-1',
+      specs: { connection: 'Wi-Fi', ram: '  16GB  ', os: '', madeUp: 'nope' },
+    }, ACTOR);
+    assert.deepStrictEqual(pc.specs, { connection: 'Wi-Fi', ram: '16GB' });
+    // no category → nothing to validate against, so nothing is stored
+    const loose = await svc.create({ name: 'Loose', specs: { connection: 'USB' } }, ACTOR);
+    assert.ok(!loose.specs, 'an uncategorised asset keeps no specification values');
+  });
+
+  await test('a category change prunes stale answers, keeping the new category\'s fields', async () => {
+    const { svc } = makeSvc();
+    const pc = await svc.create({ name: 'PC', categoryId: 'cat-1', specs: { connection: 'Wired', ram: '8GB' } }, ACTOR);
+    await svc.update(pc.id, { categoryId: null }, ACTOR);
+    const row = await svc.detail(pc.id);
+    assert.ok(!row.specs || !('connection' in (row.specs as any)), 'fields of the old category must not linger');
+  });
+
+  await test('setCategorySpecFields derives keys, keeps given ones, audits', async () => {
+    const { svc, env } = makeSvc();
+    const row = await svc.setCategorySpecFields('cat-1', [
+      { label: 'Connection type', type: 'select', options: ['USB', 'Network (LAN)'] },
+      { key: 'Paper size', label: 'Paper size', type: 'text' },
+    ], ACTOR);
+    assert.deepStrictEqual(row.specFields[0], {
+      key: 'connection_type', label: 'Connection type', type: 'select', options: ['USB', 'Network (LAN)'],
+    });
+    assert.strictEqual(row.specFields[1].key, 'paper_size', 'an existing key survives a label change');
+    assert.strictEqual(env.audits.at(-1).action, 'ASSET_CATEGORY_SPECS_UPDATED');
+  });
+
+  await test('setCategorySpecFields refuses a bad type, a select without options and a blank label', async () => {
+    const { svc } = makeSvc();
+    await assert.rejects(() => svc.setCategorySpecFields('cat-1', [{ label: 'X', type: 'radio' }], ACTOR), /Unknown field type/);
+    await assert.rejects(() => svc.setCategorySpecFields('cat-1', [{ label: 'X', type: 'select', options: [] }], ACTOR), /at least one option/);
+    await assert.rejects(() => svc.setCategorySpecFields('cat-1', [{ label: '  ' }], ACTOR), /needs a label/);
+    await assert.rejects(() => svc.setCategorySpecFields('nope', [], ACTOR), /not found/);
+  });
+
+  await test('CSV carries the specifications with their labels', async () => {
+    const { svc } = makeSvc();
+    await svc.create({ name: 'Printer X', categoryId: 'cat-1', specs: { connection: 'Wi-Fi', ram: '16GB' } }, ACTOR);
+    const csv = await svc.csv();
+    const [head, row] = csv.split('\n');
+    assert.ok(head.includes('Specifications'), 'the sheet has a specifications column');
+    assert.ok(row.includes('Connection: Wi-Fi') && row.includes('RAM: 16GB'), `labels must be readable, got ${row}`);
   });
 
   await test('DTO: SetupNameDto accepts {name} and rejects empty / extra props', async () => {

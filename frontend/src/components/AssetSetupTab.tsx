@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
-import { Button, Card, Empty, Input, Table } from './ui';
+import { Button, Card, Empty, Input, Select, Table } from './ui';
 import { Modal } from './Modal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { toast } from './Toast';
@@ -33,6 +33,15 @@ interface SetupRow {
   name: string;
   /** rows referencing this entry (assets / movements / receipts) — blocks delete */
   usage: number;
+  /** categories only: the specification fields their assets carry */
+  specFields?: SpecField[] | null;
+}
+
+interface SpecField {
+  key?: string;
+  label: string;
+  type: 'text' | 'number' | 'select';
+  options?: string[];
 }
 
 interface Section {
@@ -120,6 +129,10 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
   const [editName, setEditName] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<{ kind: SetupKind; row: SetupRow } | null>(null);
+  // category → specification fields editor (what its assets must answer)
+  const [specEdit, setSpecEdit] = useState<{ row: SetupRow; fields: SpecField[] } | null>(null);
+  const [specError, setSpecError] = useState<string | null>(null);
+  const [specBusy, setSpecBusy] = useState(false);
 
   useEffect(() => { setQ(''); }, [active]);
 
@@ -195,6 +208,38 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
       setBusy(null);
     }
   };
+
+  const saveSpecs = async () => {
+    if (!specEdit) return;
+    setSpecError(null);
+    setSpecBusy(true);
+    try {
+      await api(`/assets/categories/${specEdit.row.id}/specs`, {
+        method: 'PATCH',
+        body: {
+          fields: specEdit.fields.map((f) => ({
+            // keep the saved key so existing asset values survive a label edit;
+            // a new row has none and the server derives one from the label
+            ...(f.key ? { key: f.key } : {}),
+            label: f.label,
+            type: f.type,
+            ...(f.type === 'select' ? { options: f.options ?? [] } : {}),
+          })),
+        },
+      });
+      setSpecEdit(null);
+      await load();
+      onChanged?.();
+      toast(`Specification fields saved for "${specEdit.row.name}"`);
+    } catch (e) {
+      setSpecError(errText(e, 'Failed to save specification fields'));
+    } finally {
+      setSpecBusy(false);
+    }
+  };
+
+  const setSpecField = (i: number, patch: Partial<SpecField>) =>
+    setSpecEdit((s) => (s ? { ...s, fields: s.fields.map((f, j) => (j === i ? { ...f, ...patch } : f)) } : s));
 
   // ← / → move between sub-tabs (standard tablist keyboard behaviour), so the
   // pills are usable without a pointer
@@ -326,13 +371,16 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
         {/* !min-w-0 opts this short 3-column table out of the global mobile
             min-width:640px rule, so Rename/Delete stay on screen instead of
             hiding behind a sideways scroll */}
-        <Table head={['NAME', 'USED BY', 'ACTIONS']} className="!min-w-0">
+        <Table
+          head={active === 'categories' ? ['NAME', 'SPEC FIELDS', 'USED BY', 'ACTIONS'] : ['NAME', 'USED BY', 'ACTIONS']}
+          className="!min-w-0"
+        >
           {loading ? (
-            <tr><td colSpan={3}><Empty label="Loading…" /></td></tr>
+            <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label="Loading…" /></td></tr>
           ) : rows[active].length === 0 ? (
-            <tr><td colSpan={3}><Empty label={canManage ? section.empty : `No ${section.label.toLowerCase()} entries yet`} /></td></tr>
+            <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label={canManage ? section.empty : `No ${section.label.toLowerCase()} entries yet`} /></td></tr>
           ) : visible.length === 0 ? (
-            <tr><td colSpan={3}><Empty label={`No ${section.label.toLowerCase()} matches “${q.trim()}”`} /></td></tr>
+            <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label={`No ${section.label.toLowerCase()} matches “${q.trim()}”`} /></td></tr>
           ) : visible.map((row) => (
             <tr key={row.id} className="hover:bg-gray-50/60">
               <td className="px-3 sm:px-4 py-2.5 font-medium text-gray-900 break-words">
@@ -343,6 +391,15 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                   </span>
                 )}
               </td>
+              {active === 'categories' && (
+                <td className="px-3 sm:px-4 py-2.5 text-center tabular-nums text-gray-500 whitespace-nowrap">
+                  {row.specFields?.length ? (
+                    <span title={row.specFields.map((f) => f.label).join(', ')}>{row.specFields.length}</span>
+                  ) : (
+                    <span className="text-gray-300">—</span>
+                  )}
+                </td>
+              )}
               <td className="px-3 sm:px-4 py-2.5 text-right tabular-nums text-gray-500 whitespace-nowrap" title={row.usage ? `Used by ${row.usage} record(s)` : 'Not used by anything yet'}>
                 {row.usage ? row.usage : <span className="text-gray-300">—</span>}
               </td>
@@ -352,6 +409,18 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                 <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-1.5">
                   {canManage ? (
                     <>
+                      {active === 'categories' && (
+                        <Button
+                          variant="ghost"
+                          title="Which specification fields do assets of this category ask for?"
+                          onClick={() => {
+                            setSpecEdit({ row, fields: (row.specFields ?? []).map((f) => ({ ...f, options: [...(f.options ?? [])] })) });
+                            setSpecError(null);
+                          }}
+                        >
+                          Spec fields
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         onClick={() => { setEditing({ kind: active, row }); setEditName(row.name); setEditError(null); }}
@@ -395,6 +464,85 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
             <Button disabled={!editName.trim() || busy !== null} onClick={() => void saveEdit()}>
               {busy === editing.kind ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* category specification fields — what the asset form asks for */}
+      {specEdit && (
+        <Modal
+          title={`Specification fields — ${specEdit.row.name}`}
+          onClose={() => setSpecEdit(null)}
+          error={specError ?? undefined}
+          wide
+        >
+          <p className="text-xs text-gray-500 mb-3">
+            What the asset form asks for assets of this category — e.g. a printer’s
+            “Connection” with USB / Network options. Leave it empty and only the common fields are used.
+          </p>
+          <div className="space-y-2">
+            {specEdit.fields.length === 0 && (
+              <p className="text-sm text-gray-400 border border-dashed border-gray-200 rounded-lg px-3 py-4 text-center">
+                No specification fields yet.
+              </p>
+            )}
+            {specEdit.fields.map((f, i) => (
+              <div key={i} className="rounded-lg border border-gray-100 bg-gray-50/60 p-2 space-y-2">
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="flex-1 min-w-0">
+                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Label</label>
+                    <Input
+                      className="!w-full"
+                      placeholder="e.g. Connection"
+                      value={f.label}
+                      onChange={(e) => setSpecField(i, { label: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Type</label>
+                    <Select
+                      value={f.type}
+                      onChange={(e) => setSpecField(i, { type: e.target.value as SpecField['type'] })}
+                    >
+                      <option value="text">Text</option>
+                      <option value="number">Number</option>
+                      <option value="select">Select</option>
+                    </Select>
+                  </div>
+                  <Button variant="ghost" onClick={() => setSpecEdit((s) => (s ? { ...s, fields: s.fields.filter((_, j) => j !== i) } : s))}>
+                    Remove
+                  </Button>
+                </div>
+                {f.type === 'select' && (
+                  <div>
+                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Options (comma separated)</label>
+                    <Input
+                      className="!w-full"
+                      placeholder="USB, Network (LAN), Wi-Fi"
+                      value={(f.options ?? []).join(', ')}
+                      onChange={(e) => setSpecField(i, { options: e.target.value.split(',').map((o) => o.trim()).filter(Boolean) })}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3">
+            <Button
+              variant="ghost"
+              onClick={() => setSpecEdit((s) => (s ? { ...s, fields: [...s.fields, { label: '', type: 'text' }] } : s))}
+            >
+              + Add field
+            </Button>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setSpecEdit(null)}>Cancel</Button>
+            <Button
+              disabled={specBusy || specEdit.fields.some((f) => !f.label.trim())}
+              onClick={() => void saveSpecs()}
+            >
+              {specBusy ? 'Saving…' : 'Save fields'}
             </Button>
           </div>
         </Modal>
