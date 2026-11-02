@@ -46,8 +46,8 @@ interface AssetRow {
   asset: string | null;
   poLineCount: number;
   purchaseCost: number;
-  invoiceLineCount: number;
-  invoiceCost: number;
+  costRowCount: number;
+  recordedCost: number;
   total: number;
 }
 
@@ -323,8 +323,8 @@ export default function Reports() {
                 <th className="px-4 py-3 font-semibold">Code</th>
                 <th className="px-4 py-3 font-semibold">PO lines</th>
                 <th className="px-4 py-3 font-semibold">Purchase cost (Ks)</th>
-                <th className="px-4 py-3 font-semibold">Invoice lines</th>
-                <th className="px-4 py-3 font-semibold">Related spend (Ks)</th>
+                <th className="px-4 py-3 font-semibold">Cost entries</th>
+                <th className="px-4 py-3 font-semibold">Recorded spend (Ks)</th>
                 <th className="px-4 py-3 font-semibold">Total (Ks)</th>
               </tr>
             </thead>
@@ -342,8 +342,8 @@ export default function Reports() {
                   <td className="px-4 py-2.5 text-gray-500">{r.assetCode ?? '—'}</td>
                   <td className="px-4 py-2.5 text-gray-500">{r.poLineCount}</td>
                   <td className="px-4 py-2.5 font-medium">{fmtMoney(r.purchaseCost)}</td>
-                  <td className="px-4 py-2.5 text-gray-500">{r.invoiceLineCount}</td>
-                  <td className="px-4 py-2.5 font-medium">{fmtMoney(r.invoiceCost)}</td>
+                  <td className="px-4 py-2.5 text-gray-500">{r.costRowCount}</td>
+                  <td className="px-4 py-2.5 font-medium">{fmtMoney(r.recordedCost)}</td>
                   <td className="px-4 py-2.5 font-semibold">{fmtMoney(r.total)}</td>
                 </tr>
               ))}

@@ -326,7 +326,43 @@ export class InvoicesService {
       oldValue: { status: inv.status, match: inv.matchStatus },
       newValue: { status: target.to, match: updated.matchStatus },
     });
+    // §14.5 — a POSTED invoice is money actually spent: every line tagged with
+    // an asset flows into the asset cost ledger, so the asset page and the
+    // finance side read the same numbers instead of two parallel histories.
+    if (action === 'post') await this.recordAssetCosts(id);
     return updated;
+  }
+
+  /**
+   * §14.5 — copy the posted invoice's asset-tagged lines into `asset_costs`.
+   * `createMany(..., skipDuplicates)` plus the (sourceType, sourceId) unique
+   * index makes it idempotent: the same line can never be counted twice.
+   * The purchase price of the asset itself is NOT written here — that is
+   * Asset.purchaseCost (set when the asset was registered).
+   */
+  private async recordAssetCosts(invoiceId: string) {
+    const inv = await this.prisma.invoice.findUnique({
+      where: { id: invoiceId },
+      include: { items: true },
+    });
+    if (!inv) return;
+    const rows = inv.items
+      .filter((it) => !!it.assetId)
+      .map((it) => ({
+        assetId: it.assetId as string,
+        date: inv.invoiceDate,
+        kind: 'PURCHASE',
+        amount: Number(it.unitPrice) * it.quantity,
+        quantity: it.quantity,
+        accountId: it.accountId,
+        supplierId: inv.supplierId,
+        description: `${it.description} — ${inv.invoiceNumber}`,
+        sourceType: 'INVOICE',
+        sourceId: it.id,
+        createdById: inv.createdById,
+      }));
+    if (!rows.length) return;
+    await this.prisma.assetCost.createMany({ data: rows, skipDuplicates: true });
   }
 
   private normalizeItem(it: InvoiceItemInput, idx: number) {

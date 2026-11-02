@@ -67,6 +67,19 @@ export class AssetTransferDto {
   @IsOptional() @IsString() @MaxLength(300) note?: string;
 }
 
+/** One cost event on an asset — a service visit, a spare part, consumables.
+ *  §14.5: the purchase price is not entered here; it is part of the asset. */
+export class AssetCostDto {
+  @IsIn(['PURCHASE', 'SERVICE', 'REPAIR', 'PART', 'CONSUMABLE', 'OTHER']) kind!: string;
+  @IsNumber() @Min(0.01) amount!: number;
+  /** When the money was spent (service/bill date). Defaults to today. */
+  @IsOptional() @IsDateString() date?: string;
+  @IsOptional() @IsNumber() @Min(1) quantity?: number;
+  @IsOptional() @IsString() accountId?: string;
+  @IsOptional() @IsString() supplierId?: string;
+  @IsOptional() @IsString() @MaxLength(300) description?: string;
+}
+
 /** Asset Setup (New) master-list body: {name} for category/location/custodian. */
 export class SetupNameDto {
   @IsString() @IsNotEmpty() @MaxLength(120) name!: string;
@@ -210,6 +223,20 @@ export class AssetsController {
   @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
   transfer(@Req() req, @Param('id') id: string, @Body() dto: AssetTransferDto) {
     return this.assets.transfer(id, dto, this.actor(req));
+  }
+
+  /** §14.5 — record money spent on this asset after acquisition. */
+  @Post(':id/costs')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  addCost(@Req() req, @Param('id') id: string, @Body() dto: AssetCostDto) {
+    return this.assets.addCost(id, dto, this.actor(req));
+  }
+
+  /** Removes a hand-typed cost row; invoice-posted rows are refused (409). */
+  @Delete(':id/costs/:costId')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  removeCost(@Req() req, @Param('id') id: string, @Param('costId') costId: string) {
+    return this.assets.removeCost(id, costId, this.actor(req));
   }
 
   @Delete(':id')

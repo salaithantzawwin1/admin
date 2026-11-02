@@ -131,32 +131,34 @@ export class ReportsService {
   }
 
   /** §34/W3: purchase by asset — acquisition cost (PO lines, migration-54
-   *  provenance link) + later related spend (invoice items tagged to the asset). */
+   *  provenance link) + later related spend, read from the asset cost ledger.
+   *  The ledger is the single source for spend on an asset (invoice posting and
+   *  the asset page both write to it), so this report cannot disagree with the
+   *  asset's own page. */
   async purchaseByAsset(from?: string, to?: string) {
-    const items = await this.prisma.invoiceItem.findMany({
-      where: { invoice: { status: { in: ACTIVE_INVOICE }, ...(this.period(from, to)) } },
+    const costs = await this.prisma.assetCost.findMany({
+      where: { date: this.datePeriod(from, to) },
       include: { asset: { select: { id: true, assetCode: true, name: true } } },
     });
     type Row = {
       assetId: string; assetCode: string | null; asset: string | null;
       poLineCount: number; purchaseCost: number;
-      invoiceLineCount: number; invoiceCost: number; total: number;
+      costRowCount: number; recordedCost: number; total: number;
     };
     const byAsset = new Map<string, Row>();
     const rowFor = (assetId: string, assetCode: string | null, name: string | null): Row => {
       let row = byAsset.get(assetId);
       if (!row) {
-        row = { assetId, assetCode, asset: name, poLineCount: 0, purchaseCost: 0, invoiceLineCount: 0, invoiceCost: 0, total: 0 };
+        row = { assetId, assetCode, asset: name, poLineCount: 0, purchaseCost: 0, costRowCount: 0, recordedCost: 0, total: 0 };
         byAsset.set(assetId, row);
       }
       return row;
     };
-    for (const it of items) {
-      if (!it.asset) continue;
-      const row = rowFor(it.asset.id, it.asset.assetCode, it.asset.name);
-      row.invoiceLineCount += 1;
-      row.invoiceCost = round2(row.invoiceCost + Number(it.unitPrice) * it.quantity);
-      row.total = round2(row.purchaseCost + row.invoiceCost);
+    for (const c of costs) {
+      const row = rowFor(c.asset.id, c.asset.assetCode, c.asset.name);
+      row.costRowCount += 1;
+      row.recordedCost = round2(row.recordedCost + Number(c.amount));
+      row.total = round2(row.purchaseCost + row.recordedCost);
     }
     // acquisition side: PO lines that registered the asset (§39 provenance)
     const poItems = await this.prisma.purchaseOrderItem.findMany({
@@ -171,7 +173,7 @@ export class ReportsService {
       const row = rowFor(it.assetId, it.asset.assetCode, it.asset.name);
       row.poLineCount += 1;
       row.purchaseCost = round2(row.purchaseCost + Number(it.unitPrice) * it.quantity);
-      row.total = round2(row.purchaseCost + row.invoiceCost);
+      row.total = round2(row.purchaseCost + row.recordedCost);
     }
     return [...byAsset.values()].sort((a, b) => b.total - a.total);
   }
@@ -246,6 +248,13 @@ export class ReportsService {
     const gte = from && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : undefined;
     const lt = to && !Number.isNaN(new Date(to).getTime()) ? new Date(new Date(to).getTime() + 24 * 3600 * 1000) : undefined;
     return gte || lt ? { invoiceDate: { ...(gte ? { gte } : {}), ...(lt ? { lt } : {}) } } : {};
+  }
+
+  /** `date`-column period for ledger reports (asset_costs.date). */
+  private datePeriod(from?: string, to?: string): { gte?: Date; lt?: Date } {
+    const gte = from && !Number.isNaN(new Date(from).getTime()) ? new Date(from) : undefined;
+    const lt = to && !Number.isNaN(new Date(to).getTime()) ? new Date(new Date(to).getTime() + 24 * 3600 * 1000) : undefined;
+    return gte || lt ? { ...(gte ? { gte } : {}), ...(lt ? { lt } : {}) } : {};
   }
 
   /** orderDate period for PO-side reports (W3/W5). */

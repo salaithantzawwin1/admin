@@ -82,6 +82,7 @@ model User {
   comparisonsCreated     QuotationComparison[]   @relation("ComparisonCreatedBy")
   monthlyBudgetsCreated  MonthlyBudget[]         @relation("BudgetCreatedBy")
   assetMovementsCreated  AssetMovement[]         @relation("AssetMovements")
+  assetCostsCreated      AssetCost[]             @relation("AssetCostCreator")
   pettyCashCreated       PettyCashTransaction[]  @relation("PettyCashTransactions")
   paymentsCreated        Payment[]               @relation("PaymentCreatedBy")
   telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
@@ -1013,6 +1014,7 @@ model Supplier {
   purchaseOrders    PurchaseOrder[]         @relation("PoSupplier")
   invoices          Invoice[]               @relation("InvoiceSupplier")
   rfqVendors        RfqVendor[]             @relation("RfqVendorSupplier")
+  assetCosts        AssetCost[]
   quotations        Quotation[]             @relation("QuotationSupplier")
   recommendedIn     QuotationComparison[]   @relation("ComparisonSupplier")
 
@@ -1365,6 +1367,7 @@ model Account {
   invoiceItems   InvoiceItem[]         @relation("InvoiceItems")
   monthlyBudgets MonthlyBudget[]       @relation("BudgetAccount")
   pettyCashTx    PettyCashTransaction[]
+  assetCosts     AssetCost[]
 
   @@index([categoryId])
   @@map("accounts")
@@ -1435,6 +1438,7 @@ model Asset {
   invoiceItems InvoiceItem[]         @relation("InvoiceItems")
   poItems      PurchaseOrderItem[]   @relation("PoItemAsset") // PO lines this asset was registered from (§39)
   movements    AssetMovement[]
+  costs        AssetCost[] // every later cost event (service, parts, consumables)
 
   @@index([categoryId])
   @@index([locationId])
@@ -1462,6 +1466,45 @@ model AssetMovement {
 
   @@index([assetId, createdAt])
   @@map("asset_movements")
+}
+
+// Asset cost ledger (§14.5 cost / §17 account-vs-asset) — the ONE place that
+// answers "how much has this asset cost us since we bought it". The purchase
+// price itself stays on Asset.purchaseCost; every LATER cost event lands here:
+// a service visit, a spare part, consumables used on it, freight, anything the
+// Administration pays. Rows are written by the money documents (invoice lines
+// tagged with an asset) or by hand from the asset page, so the asset history and
+// the finance side never drift apart.
+//
+// Total cost of ownership = Asset.purchaseCost + SUM(asset_costs.amount).
+model AssetCost {
+  id          String   @id @default(uuid()) @db.Uuid
+  assetId     String   @db.Uuid
+  /// When the money was spent (service date, bill date) — not createdAt.
+  date        DateTime @default(now())
+  kind        String // PURCHASE / SERVICE / REPAIR / PART / CONSUMABLE / OTHER
+  amount      Decimal  @db.Decimal(12, 2)
+  quantity    Int?
+  accountId   String?  @db.Uuid // budget classification (§17)
+  supplierId  String?  @db.Uuid
+  description String?
+  /// MANUAL = typed on the asset page; INVOICE = posted invoice line tagged with
+  /// the asset. Only MANUAL rows may be deleted — a system row would otherwise
+  /// silently leave the finance side behind.
+  sourceType  String   @default("MANUAL")
+  sourceId    String?  @db.Uuid // invoice_items.id for INVOICE rows
+  createdById String   @db.Uuid
+  createdAt   DateTime @default(now())
+
+  asset     Asset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  account   Account?  @relation(fields: [accountId], references: [id])
+  supplier  Supplier? @relation(fields: [supplierId], references: [id])
+  createdBy User      @relation("AssetCostCreator", fields: [createdById], references: [id])
+
+  // one row per invoice line — re-posting the same invoice cannot duplicate spend
+  @@unique([sourceType, sourceId])
+  @@index([assetId, date])
+  @@map("asset_costs")
 }
 
 // Petty cash (§21/§36) — append-only ledger of TOPUP/EXPENSE rows; the balance

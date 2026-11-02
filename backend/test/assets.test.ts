@@ -53,6 +53,8 @@ function makeEnv(opts: {
   const poState = opts.poLine ? { ...opts.poLine } : null; // mutable PO line row
   let seq = 0;
   let nseq = 0; // numbering counter (bumped per next() call, like the real service)
+  const assetCosts: any[] = []; // §14.5 asset cost ledger rows
+  let costSeq = 0;
 
   // Asset Setup master lists — in-memory mirrors of the three Prisma delegates
   // the service touches (findUnique by id or unique name, findMany, create,
@@ -115,6 +117,9 @@ function makeEnv(opts: {
       ? { location: row.locationId ? setupStores.location.get(row.locationId) ?? null : null }
       : {}),
     ...(include?.poItems ? { poItems: [] } : {}),
+    ...(include?.costs
+      ? { costs: assetCosts.filter((c) => c.assetId === row.id).sort((a, b) => +new Date(b.date) - +new Date(a.date)) }
+      : {}),
   });
 
   const prisma: any = {
@@ -159,6 +164,33 @@ function makeEnv(opts: {
       count: async ({ where }: any) =>
         movements.filter((m) => Object.entries(where ?? {}).every(([k, v]) => m[k] === v)).length,
     },
+    assetCost: {
+      findUnique: async ({ where }: any) => assetCosts.find((c) => c.id === where.id) ?? null,
+      findMany: async ({ where }: any = {}) =>
+        assetCosts.filter((c) => !where?.assetId || c.assetId === where.assetId),
+      create: async ({ data }: any) => {
+        const row = {
+          id: `cost-${++costSeq}`, date: new Date('2026-10-20T00:00:00Z'),
+          createdAt: new Date('2026-10-20T00:00:00Z'), sourceType: 'MANUAL', ...data,
+        };
+        assetCosts.push(row);
+        return { ...row };
+      },
+      delete: async ({ where }: any) => {
+        const i = assetCosts.findIndex((c) => c.id === where.id);
+        if (i < 0) throw new Error('Record not found');
+        assetCosts.splice(i, 1);
+        return { id: where.id };
+      },
+    },
+    account: {
+      findUnique: async ({ where }: any) =>
+        (where.id === 'acc-1' ? { id: 'acc-1', name: 'Office Supplies' } : null),
+    },
+    supplier: {
+      findUnique: async ({ where }: any) =>
+        (where.id === 'sup-1' ? { id: 'sup-1', name: 'ACME Trading' } : null),
+    },
     goodsReceipt: { count: async () => 0 },
     assetCategory: setupModel(setupStores.assetCategory),
     location: setupModel(setupStores.location),
@@ -186,7 +218,7 @@ function makeEnv(opts: {
     peek: () => String(1000 + nseq + 1).slice(1),
   };
   if (opts.takenCode) assets.set('a-taken', { id: 'a-taken', assetCode: opts.takenCode, name: 'Pre-existing' });
-  return { prisma, audit, numbering, assets, movements, audits, setupStores };
+  return { prisma, audit, numbering, assets, movements, audits, setupStores, assetCosts };
 }
 
 const { AssetsService } = require('../src/assets/assets.service');
@@ -428,6 +460,71 @@ async function main() {
     const a = await svc.create({ name: 'Laptop', categoryId: 'cat-1' }, ACTOR);
     assert.notStrictEqual(a.assetCode, occupied, 'the occupied slot must be skipped');
     assert.match(a.assetCode, /^AST-ITE-2610-\d+$/, `got ${a.assetCode}`);
+  });
+
+  console.log('\n== asset cost ledger (§14.5) ==');
+
+  await test('a recorded cost shows up as spend on the asset, purchase price counted once', async () => {
+    const { svc, env } = makeSvc();
+    const pc = await svc.create({ name: 'Printer', categoryId: 'cat-2', purchaseCost: 500000 }, ACTOR);
+    await svc.addCost(pc.id, {
+      kind: 'service', amount: 80000, date: '2026-11-01', description: 'Compressor cleaning',
+    }, ACTOR);
+    await svc.addCost(pc.id, { kind: 'PART', amount: 25000.5, quantity: 1 }, ACTOR);
+
+    const row = await svc.detail(pc.id);
+    assert.deepStrictEqual(row.costSummary, {
+      purchaseCost: 500000, recordedCost: 105000.5, totalCost: 605000.5, entries: 2,
+    });
+    assert.strictEqual(row.costs.length, 2);
+    // kind is normalised to upper case so the UI filter never splits on case
+    assert.strictEqual(env.assetCosts[0].kind, 'SERVICE');
+    assert.strictEqual(env.assetCosts[0].sourceType, 'MANUAL');
+    assert.strictEqual(env.audits.at(-1).action, 'ASSET_COST_ADDED');
+  });
+
+  await test('an asset with no costs reports its purchase price as the total', async () => {
+    const { svc } = makeSvc();
+    const pc = await svc.create({ name: 'Chair', purchaseCost: 1200 }, ACTOR);
+    const row = await svc.detail(pc.id);
+    assert.deepStrictEqual(row.costSummary, { purchaseCost: 1200, recordedCost: 0, totalCost: 1200, entries: 0 });
+  });
+
+  await test('a 0 / negative amount, an unknown kind or a bad reference is refused', async () => {
+    const { svc } = makeSvc();
+    const pc = await svc.create({ name: 'Printer' }, ACTOR);
+    await assert.rejects(() => svc.addCost(pc.id, { kind: 'SERVICE', amount: 0 }, ACTOR), /greater than 0/);
+    await assert.rejects(() => svc.addCost(pc.id, { kind: 'SERVICE', amount: -5 }, ACTOR), /greater than 0/);
+    await assert.rejects(() => svc.addCost(pc.id, { kind: 'BRIBE', amount: 10 }, ACTOR), /Unknown cost kind/);
+    await assert.rejects(
+      () => svc.addCost(pc.id, { kind: 'SERVICE', amount: 10, accountId: 'nope' }, ACTOR),
+      /Unknown account/,
+    );
+    await assert.rejects(
+      () => svc.addCost(pc.id, { kind: 'SERVICE', amount: 10, supplierId: 'nope' }, ACTOR),
+      /Unknown supplier/,
+    );
+    await assert.rejects(() => svc.addCost('missing-asset', { kind: 'SERVICE', amount: 10 }, ACTOR), /not found/);
+  });
+
+  await test('a hand-typed cost can be removed, an invoice-posted one cannot', async () => {
+    const { svc, env } = makeSvc();
+    const pc = await svc.create({ name: 'Printer' }, ACTOR);
+    const manual = await svc.addCost(pc.id, { kind: 'SERVICE', amount: 5000 }, ACTOR);
+    await svc.removeCost(pc.id, manual.id, ACTOR);
+    assert.strictEqual(env.assetCosts.length, 0);
+    assert.strictEqual(env.audits.at(-1).action, 'ASSET_COST_DELETED');
+
+    // an invoice line writes a system row: removing it here would leave the
+    // posted bill and the ledger disagreeing, so it must be refused
+    env.assetCosts.push({
+      id: 'cost-inv', assetId: pc.id, kind: 'PURCHASE', amount: 9000,
+      date: new Date('2026-10-20T00:00:00Z'), sourceType: 'INVOICE', sourceId: 'ii-1',
+    });
+    await assert.rejects(() => svc.removeCost(pc.id, 'cost-inv', ACTOR), /posted invoice/);
+    assert.strictEqual(env.assetCosts.length, 1);
+    // a row of another asset is not found through this asset's id
+    await assert.rejects(() => svc.removeCost('other-asset', 'cost-inv', ACTOR), /not found/);
   });
 
   console.log('\n== Asset Setup CRUD (categories / locations / custodians) ==');

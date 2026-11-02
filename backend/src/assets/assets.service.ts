@@ -48,9 +48,19 @@ const CATEGORY_CODES: Record<string, string> = {
   copierprinter: 'PRI',
 };
 
+/** Asset cost ledger (§14.5) — what the money was spent on. The purchase
+ *  price is NOT a kind here: it lives on Asset.purchaseCost, so the two can
+ *  never disagree about what acquisition cost. */
+const COST_KINDS = ['PURCHASE', 'SERVICE', 'REPAIR', 'PART', 'CONSUMABLE', 'OTHER'] as const;
+
 const SPEC_TYPES = ['text', 'number', 'select'] as const;
 const MAX_SPEC_FIELDS = 30;
 const MAX_SPEC_VALUE = 200;
+
+/** 2-decimal money rounding — totals are compared and printed in kyat. */
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
 
 /** "Connection type" → "connection_type" — the key stored on every asset. */
 function specKeyFrom(label: string): string {
@@ -102,10 +112,32 @@ export class AssetsService {
           include: { fromLocation: true, toLocation: true, createdBy: { select: { username: true, fullName: true } } },
         },
         poItems: { include: { purchaseOrder: { select: { poNumber: true, supplier: { select: { name: true } } } } } },
+        // the cost ledger, newest first — "how much has this asset cost us"
+        costs: {
+          orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+          include: {
+            account: { select: { id: true, code: true, name: true } },
+            supplier: { select: { id: true, name: true } },
+            createdBy: { select: { username: true } },
+          },
+        },
       },
     });
     if (!asset) throw new NotFoundException('Asset not found');
-    return asset;
+    // Total cost of ownership = what we paid for it + everything spent since.
+    // Computed on read (never stored on the asset row) so a ledger correction
+    // can never leave a stale total behind.
+    const purchaseCost = asset.purchaseCost != null ? Number(asset.purchaseCost) : 0;
+    const recordedCost = asset.costs.reduce((sum, c) => sum + Number(c.amount), 0);
+    return {
+      ...asset,
+      costSummary: {
+        purchaseCost: round2(purchaseCost),
+        recordedCost: round2(recordedCost),
+        totalCost: round2(purchaseCost + recordedCost),
+        entries: asset.costs.length,
+      },
+    };
   }
 
   async create(data: {
@@ -256,6 +288,80 @@ export class AssetsService {
       newValue: { locationId: updated.locationId, custodian: updated.custodian },
     });
     return updated;
+  }
+
+  /**
+   * Record money spent on this asset AFTER it was acquired (§14.5): a service
+   * visit, a spare part, consumables used on it, freight. The purchase price
+   * itself is not entered here — it belongs to the asset's own row, so the
+   * total never counts the same kyat twice.
+   */
+  async addCost(assetId: string, data: {
+    kind: string; amount: number; date?: string; quantity?: number;
+    accountId?: string; supplierId?: string; description?: string;
+  }, actor: Actor) {
+    const asset = await this.prisma.asset.findUnique({ where: { id: assetId }, select: { id: true, assetCode: true } });
+    if (!asset) throw new NotFoundException('Asset not found');
+
+    const kind = String(data.kind ?? '').trim().toUpperCase();
+    if (!(COST_KINDS as readonly string[]).includes(kind)) {
+      throw new BadRequestException(`Unknown cost kind "${data.kind}" — use one of ${COST_KINDS.join(', ')}`);
+    }
+    const amount = Number(data.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('Amount must be greater than 0');
+    }
+    if (data.date && Number.isNaN(new Date(data.date).getTime())) {
+      throw new BadRequestException('Invalid cost date');
+    }
+    if (data.accountId) {
+      const account = await this.prisma.account.findUnique({ where: { id: data.accountId } });
+      if (!account) throw new BadRequestException('Unknown account');
+    }
+    if (data.supplierId) {
+      const supplier = await this.prisma.supplier.findUnique({ where: { id: data.supplierId } });
+      if (!supplier) throw new BadRequestException('Unknown supplier');
+    }
+
+    const row = await this.prisma.assetCost.create({
+      data: {
+        assetId,
+        kind,
+        amount,
+        date: data.date ? new Date(data.date) : undefined,
+        quantity: data.quantity ?? undefined,
+        accountId: data.accountId || undefined,
+        supplierId: data.supplierId || undefined,
+        description: data.description?.trim() || undefined,
+        sourceType: 'MANUAL',
+        createdById: actor.userId,
+      },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ASSET_COST_ADDED', module: 'ASSETS', recordId: assetId,
+      newValue: { assetCode: asset.assetCode, kind, amount: round2(amount), date: data.date ?? null, description: row.description },
+    });
+    return row;
+  }
+
+  /** Remove a hand-typed cost row. Rows posted from an invoice are refused —
+   *  deleting one would leave the finance document and this ledger disagreeing;
+   *  the invoice is where that correction belongs. */
+  async removeCost(assetId: string, costId: string, actor: Actor) {
+    const row = await this.prisma.assetCost.findUnique({ where: { id: costId } });
+    if (!row || row.assetId !== assetId) throw new NotFoundException('Cost entry not found');
+    if (row.sourceType !== 'MANUAL') {
+      throw new ConflictException('This cost came from a posted invoice — correct it on the invoice, not here');
+    }
+    await this.prisma.assetCost.delete({ where: { id: costId } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ASSET_COST_DELETED', module: 'ASSETS', recordId: assetId,
+      oldValue: { kind: row.kind, amount: Number(row.amount), date: row.date, description: row.description },
+      severity: 'WARNING',
+    });
+    return { success: true };
   }
 
   /** §66 policy — assets referenced by procurement history never hard-delete:

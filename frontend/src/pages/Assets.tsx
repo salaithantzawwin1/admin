@@ -5,6 +5,7 @@ import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '..
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AssetSetupTab } from '../components/AssetSetupTab';
+import { categorySegment } from '../util/assetCode';
 
 interface AssetRow {
   id: string;
@@ -43,8 +44,35 @@ interface MovementRow {
   createdBy?: { username: string } | null;
 }
 
+/** One row of the asset cost ledger (§14.5) — money spent on the asset AFTER
+ *  it was bought: a service visit, a spare part, consumables. Decimal fields
+ *  arrive as strings from the API. */
+interface CostRow {
+  id: string;
+  date: string;
+  kind: string;
+  amount: string;
+  quantity?: number | null;
+  description?: string | null;
+  /** MANUAL = typed here (deletable); INVOICE = came from a posted bill */
+  sourceType: string;
+  account?: { code?: string | null; name: string } | null;
+  supplier?: { name: string } | null;
+  createdBy?: { username: string } | null;
+}
+
+/** Total cost of ownership, computed by the backend from the asset + ledger. */
+interface CostSummary {
+  purchaseCost: number;
+  recordedCost: number;
+  totalCost: number;
+  entries: number;
+}
+
 interface AssetDetail extends AssetRow {
   movements: MovementRow[];
+  costs: CostRow[];
+  costSummary: CostSummary;
   poItems: { purchaseOrder: { poNumber: string; supplier: { name: string } } }[];
 }
 
@@ -85,6 +113,9 @@ export default function Assets() {
   const [detail, setDetail] = useState<AssetDetail | null>(null);
   const [transfer, setTransfer] = useState<{ id: string; name: string; toLocationId: string; custodian: string; note: string } | null>(null);
   const [toDelete, setToDelete] = useState<AssetRow | null>(null);
+  // §14.5 cost ledger: add form + the row queued for removal
+  const [costForm, setCostForm] = useState<{ kind: string; date: string; amount: string; description: string } | null>(null);
+  const [costToDelete, setCostToDelete] = useState<CostRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,6 +224,41 @@ export default function Assets() {
     }
   };
 
+  /** §14.5 — record money spent on this asset (service / part / consumable). */
+  const submitCost = async () => {
+    if (!detail || !costForm) return;
+    setError(null);
+    try {
+      await api(`/assets/${detail.id}/costs`, {
+        method: 'POST',
+        body: {
+          kind: costForm.kind,
+          amount: Number(costForm.amount),
+          date: costForm.date || undefined,
+          description: costForm.description.trim() || undefined,
+        },
+      });
+      setCostForm(null);
+      await openDetail(detail.id);
+      await load();
+    } catch (e) {
+      // keep the dialog open and say why (the API rejects a 0 amount etc.)
+      setError(e instanceof Error ? e.message : 'Failed to add the cost');
+    }
+  };
+
+  const removeCostEntry = async (row: CostRow) => {
+    if (!detail) return;
+    try {
+      await api(`/assets/${detail.id}/costs/${row.id}`, { method: 'DELETE' });
+      setCostToDelete(null);
+      await openDetail(detail.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove the cost');
+    }
+  };
+
   const downloadCsv = async () => {
     try {
       const res = await fetch('/api/assets/csv', { headers: { Authorization: `Bearer ${getToken()}` } });
@@ -219,8 +285,7 @@ export default function Assets() {
     : [{ key: 'register', label: 'Asset Register' }];
   // auto-code segment the backend derives from the chosen category
   // ("IT Equipment" → AST-ITE-…), mirrored here so the dialog can preview it
-  const autoSeg = (categories.find((c) => c.id === form?.categoryId)?.name ?? '')
-    .toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+  const autoSeg = categorySegment(categories.find((c) => c.id === form?.categoryId)?.name);
   // fields the chosen category defines — the questions this asset must answer
   const formSpecFields: SpecField[] = categories.find((c) => c.id === form?.categoryId)?.specFields ?? [];
   const setSpec = (key: string, value: string) =>
@@ -494,6 +559,73 @@ export default function Assets() {
             </div>
           ) : null}
           {detail.description && <p className="text-sm text-gray-600 mb-4">{detail.description}</p>}
+
+          {/* §14.5 cost ledger — purchase price + everything spent since */}
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h3 className="text-sm font-semibold text-gray-700">Cost &amp; spending</h3>
+            {canManage && (
+              <Button
+                variant="ghost"
+                onClick={() => setCostForm({
+                  kind: 'SERVICE',
+                  date: new Date().toISOString().slice(0, 10),
+                  amount: '',
+                  description: '',
+                })}
+              >
+                + Add cost
+              </Button>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-3 text-sm mb-3">
+            <div>
+              <span className="text-gray-400 text-xs block">Purchase cost</span>
+              <span className="tabular-nums">{detail.costSummary.purchaseCost.toLocaleString()}</span>
+            </div>
+            <div>
+              <span className="text-gray-400 text-xs block">Spent since ({detail.costSummary.entries})</span>
+              <span className="tabular-nums">{detail.costSummary.recordedCost.toLocaleString()}</span>
+            </div>
+            <div>
+              <span className="text-gray-400 text-xs block">Total cost</span>
+              <span className="font-semibold tabular-nums">{detail.costSummary.totalCost.toLocaleString()}</span>
+            </div>
+          </div>
+          {detail.costs.length === 0 ? (
+            <Empty label="No costs recorded yet" />
+          ) : (
+            <ul className="divide-y divide-gray-100 text-sm mb-4">
+              {detail.costs.map((c) => (
+                <li key={c.id} className="py-2 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <span className="font-medium text-gray-800">{c.kind}</span>
+                    <span className="text-gray-500"> — {c.description ?? '—'}</span>
+                    {(c.supplier?.name || c.account?.name) && (
+                      <div className="text-xs text-gray-400">
+                        {[c.supplier?.name, c.account?.name].filter(Boolean).join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-medium tabular-nums">{Number(c.amount).toLocaleString()}</div>
+                    <div className="text-xs text-gray-400">
+                      {c.date.slice(0, 10)}{c.sourceType === 'INVOICE' ? ' · invoice' : ''}
+                    </div>
+                    {canManage && c.sourceType === 'MANUAL' && (
+                      <button
+                        type="button"
+                        className="text-xs text-red-600 hover:underline mt-0.5"
+                        onClick={() => setCostToDelete(c)}
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <h3 className="text-sm font-semibold text-gray-700 mb-2">Movement history</h3>
           {detail.movements.length === 0 ? (
             <Empty label="No movements recorded" />
@@ -518,6 +650,57 @@ export default function Assets() {
               ))}
             </ul>
           )}
+        </Modal>
+      )}
+
+      {/* §14.5 add a cost against the open asset */}
+      {costForm && detail && (
+        <Modal title={`Add cost — ${detail.assetCode}`} onClose={() => setCostForm(null)} error={error}>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">What was it for?</label>
+              <Select value={costForm.kind} onChange={(e) => setCostForm({ ...costForm, kind: e.target.value })}>
+                <option value="SERVICE">SERVICE — service / maintenance visit</option>
+                <option value="REPAIR">REPAIR — breakdown repair</option>
+                <option value="PART">PART — spare part</option>
+                <option value="CONSUMABLE">CONSUMABLE — toner, cartridge, filters…</option>
+                <option value="PURCHASE">PURCHASE — accessories / other purchase</option>
+                <option value="OTHER">OTHER</option>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+                <Input type="date" value={costForm.date} onChange={(e) => setCostForm({ ...costForm, date: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Amount (Ks)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={costForm.amount}
+                  onChange={(e) => setCostForm({ ...costForm, amount: e.target.value })}
+                  placeholder="0"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Note</label>
+              <Input
+                value={costForm.description}
+                onChange={(e) => setCostForm({ ...costForm, description: e.target.value })}
+                placeholder="e.g. Gas refill + compressor cleaning"
+              />
+            </div>
+            <p className="text-xs text-gray-400">
+              Recorded against this asset only — the purchase price stays on the asset row, so the
+              total never counts the same money twice.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setCostForm(null)}>Cancel</Button>
+            <Button disabled={!costForm.amount || Number(costForm.amount) <= 0} onClick={() => void submitCost()}>Save</Button>
+          </div>
         </Modal>
       )}
 
@@ -552,6 +735,18 @@ export default function Assets() {
             <Button onClick={() => void submitTransfer()}>Transfer</Button>
           </div>
         </Modal>
+      )}
+
+      {/* remove a hand-typed cost row (invoice rows are refused by the API) */}
+      {costToDelete && (
+        <ConfirmDialog
+          title={`Remove this ${costToDelete.kind.toLowerCase()} cost?`}
+          description={`${Number(costToDelete.amount).toLocaleString()} Ks on ${costToDelete.date.slice(0, 10)} will be removed from this asset's history.`}
+          variant="danger"
+          confirmLabel="Remove"
+          onClose={() => setCostToDelete(null)}
+          onConfirm={async () => { await removeCostEntry(costToDelete); }}
+        />
       )}
 
       {/* delete — §66: procurement-linked assets are refused by the API */}

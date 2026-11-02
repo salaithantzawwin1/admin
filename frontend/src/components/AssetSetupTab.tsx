@@ -5,6 +5,7 @@ import { Button, Card, Empty, Input, Select, Table } from './ui';
 import { Modal } from './Modal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { toast } from './Toast';
+import { categorySegment } from '../util/assetCode';
 
 /**
  * "Asset Setup (New)" tab of /asset-register — full CRUD over the three master
@@ -94,18 +95,9 @@ const SECTIONS: Section[] = [
 const sectionOf = (kind: SetupKind) => SECTIONS.find((s) => s.kind === kind) ?? SECTIONS[0];
 const errText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 
-/** Category_Code overrides — mirrors CATEGORY_CODES in assets.service.ts, so a
- *  Printer / Copier category shows PRI exactly as the backend will mint it. */
-const FIXED_CATEGORY_CODES: Record<string, string> = {
-  printer: 'PRI', copier: 'PRI', printercopier: 'PRI', copierprinter: 'PRI',
-};
-
-/** Mirrors assets.service.ts categorySegment: a fixed Category_Code for known
- *  names, else the first three A-Z/0-9 chars of the name. Kept in lockstep so
- *  the row can show the code segment a category will mint. */
-const codeSeg = (name: string) =>
-  FIXED_CATEGORY_CODES[name.toLowerCase().replace(/[^a-z0-9]/g, '')]
-  ?? name.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+/** The code segment a category mints (Printer / Copier -> PRI) — shared with
+ *  the register page and mirroring assets.service.ts. */
+const codeSeg = categorySegment;
 
 export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
   const canManage = hasPermission('assets.manage');
