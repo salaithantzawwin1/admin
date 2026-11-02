@@ -338,7 +338,8 @@ export class WorkflowService {
       }),
       this.prisma.requestDocument.count({ where }),
     ]);
-    if (params.docType === 'CAR_REQUEST') await this.attachSharedRideAcks(items as Array<{ docNumber?: string; carRequest?: any }>);
+    if (params.docType === 'CAR_REQUEST')
+      await this.attachSharedRideAcks(items as Array<{ docNumber?: string; status?: string; carRequest?: any }>);
     return { items, total, page: params.page, pageSize: params.pageSize };
   }
 
@@ -351,7 +352,7 @@ export class WorkflowService {
    *  - `sharedRide`: the group's taps, for a member whose own assignment row has
    *    none (the list used to draw "⏳ Noted" as if nothing happened).
    */
-  private async attachSharedRideAcks(items: Array<{ docNumber?: string; carRequest?: any }>) {
+  private async attachSharedRideAcks(items: Array<{ docNumber?: string; status?: string; carRequest?: any }>) {
     const groups = Array.from(
       new Set(items.map((i) => i.carRequest?.sharedTripId).filter((g: unknown): g is string => typeof g === 'string')),
     );
@@ -395,7 +396,8 @@ export class WorkflowService {
     }
     for (const item of items) {
       const cr = item.carRequest;
-      if (!cr?.sharedTripId) continue;
+      // a CANCELLED / REJECTED row never rode — no badge, no inherited taps
+      if (!cr?.sharedTripId || !rides(item.status ?? '')) continue;
       // every group member carries the badge, own taps or not
       const others = (docNumbers.get(cr.sharedTripId) ?? []).filter((d) => d !== item.docNumber);
       if (others.length > 0) cr.sharedWith = others;

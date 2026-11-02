@@ -147,12 +147,17 @@ async function main() {
         id: 'r-44', docNumber: 'CAR-202610-0044', status: 'COMPLETED',
         carRequest: { vehicleId: 'v4', sharedTripId: GROUP, assignment: { driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, estimatedReturnAt: null } },
       },
+      {
+        id: 'r-45', docNumber: 'CAR-202610-0045', status: 'CANCELLED',
+        carRequest: { vehicleId: null, sharedTripId: GROUP, assignment: null },
+      },
     ];
     const items = await list(rows, [
       { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0044', status: 'COMPLETED' }, assignment: { driverNotedAt: new Date(), driverArrivedAt: null, driverBackAtOfficeAt: null } },
       { sharedTripId: GROUP, request: { docNumber: 'CAR-202610-0045', status: 'CANCELLED' }, assignment: null },
     ]);
     assert.strictEqual(items[0].carRequest.sharedWith, undefined, 'a cancelled companion must not badge the ride');
+    assert.strictEqual(items[1].carRequest.sharedWith, undefined, 'a cancelled row itself must not be badged as a shared ride');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
