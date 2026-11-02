@@ -197,6 +197,10 @@ export default function Inventory() {
 
   // history viewer
   const [historyFor, setHistoryFor] = useState<Item | null>(null);
+  // §14/§24 — issue stock to a fixed asset (toner to a printer, filter to an Aircon)
+  const [issueFor, setIssueFor] = useState<Item | null>(null);
+  const [issueForm, setIssueForm] = useState({ assetId: '', quantity: 1, note: '' });
+  const [assetOptions, setAssetOptions] = useState<{ id: string; assetCode: string; name: string }[]>([]);
   // Ledger modal filters — movement type + date window
   const [ledgerFilter, setLedgerFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
   const [ledgerFrom, setLedgerFrom] = useState('');
@@ -430,6 +434,45 @@ export default function Inventory() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
       throw e; // ConfirmDialog keeps itself open and shows the error inside
+    }
+  };
+
+  /** Open the issue dialog; the asset picker is fetched on first use and
+   *  degrades to empty when the user has no assets.read grant. */
+  const openIssue = async (item: Item) => {
+    setIssueFor(item);
+    setIssueForm({ assetId: '', quantity: 1, note: '' });
+    if (!assetOptions.length) {
+      try {
+        setAssetOptions(await api<{ id: string; assetCode: string; name: string }[]>('/assets'));
+      } catch {
+        // no grant → the select stays empty; the dialog text explains the step
+      }
+    }
+  };
+
+  /** The units leave the store AND land on the asset's cost history — the stock
+   *  balance and the machine's spend are the same fact, written once. */
+  const doIssueToAsset = async () => {
+    if (!issueFor || !issueForm.assetId || issueForm.quantity <= 0) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/inventory/items/${issueFor.id}/issue-to-asset`, {
+        method: 'POST',
+        body: {
+          assetId: issueForm.assetId,
+          quantity: Number(issueForm.quantity),
+          note: issueForm.note.trim() || undefined,
+        },
+      });
+      toast(`${issueForm.quantity} ${issueFor.unit} of ${issueFor.name} issued`);
+      setIssueFor(null);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -680,7 +723,16 @@ export default function Inventory() {
                         {cart[i.id] ? `In cart (${cart[i.id]}) +` : '+ Request'}
                       </button>
                       {canManage && (
-                        <button className="text-gray-500 hover:underline" title="Stock ledger — who issued/received, when, what" onClick={() => openHistory(i)}>Ledger</button>
+                        <>
+                          <button
+                            className="text-gray-500 hover:underline mr-3"
+                            title="Issue these units to a fixed asset — the machine's cost history records it"
+                            onClick={() => void openIssue(i)}
+                          >
+                            Issue
+                          </button>
+                          <button className="text-gray-500 hover:underline" title="Stock ledger — who issued/received, when, what" onClick={() => openHistory(i)}>Ledger</button>
+                        </>
                       )}
                     </td>
                   </tr>
@@ -1444,6 +1496,64 @@ export default function Inventory() {
       )}
 
       {/* ledger drawer — Who / When / What for every stock movement */}
+      {/* §14/§24 issue stock to an asset */}
+      {issueFor && (
+        <Modal
+          title={`Issue to asset — ${issueFor.code} ${issueFor.name}`}
+          onClose={() => setIssueFor(null)}
+          error={error || undefined}
+        >
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Which asset is it for?</label>
+              <Select value={issueForm.assetId} onChange={(e) => setIssueForm({ ...issueForm, assetId: e.target.value })}>
+                <option value="">— choose an asset —</option>
+                {assetOptions.map((a) => <option key={a.id} value={a.id}>{a.assetCode} · {a.name}</option>)}
+              </Select>
+              {assetOptions.length === 0 && (
+                <p className="text-xs text-gray-400 mt-1">
+                  No assets available — you need the asset register (assets.read) to pick one.
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Quantity ({issueFor.unit})</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={issueFor.balance}
+                  value={issueForm.quantity}
+                  onChange={(e) => setIssueForm({ ...issueForm, quantity: Number(e.target.value) })}
+                />
+                <p className="text-xs text-gray-400 mt-1">In stock: {issueFor.balance} {issueFor.unit}</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Note</label>
+                <Input
+                  value={issueForm.note}
+                  onChange={(e) => setIssueForm({ ...issueForm, note: e.target.value })}
+                  placeholder="e.g. Toner swap, 2nd floor printer"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">
+              The units leave the store and are added to the asset's cost history at
+              {issueFor.lastUnitPrice != null ? ` ${Number(issueFor.lastUnitPrice).toLocaleString()} Ks each` : ' no price (no purchase price recorded yet)'}.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setIssueFor(null)}>Cancel</Button>
+            <Button
+              disabled={!issueForm.assetId || issueForm.quantity <= 0 || busy}
+              onClick={() => void doIssueToAsset()}
+            >
+              {busy ? 'Issuing…' : 'Issue'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
       {historyFor && (
         <Modal title={`Ledger — ${historyFor.code} ${historyFor.name}`} onClose={() => setHistoryFor(null)}>
           <div className="text-sm text-gray-600 mb-3">

@@ -224,6 +224,8 @@ export class InventoryService {
     supplier?: string,
     supplierId?: string,
     issuedToEmployeeId?: string | null,
+    assetId?: string,
+    purpose?: string,
   ) {
     const run = async (tx: Prisma.TransactionClient) => {
       // row lock so concurrent issues cannot both pass the balance check
@@ -243,6 +245,8 @@ export class InventoryService {
           itemId, type, quantity: signedQty, balanceAfter: newBalance,
           reference, requestId, createdById: actor.userId,
           ...(issuedToEmployeeId ? { issuedToEmployeeId } : {}),
+          ...(assetId ? { assetId } : {}),
+          ...(purpose ? { purpose } : {}),
           ...(unitPrice !== undefined ? { unitPrice } : {}),
           ...(supplier ? { supplier } : {}),
           ...(supplierId ? { supplierId } : {}),
@@ -250,6 +254,69 @@ export class InventoryService {
       });
     };
     return client ? run(client) : this.prisma.$transaction(run);
+  }
+
+  /**
+   * Issue stock straight to a fixed asset (§14/§24) — a cartridge to a printer,
+   * a filter to an Aircon, a part used during a maintenance job.
+   *
+   * The stock ledger stays the source of truth for the balance (ISSUE with
+   * purpose ASSET_USE / MAINTENANCE), and the asset cost ledger gets a
+   * CONSUMABLE row at the item's last purchase price, so "what has this printer
+   * cost us" already includes its consumables without a second, hand-kept total.
+   * No price known yet → the usage is still recorded, with no invented money.
+   */
+  async issueToAsset(data: {
+    itemId: string; assetId: string; quantity: number; note?: string; maintenanceRecordId?: string;
+  }, actor: Actor) {
+    if (!Number.isInteger(data.quantity) || data.quantity <= 0) {
+      throw new BadRequestException('Quantity must be a positive whole number');
+    }
+    const item = await this.prisma.inventoryItem.findUnique({ where: { id: data.itemId } });
+    if (!item) throw new NotFoundException('Item not found');
+    const asset = await this.prisma.asset.findUnique({ where: { id: data.assetId } });
+    if (!asset) throw new BadRequestException('Unknown asset');
+
+    let reference = data.note?.trim() || `Issued to ${asset.assetCode}`;
+    if (data.maintenanceRecordId) {
+      const record = await this.prisma.maintenanceRecord.findUnique({ where: { id: data.maintenanceRecordId } });
+      if (!record) throw new BadRequestException('Unknown maintenance record');
+      reference = `${record.code} — ${reference}`;
+    }
+
+    const unitPrice = item.lastUnitPrice != null ? Number(item.lastUnitPrice) : undefined;
+    const tx = await this.applyTransaction(
+      data.itemId, 'ISSUE', -data.quantity, reference, undefined, actor,
+      undefined, undefined, undefined, undefined, null,
+      data.assetId, data.maintenanceRecordId ? 'MAINTENANCE' : 'ASSET_USE',
+    );
+
+    // CONSUMABLE row on the asset — one per issue (sourceId = the stock tx id)
+    if (unitPrice !== undefined && unitPrice > 0) {
+      await this.prisma.assetCost.create({
+        data: {
+          assetId: data.assetId,
+          kind: 'CONSUMABLE',
+          amount: Math.round(unitPrice * data.quantity * 100) / 100,
+          quantity: data.quantity,
+          description: `${item.name} × ${data.quantity} ${item.unit} — ${item.code}`,
+          sourceType: 'STOCK_ISSUE',
+          sourceId: tx.id,
+          createdById: actor.userId,
+        },
+      });
+    }
+
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'INVENTORY_ISSUED_TO_ASSET', module: 'INVENTORY', recordId: data.itemId,
+      newValue: {
+        assetCode: asset.assetCode, itemCode: item.code, quantity: data.quantity,
+        balanceAfter: tx.balanceAfter, unitPrice, maintenanceRecordId: data.maintenanceRecordId ?? null,
+      },
+    });
+    const updated = await this.prisma.inventoryItem.findUnique({ where: { id: data.itemId } });
+    return { transaction: tx, item: updated, unitPrice: unitPrice ?? null };
   }
 
   // ---------- issue requests (Plan §12: via the reusable approval workflow) ----------

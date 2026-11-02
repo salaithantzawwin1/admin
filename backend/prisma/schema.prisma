@@ -1089,6 +1089,8 @@ model StockTransaction {
   unitPrice          Decimal?    @db.Decimal(12, 2) // price per unit for PURCHASE entries (spending report)
   requestId          String?     @db.Uuid // link to the supply request that caused an ISSUE
   issuedToEmployeeId String?     @db.Uuid // employee who physically received an ISSUE (ledger)
+  assetId            String?     @db.Uuid // machine this ISSUE was consumed by (§14/§24)
+  purpose            String? // ASSET_USE / MAINTENANCE / ISSUE_TO_STAFF / GENERAL
   createdById        String      @db.Uuid
   createdAt          DateTime    @default(now())
 
@@ -1097,10 +1099,12 @@ model StockTransaction {
   createdBy        User             @relation("StockTransactions", fields: [createdById], references: [id])
   request          RequestDocument? @relation("StockTxRequest", fields: [requestId], references: [id])
   issuedToEmployee Employee?        @relation("StockTxIssuedTo", fields: [issuedToEmployeeId], references: [id])
+  asset            Asset?           @relation("StockTxAsset", fields: [assetId], references: [id])
 
   @@index([itemId, createdAt])
   @@index([requestId])
   @@index([issuedToEmployeeId])
+  @@index([assetId])
   @@map("stock_transactions")
 }
 
@@ -1444,6 +1448,7 @@ model Asset {
   costs        AssetCost[] // every later cost event (service, parts, consumables)
   maintenanceRecords   MaintenanceRecord[]   // service history (§13/§14)
   maintenanceSchedules MaintenanceSchedule[] // preventive due dates (§15)
+  stockTxns    StockTransaction[] @relation("StockTxAsset") // consumables used on it
 
   @@index([categoryId])
   @@index([locationId])

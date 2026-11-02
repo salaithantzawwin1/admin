@@ -45,6 +45,14 @@ export class RestockDto {
   @IsOptional() @IsString() supplierId?: string; // Supplier master id (preferred)
 }
 
+export class IssueToAssetDto {
+  @IsString() assetId!: string;
+  @IsInt() @Min(1) quantity!: number;
+  @IsOptional() @IsString() @MaxLength(200) note?: string;
+  /** When the part is used inside a service job, stamp its MRC number. */
+  @IsOptional() @IsString() maintenanceRecordId?: string;
+}
+
 export class SupplierDto {
   @IsString() @MinLength(2) @MaxLength(120) name!: string;
   @IsOptional() @IsString() @MaxLength(40) phone?: string;
@@ -167,6 +175,13 @@ export class InventoryController {
   @Post('restock')
   restock(@Req() req, @Body() dto: RestockDto) {
     return this.inventory.restock(dto, this.actor(req));
+  }
+
+  /** §14/§24 — issue stock to a fixed asset (cartridge → printer, filter → Aircon). */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('items/:id/issue-to-asset')
+  issueToAsset(@Req() req, @Param('id') id: string, @Body() dto: IssueToAssetDto) {
+    return this.inventory.issueToAsset({ ...dto, itemId: id }, this.actor(req));
   }
 
   /** Spending per item for one month (defaults to the current month). */
