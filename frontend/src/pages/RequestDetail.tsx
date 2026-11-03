@@ -157,7 +157,7 @@ export default function RequestDetail() {
             <>
               The trip window <b>{fmtDateTime(new Date(confirmPastApprove.start))} → {fmtDateTime(new Date(confirmPastApprove.end))}</b>{' '}
               has already passed. Approve anyway only if the ride really happened — otherwise reject it; stale
-              requests are auto-expired after24 hours anyway.
+              requests are auto-expired 2 hours after the window ends anyway.
             </>
           }
           confirmLabel="Approve anyway"

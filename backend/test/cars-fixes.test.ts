@@ -1164,13 +1164,13 @@ async function main() {
     assert.strictEqual(called, false, 'an empty shift must not even look up admin chats');
   });
 
-  await test('listApprovedUnassigned: hides requests whose window ended >24h ago', async () => {
+  await test('listApprovedUnassigned: hides requests whose window ended >2h ago', async () => {
     const captured: any[] = [];
     const prismaQ: any = { requestDocument: { findMany: async (args: any) => { captured.push(args); return []; } } };
     const svcQ: any = new CarsService(prismaQ, {} as any, {} as any, {} as any, {} as any, {} as any);
     await svcQ.listApprovedUnassigned();
     const gt = captured[0].where.carRequest.endDate.gt as Date;
-    assert.ok(gt instanceof Date && Math.abs(Date.now() - gt.getTime() - 24 * 3600 * 1000) < 60_000, 'queue filter must exclude windows ended >24h ago');
+    assert.ok(gt instanceof Date && Math.abs(Date.now() - gt.getTime() - 2 * 3600 * 1000) < 60_000, 'queue filter must exclude windows ended >2h ago');
   });
 
   // ------------------------------------------------- 8) ⏰ ETA / effective-end (feature: driver Delay)

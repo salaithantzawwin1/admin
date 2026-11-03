@@ -119,8 +119,8 @@ export class TelegramCarActionsService {
       // window already long gone → the trip can no longer happen; the 07:00 cron
       // will expire it — refuse instead of booking a car for a forgotten request
       const crWin = await this.prisma.carRequest.findUnique({ where: { requestId: request.id }, select: { endDate: true } });
-      if (crWin?.endDate && new Date(crWin.endDate).getTime() < Date.now() - 24 * 3600 * 1000) {
-        await this.telegram.sendRaw(chatId, `⌛ ${escapeHtml(docNumber)} — the trip window ended more than 24h ago. It will be auto-expired; ask the requester to submit a new /car request if still needed.`);
+      if (crWin?.endDate && new Date(crWin.endDate).getTime() < Date.now() - 2 * 3600 * 1000) {
+        await this.telegram.sendRaw(chatId, `⌛ ${escapeHtml(docNumber)} — the trip window ended more than 2 hours ago. It is closed as unserved; ask the requester to submit a new /car request if still needed.`);
         return true;
       }
       await this.offerAssignVehicle(request.id, chatId);
@@ -258,7 +258,7 @@ export class TelegramCarActionsService {
   private async sendAssignQueue(chatId: string) {
     const rows = await this.prisma.requestDocument.findMany({
       // expired windows (>24h past) are hidden — the 07:00 cron expires them; serving a forgotten request would book a dead trip
-      where: { docType: 'CAR_REQUEST', status: 'APPROVED', carRequest: { vehicleId: null, endDate: { gt: new Date(Date.now() - 24 * 3600 * 1000) } } },
+      where: { docType: 'CAR_REQUEST', status: 'APPROVED', carRequest: { vehicleId: null, endDate: { gt: new Date(Date.now() - 2 * 3600 * 1000) } } },
       orderBy: { updatedAt: 'desc' },
       take: 10,
       select: {
@@ -325,7 +325,7 @@ export class TelegramCarActionsService {
       // a dead window only makes sense for rides that actually happened, otherwise
       // the request should be rejected/cancelled (stale windows auto-expire >24h)
       const pastWarn = new Date(cr.endDate).getTime() < Date.now()
-        ? '\n⌛ <b>Window already passed</b> — approve only if this trip still happened; otherwise reject it (stale windows auto-expire after 24h).'
+        ? '\n⌛ <b>Window already passed</b> — approve only if this trip still happened; otherwise reject it (stale windows auto-expire 2 hours after the window ends).'
         : '';
       const text = `🆕 <b>New car request — ${escapeHtml(request.docNumber)}</b>\n${escapeHtml(request.title)}\n👤 ${escapeHtml(request.requester.fullName)}${when}${pastWarn}${dest}${special}${why}`;
       for (const a of approvers) {

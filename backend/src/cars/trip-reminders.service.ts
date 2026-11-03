@@ -8,6 +8,12 @@ import { yangonShort, yangonClock } from '../util/yangon-time';
 
 const REMINDER_TYPE = 'REMINDER' as never; // existing NotificationType enum value
 
+/** How long a car request may outlive its own window before it is closed unserved.
+ *  2 hours, not 24: nothing can be served for a window that is over, and a day of
+ *  retention kept yesterday's trips in the Administration queue under "window
+ *  passed" as if they were still waiting for a car (CAR-202611-0004). */
+const STALE_AFTER_MS = 2 * 3600 * 1000;
+
 /**
  * Reminders for upcoming car trips (Plan §20): when a week's worth of requests
  * exists, requesters get a bell reminder 24h before their trip starts.   * Idempotent — at most one REMINDER per request (checked before sending).
@@ -606,10 +612,10 @@ export class TripRemindersService {
   // morning after power cuts, so a once-a-day 07:00 tick kept getting killed
   // before it ever ran; windows ended >24h then sat APPROVED forever
   // (CAR-202610-0007). Same 24h rule, just a cadence that survives reboots.
-  @Cron('0 5,35 * * * *')
+  @Cron('0 */5 * * * *') // every 5 min — a dead window must leave the queue promptly
   async expireStaleRequests() {
     try {
-      const cutoff = new Date(Date.now() - 24 * 3600 * 1000);
+      const cutoff = new Date(Date.now() - STALE_AFTER_MS);
       const stale = await this.prisma.requestDocument.findMany({
         where: {
           docType: 'CAR_REQUEST',
@@ -628,19 +634,32 @@ export class TripRemindersService {
           const live = await this.prisma.carAssignment.findFirst({ where: { requestId: r.id, releasedAt: null }, select: { id: true } });
           if (live) continue;
         }
+        // was a car ever sent? "nobody assigned one" and "assigned, but the driver
+        // never confirmed" are different stories and must read differently
+        const everAssigned = !!(await this.prisma.carAssignment.findFirst({ where: { requestId: r.id }, select: { id: true } }));
         await this.prisma.$transaction([
           this.prisma.requestDocument.update({ where: { id: r.id }, data: { status: 'CANCELLED' } }),
           this.prisma.carRequest.update({ where: { requestId: r.id }, data: { status: 'CANCELLED' } }),
         ]);
         await this.prisma.auditLog.create({
-          data: { action: 'REQUEST_AUTO_EXPIRED', module: 'CARS', recordId: r.id, newValue: { reason: 'Window ended >24h ago without approval/assignment — auto-expired', wasStatus: r.status } },
+          data: {
+            action: 'REQUEST_AUTO_EXPIRED', module: 'CARS', recordId: r.id,
+            newValue: {
+              reason: everAssigned
+                ? 'Window ended without the driver confirmation — closed unserved'
+                : 'Window ended without a vehicle — closed unserved',
+              wasStatus: r.status, everAssigned,
+            },
+          },
         }).catch(() => undefined);
         await this.prisma.notification.create({
           data: {
             userId: r.requesterId,
             type: 'CANCELLED' as never,
             title: `⌛ Request expired — ${r.docNumber}`,
-            body: 'The trip window passed without the request being used, so it was closed automatically. Submit a new request if you still need the car.',
+            body: everAssigned
+              ? 'A car and driver were assigned, but the trip was never confirmed. The window has passed, so the request was closed — submit a new one if the ride is still needed.'
+              : 'No vehicle was assigned before the trip window ended, so the request was closed automatically. Submit a new request if you still need the car.',
             link: `/requests/${r.id}`,
             requestId: r.id,
           },
@@ -648,6 +667,19 @@ export class TripRemindersService {
         await this.telegram
           .mirrorToUser(r.requesterId, `⌛ Request expired — ${r.docNumber}`, 'The trip window passed without the request being used, so it was closed automatically. /car နဲ့ အသစ်ပြန်တောင်းနိုင်ပါတယ်။', `/requests/${r.id}`)
           .catch(() => undefined);
+        // Administration learns too: an unserved window is a dispatch miss to review
+        try {
+          const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+          await this.notifications.notifyMany(adminIds.filter((id) => id !== r.requesterId), {
+            type: 'CANCELLED' as never,
+            title: `⌛ Closed unserved — ${r.docNumber}`,
+            body: everAssigned
+              ? 'A car and driver were assigned but the driver never confirmed the trip, and the window has now passed — the request was closed.'
+              : 'The trip window ended with no vehicle assigned, so the request was closed unserved.',
+            link: `/requests/${r.id}`,
+            requestId: r.id,
+          });
+        } catch { /* best-effort — the close itself already happened */ }
         expired++;
       }
       if (expired > 0) this.logger.log(`auto-expired ${expired} stale car request(s) (window ended >24h ago)`);

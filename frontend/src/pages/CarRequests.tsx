@@ -499,8 +499,8 @@ export default function CarRequests() {
                   </h3>
                   <p className="text-xs text-gray-400 mb-3">
                     The trip time is over and these can no longer be served. They are kept out of the live list
-                    above; open one to cancel it, or leave it — it closes itself 24h after the window ended and
-                    the requester was already told.
+                    above; open one to cancel it, or leave it — it closes itself 2 hours after the window
+                    ended (never assigned, or released without the driver's confirmation), and the requester is told.
                   </p>
                   <table className="w-full text-sm">
                     <QueueTableHead />

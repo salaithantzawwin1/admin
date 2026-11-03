@@ -1630,7 +1630,9 @@ export class CarsService {
       where: {
         docType: 'CAR_REQUEST',
         status: 'APPROVED',
-        carRequest: { vehicleId: null, endDate: { gt: new Date(Date.now() - 24 * 3600 * 1000) } },
+        // 2 hours, matching expireStaleRequests(): a window that is over cannot be
+        // served, so it leaves this queue instead of lingering for a day
+        carRequest: { vehicleId: null, endDate: { gt: new Date(Date.now() - 2 * 3600 * 1000) } },
       },
       orderBy: { updatedAt: 'desc' },
       include: {
