@@ -215,6 +215,9 @@ function ReleasedTripNote({ a }: { a: RowAssignment }) {
 }
 
 type CarTab = 'availability' | 'requests' | 'handover';
+/** Rows per page in the Requests tab — the list used to fetch the newest 100 and
+ *  render them all, so the page grew without limit as requests accumulated. */
+const CAR_PAGE_SIZE = 10;
 
 /** Shift-handover summary — Administration sees what the next shift inherits. */
 interface Handover {
@@ -240,6 +243,8 @@ export default function CarRequests() {
   const tab: CarTab = tabParam === 'requests' || tabParam === 'handover' ? tabParam : 'availability';
   const setTab = (t: CarTab) => setSearchParams(t === 'availability' ? {} : { tab: t }, { replace: false });
   const [rows, setRows] = useState<RequestRow[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [queue, setQueue] = useState<QueueRow[]>([]);
   const [acks, setAcks] = useState<ManagerAckRow[]>([]);
   const [fleet, setFleet] = useState<FleetVehicle[]>([]);
@@ -252,12 +257,15 @@ export default function CarRequests() {
 
   const load = useCallback(() => {
     // cars.assign holders (Administration) see every car request; requesters see their own only
-    api<{ items: RequestRow[] }>(
-      canAssign
-        ? '/requests?pageSize=100&docType=CAR_REQUEST'
-        : '/requests?scope=mine&pageSize=100&docType=CAR_REQUEST',
+    api<{ items: RequestRow[]; total: number }>(
+      `/requests?page=${page}&pageSize=${CAR_PAGE_SIZE}&docType=CAR_REQUEST${canAssign ? '' : '&scope=mine'}`,
     )
-      .then((r) => setRows(r.items))
+      .then((r) => {
+        setRows(r.items);
+        setTotal(r.total ?? r.items.length);
+        // the last row of a page can disappear (cancel / complete elsewhere) — step back
+        if (r.items.length === 0 && page > 1) setPage((p) => Math.max(1, p - 1));
+      })
       .catch((e) => setError(e.message));
     api<FleetVehicle[]>('/cars/fleet-overview').then(setFleet).catch(() => setFleet([]));
     // optional manager ack — the backend returns rows only for the requester's
@@ -270,7 +278,7 @@ export default function CarRequests() {
       // shift-handover summary (next Administration shift picks up from here)
       api<Handover>('/cars/handover').then(setHandover).catch(() => setHandover(null));
     }
-  }, []);
+  }, [page, canAssign]);
 
   useEffect(load, [load]);
 
@@ -281,6 +289,7 @@ export default function CarRequests() {
   const now = Date.now();
   const liveQueue = queue.filter((q) => !q.carRequest || new Date(q.carRequest.endDate).getTime() >= now);
   const pastQueue = queue.filter((q) => q.carRequest && new Date(q.carRequest.endDate).getTime() < now);
+  const pageCount = Math.max(1, Math.ceil(total / CAR_PAGE_SIZE));
 
   // auto-refresh: new requests/approvals/assignments appear without manual reload
   useEffect(() => {
@@ -381,7 +390,7 @@ export default function CarRequests() {
           }`}
           onClick={() => setTab('requests')}
         >
-          Requests ({rows.length})
+          Requests ({total || rows.length})
         </button>
         {canAssign && (
         <button
@@ -604,6 +613,32 @@ export default function CarRequests() {
             ))}
           </tbody>
         </table>
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-4 py-3 border-t border-gray-100 text-sm">
+          <span className="text-gray-500">
+            {total === 0
+              ? 'No requests'
+              : `Showing ${(page - 1) * CAR_PAGE_SIZE + 1}–${(page - 1) * CAR_PAGE_SIZE + rows.length} of ${total}`}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ← Prev
+            </button>
+            <span className="text-gray-500">Page {page} of {pageCount}</span>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              disabled={page >= pageCount}
+              className="px-3 py-1.5 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
       </Card>
       )}
 

@@ -343,14 +343,17 @@ export function CarPanel({
               ) : (
                 <span className="text-sm text-gray-400">No vehicle picked yet</span>
               )}
-              {(car.driver ?? car.sharedRide?.driverName ?? assignment?.driver?.name) && (
+              {/* the released branch above already names the driver — printing the
+                  assignment driver here again produced "👤 Lay Win  👤 Lay Win" */}
+              {(car.driver ?? car.sharedRide?.driverName) && (
                 <span className="text-xs font-medium text-gray-700">
-                  👤 {car.driver?.name ?? car.sharedRide?.driverName ?? assignment?.driver?.name}
+                  👤 {car.driver?.name ?? car.sharedRide?.driverName}
                 </span>
               )}
               {assignment?.releasedAt && missingTaps(assignment).length > 0 && (
                 <div className="w-full text-[11px] font-medium text-red-600">
                   driver never tapped {missingTaps(assignment).join(', ')} — booking released
+                  {['REJECTED', 'CANCELLED', 'RETURNED'].includes(status) ? ', request closed unserved' : ''}
                 </div>
               )}
             </div>
@@ -888,8 +891,13 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
         {assigned
           ? chip('done', 'Car assigned')
           : a?.releasedAt
-            // a car WAS assigned and handed back — "not assigned yet" hid that
-            ? chip('pending', 'Released — re-assign')
+            // a car WAS assigned and handed back. Still open → it can be assigned
+            // again (amber). Closed/rejected → history only (gray): "re-assign"
+            // invited work on a request that can never be served (CAR-202611-0004,
+            // auto-closed 2h after its window ended).
+            ? refused
+              ? chip('off', 'Released')
+              : chip('pending', 'Released — re-assign')
             : approved
               ? chip('pending', 'Not assigned yet')
               : chip('off', 'Car assigned')}
