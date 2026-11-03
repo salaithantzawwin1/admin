@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
+import { csvCell } from '../util/csv';
 
 export interface SetBudgetInput {
   accountId: string;
@@ -235,7 +236,3 @@ function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-/** Excel-friendly CSV cell — quotes separators/quotes/newlines per RFC 4180. */
-function csvCell(v: string): string {
-  return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-}

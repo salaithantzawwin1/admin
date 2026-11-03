@@ -11,6 +11,8 @@ import { AuditService } from '../audit/audit.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import { PermissionsService } from '../auth/permissions.service';
 import { Actor } from '../org/org.service';
+import { sniffAnyImage } from '../util/image-sniff';
+import { csvCell } from '../util/csv';
 
 const DOC_PREFIX = 'OSR';
 
@@ -110,12 +112,16 @@ export class InventoryService {
     const ext = path.extname(file.originalname || '').toLowerCase().slice(0, 6) || '.png';
     if (!InventoryService.IMAGE_MIME[ext]) throw new BadRequestException(`Not an image: ${ext}`);
     if (file.size > 5 * 1024 * 1024) throw new BadRequestException('Image too large (max 5 MB)');
+    // trust the bytes, not the file name: a renamed HTML/PHP file is refused
+    const sniffed = sniffAnyImage(file.buffer);
+    if (!sniffed) throw new BadRequestException('Only JPEG, PNG, GIF or WebP images are allowed');
     const item = await this.prisma.inventoryItem.findUnique({ where: { id } });
     if (!item) throw new NotFoundException('Item not found');
 
     if (!fs.existsSync(this.uploadRoot)) fs.mkdirSync(this.uploadRoot, { recursive: true });
-    const storedName = `item-${crypto.randomUUID()}${ext}`;
-    fs.writeFileSync(path.join(this.uploadRoot, storedName), file.buffer);
+    const byMime = Object.entries(InventoryService.IMAGE_MIME).find(([, mime]) => mime === sniffed);
+    const storedName = `item-${crypto.randomUUID()}${byMime?.[0] ?? '.png'}`;
+    fs.writeFileSync(path.join(this.uploadRoot, storedName), file.buffer, { mode: 0o600 });
 
     const old = item.imageStoredName;
     const updated = await this.prisma.inventoryItem.update({ where: { id }, data: { imageStoredName: storedName } });
@@ -730,8 +736,7 @@ export class InventoryService {
       },
     });
     const esc = (v: string | number | null | undefined) => {
-      const s = v === null || v === undefined ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      return csvCell(v);
     };
     const lines: string[] = [];
     lines.push(['Date', 'Type', 'Item code', 'Item name', 'Qty', 'Unit', 'Balance after', 'Ref / doc', 'What (request title)', 'Recorded by', 'Received by (ISSUE)'].join(','));
@@ -998,8 +1003,7 @@ export class InventoryService {
   async spendingCsv(monthStart?: string, monthEnd?: string) {
     const report = await this.spendingReport(monthStart, monthEnd);
     const esc = (v: string | number | null) => {
-      const s = v === null ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      return csvCell(v);
     };
     const lines: string[] = [];
     lines.push(['Item code', 'Item name', 'Unit', 'Qty in', 'Avg unit price', 'Cost'].join(','));

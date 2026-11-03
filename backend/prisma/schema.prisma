@@ -49,6 +49,8 @@ model User {
   username     String     @unique
   email        String?    @unique
   passwordHash String
+  /// set whenever the password changes — tokens issued before it are refused
+  passwordChangedAt DateTime?
   fullName     String
   status       UserStatus @default(ACTIVE)
   authSource   String     @default("LOCAL")

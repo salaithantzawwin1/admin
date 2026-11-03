@@ -293,10 +293,10 @@ export default function Employees() {
                       <Input id="employees-username-form-authsource-ad-same" placeholder="e.g. aung.kyaw" invalid={!!formError} error={usernameError} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Password {form.authSource === 'LOCAL' ? '(min 8) *' : ''}</label>
+                      <label className="block text-xs text-gray-500 mb-1">Password {form.authSource === 'LOCAL' ? '(min 10, letter + number) *' : ''}</label>
                       {form.authSource === 'LOCAL' ? (
                         <>
-                          <Input type="password" placeholder="Min 8 characters" invalid={!!formError && !usernameError} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+                          <Input type="password" placeholder="Min 10 characters" invalid={!!formError && !usernameError} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
                           <PasswordStrength value={form.password} />
                         </>
                       ) : (
@@ -339,7 +339,7 @@ export default function Employees() {
                 onClick={create}
                 disabled={
                   form.employeeNo.length < 4 || form.fullName.length < 2 ||
-                  (form.createLogin && (form.username.length < 3 || (form.authSource === 'LOCAL' && form.password.length < 8) || form.roles.length === 0))
+                  (form.createLogin && (form.username.length < 3 || (form.authSource === 'LOCAL' && (form.password.length < 10 || !/[A-Za-z]/.test(form.password) || !/[0-9]/.test(form.password))) || form.roles.length === 0))
                 }
               >
                 Create Employee
@@ -523,7 +523,7 @@ export default function Employees() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <Input placeholder="Username (AD: same as Windows)" invalid={!!modalError && linkMode === 'create'} error={editUsernameError} value={newLogin.username} onChange={(e) => setNewLogin({ ...newLogin, username: e.target.value })} />
                       {newLogin.authSource === 'LOCAL' ? (
-                        <Input placeholder="Password (min 8)" type="password" invalid={!!modalError && linkMode === 'create' && !editUsernameError} value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
+                        <Input placeholder="Password (min 10, letter + number)" type="password" invalid={!!modalError && linkMode === 'create' && !editUsernameError} value={newLogin.password} onChange={(e) => setNewLogin({ ...newLogin, password: e.target.value })} />
                       ) : (
                         <div className="text-xs text-gray-500 self-center">No password here — AD verifies the Windows password at sign-in.</div>
                       )}
@@ -547,7 +547,7 @@ export default function Employees() {
                 disabled={
                   edit.fullName.length < 2 ||
                   (linkMode === 'link' && !linkUserId) ||
-                  (linkMode === 'create' && (newLogin.username.length < 3 || (newLogin.authSource === 'LOCAL' && newLogin.password.length < 8) || newLogin.roles.length === 0))
+                  (linkMode === 'create' && (newLogin.username.length < 3 || (newLogin.authSource === 'LOCAL' && (newLogin.password.length < 10 || !/[A-Za-z]/.test(newLogin.password) || !/[0-9]/.test(newLogin.password))) || newLogin.roles.length === 0))
                 }
               >
                 Save Changes

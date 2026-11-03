@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { LoginThrottleService } from '../auth/login-throttle.service';
 import { RoleName, UserStatus } from '@prisma/client';
+import { assertStrongPassword } from '../util/password-policy';
 
 @Injectable()
 export class UsersService {
@@ -75,6 +76,7 @@ export class UsersService {
   }
 
   async create(data: { username: string; password: string; fullName: string; email?: string; roles: RoleName[] }, actor: { userId: string; username: string }) {
+    assertStrongPassword(data.password);
     const exists = await this.prisma.user.findUnique({ where: { username: data.username } });
     if (exists) throw new BadRequestException('Username already exists');
 
@@ -84,6 +86,7 @@ export class UsersService {
         fullName: data.fullName,
         email: data.email,
         passwordHash: await bcrypt.hash(data.password, 10),
+        passwordChangedAt: new Date(),
         userRoles: { create: data.roles.map((name) => ({ role: { connect: { name } } })) },
       },
     });
@@ -142,7 +145,17 @@ export class UsersService {
   async resetPassword(id: string, newPassword: string, actor: { userId: string; username: string }) {
     const user = await this.prisma.user.findUnique({ where: { id } });
     if (!user) throw new NotFoundException('User not found');
-    await this.prisma.user.update({ where: { id }, data: { passwordHash: await bcrypt.hash(newPassword, 10) } });
+    assertStrongPassword(newPassword);
+    await this.prisma.user.update({
+      where: { id },
+      data: {
+        passwordHash: await bcrypt.hash(newPassword, 10),
+        passwordChangedAt: new Date(),
+      },
+    });
+    // an administrator reset is usually the cure for a suspected compromise:
+    // also lift any login lockout so the real owner can get back in
+    this.loginThrottle.unlockByUsername(user.username);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'USER_PASSWORD_RESET', module: 'USERS', recordId: id,

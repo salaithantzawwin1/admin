@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { Actor } from '../org/org.service';
+import { csvCell } from '../util/csv';
 
 export const PETTY_CASH_TYPES = ['TOPUP', 'EXPENSE'] as const;
 export type PettyCashType = (typeof PETTY_CASH_TYPES)[number];
@@ -97,8 +98,7 @@ export class PettyCashService {
   async csv(filters: { from?: string; to?: string }) {
     const { items, totals } = await this.list({ ...filters });
     const esc = (v: unknown) => {
-      const s = v == null ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      return csvCell(v);
     };
     const lines = ['Code,Date,Type,Amount MMK,Payee,Account,Description,Recorded by'];
     for (const t of items) {

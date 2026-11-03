@@ -9,6 +9,8 @@ import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { Actor } from '../org/org.service';
 import { stripPhotoMetadata } from './photo-metadata';
+import { csvCell } from '../util/csv';
+import { sniffImageType as sniffImageTypeImpl } from '../util/image-sniff';
 
 const ASSET_STATUSES = ['ACTIVE', 'IN_STORAGE', 'MAINTENANCE', 'DISPOSED'] as const;
 
@@ -73,15 +75,7 @@ const STORED_PHOTO_NAME = /^[0-9a-f-]{36}\.(jpg|png|webp)$/;
  * "photo.png" carrying text/html must never reach the disk.
  */
 export function sniffImageType(buf: Buffer): { mime: string; ext: string } | null {
-  if (!buf || buf.length < 12) return null;
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
-  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
-    return { mime: 'image/png', ext: 'png' };
-  }
-  if (buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') {
-    return { mime: 'image/webp', ext: 'webp' };
-  }
-  return null;
+  return sniffImageTypeImpl(buf);
 }
 
 /** 2-decimal money rounding — totals are compared and printed in kyat. */
@@ -766,8 +760,7 @@ export class AssetsService {
       },
     });
     const esc = (v: unknown) => {
-      const s = v == null ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      return csvCell(v);
     };
     const lines = ['Asset Code,Name,Category,Specifications,Brand,Model,Serial,Custodian,Location,Status,Purchase Date,Cost MMK,Acquired via'];
     for (const a of rows) {

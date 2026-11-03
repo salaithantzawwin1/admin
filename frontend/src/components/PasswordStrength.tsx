@@ -2,12 +2,13 @@ import { useMemo } from 'react';
 
 /**
  * Score a password 0–4 (length + variety). Deliberately simple and honest —
- * the same rules the backend enforces (min 8) plus common-sense variety.
+ * the same rules the backend enforces (min 10, a letter and a number) plus
+ * common-sense variety.
  */
 export function passwordScore(pw: string): 0 | 1 | 2 | 3 | 4 {
   if (!pw) return 0;
   let score = 0;
-  if (pw.length >= 8) score++;
+  if (pw.length >= 10) score++;
   if (pw.length >= 12) score++;
   if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++;
   if (/\d/.test(pw)) score++;

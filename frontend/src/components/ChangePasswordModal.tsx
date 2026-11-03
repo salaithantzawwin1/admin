@@ -22,7 +22,10 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
 
   const submit = async () => {
     setError('');
-    if (next.length < 8) return setError('New password must be at least 8 characters');
+    if (next.length < 10) return setError('New password must be at least 10 characters with a letter and a number');
+    if (!/[A-Za-z]/.test(next) || !/[0-9]/.test(next)) {
+      return setError('New password must be at least 10 characters with a letter and a number');
+    }
     if (next !== confirm) return setError('New passwords do not match');
     setLoading(true);
     try {
@@ -62,7 +65,7 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
             </div>
             <div>
               <label htmlFor="change-password-modal-new-password" className="block text-sm text-gray-600 mb-1">New password</label>
-              <Input id="change-password-modal-new-password" type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="At least 8 characters" />
+              <Input id="change-password-modal-new-password" type="password" value={next} onChange={(e) => setNext(e.target.value)} placeholder="At least 10 characters" />
               <PasswordStrength value={next} />
             </div>
             <div>

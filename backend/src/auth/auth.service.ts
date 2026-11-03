@@ -4,6 +4,12 @@ import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { LdapService } from '../settings/ldap.service';
+import { assertStrongPassword } from '../util/password-policy';
+
+/** A bcrypt hash of a value nobody knows — compared when the user does not
+ *  exist, so a missing account and a wrong password take the same time
+ *  (no username enumeration by response time). */
+const DUMMY_HASH = '$2a$10$at2wFn0PcsOFQR4gpooxNOUKr6qUdXOrz3y/t6G6Yv4BlxJ7AoN7W';
 
 @Injectable()
 export class AuthService {
@@ -20,6 +26,7 @@ export class AuthService {
       include: { userRoles: { include: { role: true } } },
     });
 
+    if (!user) await bcrypt.compare(password, DUMMY_HASH);
     let valid = !!(user && user.status === 'ACTIVE' && (await bcrypt.compare(password, user.passwordHash)));
 
     // AD fallback: when local check fails and AD is enabled, try directory
@@ -83,9 +90,14 @@ export class AuthService {
     if (!user || !(await bcrypt.compare(currentPassword, user.passwordHash))) {
       throw new UnauthorizedException('Current password is incorrect');
     }
+    assertStrongPassword(newPassword);
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: await bcrypt.hash(newPassword, 10) },
+      data: {
+        passwordHash: await bcrypt.hash(newPassword, 10),
+        // ends every session opened before this moment (jwt.strategy)
+        passwordChangedAt: new Date(),
+      },
     });
     await this.audit.log({
       userId,

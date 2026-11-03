@@ -124,6 +124,8 @@ export class InventoryController {
     return this.inventory.getImage(id).then(({ filePath, mime }) => {
       res!.setHeader('Content-Type', mime);
       res!.setHeader('Cache-Control', 'private, max-age=300');
+      res!.setHeader('X-Content-Type-Options', 'nosniff');
+      res!.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
       fs.createReadStream(filePath).pipe(res!);
     });
   }

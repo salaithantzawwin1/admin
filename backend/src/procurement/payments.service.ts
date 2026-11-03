@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
+import { csvCell } from '../util/csv';
 
 export const PAYMENT_METHODS = ['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'] as const;
 
@@ -231,8 +232,7 @@ export class PaymentsService {
   async csv(filters: { from?: string; to?: string }) {
     const { items } = await this.list({ page: 1, pageSize: 100000, from: filters.from, to: filters.to });
     const esc = (v: unknown) => {
-      const s = v == null ? '' : String(v);
-      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      return csvCell(v);
     };
     const lines = ['Payment code,Date,Invoice,Supplier,Amount MMK,Method,Reference,Note,Recorded by'];
     let total = 0;

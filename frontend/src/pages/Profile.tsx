@@ -139,8 +139,8 @@ export default function Profile() {
         {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
         <form onSubmit={changePassword} className="space-y-3">
           <Input type="password" placeholder="Current password" value={current} onChange={(e) => setCurrent(e.target.value)} />
-          <Input type="password" placeholder="New password (min 8)" value={next} onChange={(e) => setNext(e.target.value)} />
-          <Button type="submit" disabled={!current || next.length < 8}>Update Password</Button>
+          <Input type="password" placeholder="New password (min 10, letter + number)" value={next} onChange={(e) => setNext(e.target.value)} />
+          <Button type="submit" disabled={!current || next.length < 10 || !/[A-Za-z]/.test(next) || !/[0-9]/.test(next)}>Update Password</Button>
         </form>
       </Card>
     </div>

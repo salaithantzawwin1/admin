@@ -21,8 +21,12 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
     ]);
     if (isPublic) return true;
     const req = context.switchToHttp().getRequest();
-    if (!req.headers?.authorization && typeof req.query?.token === 'string') {
-      // <img> tags cannot send headers — accept the JWT via ?token= instead
+    // <img>/EventSource cannot send headers, so a read-only request may carry
+    // the token in the query. Never for a mutating verb: a token in a URL ends
+    // up in logs, history and referrers, so it must not be able to change data.
+    const method = String(req.method ?? 'GET').toUpperCase();
+    const readOnly = method === 'GET' || method === 'HEAD';
+    if (readOnly && !req.headers?.authorization && typeof req.query?.token === 'string') {
       req.headers.authorization = `Bearer ${req.query.token}`;
     }
     return super.canActivate(context);

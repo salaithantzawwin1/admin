@@ -10,7 +10,7 @@ import { PERMISSIONS } from '../auth/permissions';
 
 export class CreateUserDto {
   @IsString() @MinLength(3) @MaxLength(64) username!: string;
-  @IsString() @MinLength(8) @MaxLength(128) password!: string;
+  @IsString() @MinLength(10) @MaxLength(128) password!: string;
   @IsString() @MinLength(1) @MaxLength(128) fullName!: string;
   @IsOptional() @IsEmail() email?: string;
   @IsArray() @IsIn(Object.values(RoleName), { each: true }) roles!: RoleName[];
@@ -27,7 +27,7 @@ export class SetStatusDto {
 }
 
 export class ResetPasswordDto {
-  @IsString() @MinLength(8) @MaxLength(128) newPassword!: string;
+  @IsString() @MinLength(10) @MaxLength(128) newPassword!: string;
 }
 
 @ApiTags('users')

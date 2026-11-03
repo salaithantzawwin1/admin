@@ -45,6 +45,10 @@ export class AttachmentsController {
     const { attachment, filePath } = await this.attachments.download(id, req.user.id);
     res.setHeader('Content-Type', attachment.mimeType);
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(attachment.filename)}"`);
+    // a stored upload is data, never a page: keep the browser from rendering it
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cache-Control', 'private, max-age=60');
     fs.createReadStream(filePath).pipe(res);
   }
 

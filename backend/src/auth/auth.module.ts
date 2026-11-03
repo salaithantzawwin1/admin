@@ -10,13 +10,14 @@ import { PermissionsService } from './permissions.service';
 import { LoginThrottleService } from './login-throttle.service';
 import { AuditModule } from '../audit/audit.module';
 import { SettingsModule } from '../settings/settings.module';
+import { jwtSecret } from '../util/jwt-secret';
 
 @Module({
   imports: [
     PassportModule,
     JwtModule.registerAsync({
       useFactory: () => ({
-        secret: process.env.JWT_SECRET || 'dev_only_secret_change_me',
+        secret: jwtSecret(),
         signOptions: { expiresIn: process.env.JWT_EXPIRES_IN || '8h' },
       }),
     }),

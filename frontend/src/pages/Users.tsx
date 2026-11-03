@@ -191,8 +191,8 @@ export default function Users() {
               <Input id="users-full-name" placeholder="e.g. U Aung Kyaw" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
             </div>
             <div>
-              <label htmlFor="users-password-min-8" className="block text-xs text-gray-500 mb-1">Password (min 8) *</label>
-              <Input id="users-password-min-8" type="password" placeholder="Min 8 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              <label htmlFor="users-password-min-10" className="block text-xs text-gray-500 mb-1">Password (min 10, letter + number) *</label>
+              <Input id="users-password-min-10" type="password" placeholder="Min 10 characters" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
               <PasswordStrength value={form.password} />
             </div>
             <div>
@@ -222,7 +222,7 @@ export default function Users() {
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
-              <Button onClick={createUser} disabled={!form.username || !form.fullName || form.password.length < 8 || form.roles.length === 0}>
+              <Button onClick={createUser} disabled={!form.username || !form.fullName || form.password.length < 10 || !/[A-Za-z]/.test(form.password) || !/[0-9]/.test(form.password) || form.roles.length === 0}>
                 Create User
               </Button>
             </div>
@@ -350,12 +350,12 @@ export default function Users() {
         <Modal title={`Reset password — ${resetFor.username}`} error={modalError} onClose={() => { setResetFor(null); setModalError(''); }}>
           <div className="space-y-3">
             <div>
-              <Input type="password" placeholder="New password (min 8)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+              <Input type="password" placeholder="New password (min 10, letter + number)" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
               <PasswordStrength value={newPassword} />
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => setResetFor(null)}>Cancel</Button>
-              <Button onClick={doReset} disabled={newPassword.length < 8}>Reset Password</Button>
+              <Button onClick={doReset} disabled={newPassword.length < 10 || !/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)}>Reset Password</Button>
             </div>
           </div>
         </Modal>

@@ -3,6 +3,7 @@ import * as bcrypt from 'bcryptjs';
 import { RoleName } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
+import { assertStrongPassword } from '../util/password-policy';
 
 /** Unusable bcrypt hash — AD accounts never authenticate with a local password. */
 const AD_UNUSABLE_HASH = '$2a$10$disabled$account$uses$ad$auth$0000000000000000000000';
@@ -88,6 +89,7 @@ export class OrgService {
     if (wantsLogin && !isAd && !data.password) {
       throw new BadRequestException('Password is required for a local account');
     }
+    if (wantsLogin && !isAd) assertStrongPassword(data.password);
     if (wantsLogin && (!data.roles || data.roles.length === 0)) {
       throw new BadRequestException('Select at least one role for the login account');
     }
@@ -105,6 +107,7 @@ export class OrgService {
             fullName: data.fullName,
             email: data.email,
             passwordHash: isAd ? AD_UNUSABLE_HASH : await bcrypt.hash(data.password!, 10),
+            passwordChangedAt: isAd ? null : new Date(),
             authSource: isAd ? 'AD' : 'LOCAL',
             userRoles: { create: (data.roles ?? []).map((name) => ({ role: { connect: { name } } })) },
           },
@@ -169,6 +172,7 @@ export class OrgService {
     if (!isAd && !data.password) {
       throw new BadRequestException('Password is required for a local account');
     }
+    if (!isAd) assertStrongPassword(data.password);
     const exists = await this.prisma.user.findUnique({ where: { username } });
     if (exists) throw new ConflictException('Username already exists');
 
@@ -179,6 +183,7 @@ export class OrgService {
           fullName: employee.fullName,
           email: employee.email ?? undefined,
           passwordHash: isAd ? AD_UNUSABLE_HASH : await bcrypt.hash(data.password!, 10),
+          passwordChangedAt: isAd ? null : new Date(),
           authSource: isAd ? 'AD' : 'LOCAL',
           userRoles: { create: data.roles!.map((name) => ({ role: { connect: { name } } })) },
         },

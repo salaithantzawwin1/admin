@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../auth/permissions.service';
+import { declaredTypeMatchesBytes } from '../util/image-sniff';
 
 const ALLOWED_MIME = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -18,6 +19,19 @@ const ALLOWED_MIME = [
 ];
 
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB per file (plan §31: file type/size validation)
+
+/** Stored extension is chosen from the declared type — never from the uploaded
+ *  file name, which is attacker-controlled. */
+const EXT_BY_MIME: Record<string, string> = {
+  'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+  'application/pdf': '.pdf',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'text/plain': '.txt', 'text/csv': '.csv',
+  'application/zip': '.zip',
+};
 
 /** Announcements may carry at most this many files (UI promises "up to 10"). */
 const MAX_ANNOUNCEMENT_FILES = 10;
@@ -40,6 +54,11 @@ export class AttachmentsService {
     if (!file) throw new BadRequestException('No file provided');
     if (!ALLOWED_MIME.includes(file.mimetype)) throw new BadRequestException(`File type not allowed: ${file.mimetype}`);
     if (file.size > MAX_SIZE) throw new BadRequestException('File too large (max 10 MB)');
+    // The declared type must be supported by the actual bytes: an "image/png"
+    // that is really an HTML page (or an .exe) is refused here, not stored.
+    if (!declaredTypeMatchesBytes(file.mimetype, file.buffer)) {
+      throw new BadRequestException(`The file content does not match ${file.mimetype}`);
+    }
     if (requestId && announcementId) throw new BadRequestException('Attachment can belong to a request or an announcement, not both');
 
     if (requestId) {
@@ -67,9 +86,9 @@ export class AttachmentsService {
     }
 
     this.ensureDir();
-    const ext = path.extname(file.originalname || '').slice(0, 10);
+    const ext = EXT_BY_MIME[file.mimetype] ?? '.bin';
     const storedName = `${crypto.randomUUID()}${ext}`;
-    fs.writeFileSync(path.join(this.uploadRoot, storedName), file.buffer);
+    fs.writeFileSync(path.join(this.uploadRoot, storedName), file.buffer, { mode: 0o600 });
 
     const attachment = await this.prisma.attachment.create({
       data: {
