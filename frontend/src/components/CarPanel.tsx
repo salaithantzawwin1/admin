@@ -10,6 +10,8 @@ interface CarRequest {
   id: string;
   destination: string;
   purpose?: string;
+  /** the base request document — Purpose/Details shown on the details card */
+  request?: { title?: string; description?: string } | null;
   startDate: string;
   endDate: string;
   timeSlot: string;
@@ -44,6 +46,9 @@ interface CarRequest {
     driverArrivedAt?: string | null;
     driverBackAtOfficeAt?: string | null;
     estimatedReturnAt?: string | null;
+    /** set on a released booking: who was sent, even after the links were cleared */
+    vehicle?: { vehicleNo?: string; brandModel?: string | null } | null;
+    driver?: { name?: string } | null;
     trip?: { id: string; status: string; startMileage?: number; endMileage?: number } | null;
   } | null;
 }
@@ -285,6 +290,18 @@ export function CarPanel({
           <div className="text-gray-400 text-xs uppercase tracking-wide">Vehicle required</div>
           <div className="mt-1 text-gray-800">{car.vehicleTypeRequired ?? 'Any'}</div>
         </div>
+        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Purpose</div>
+          <div className="mt-1 text-gray-800 break-words">{car.purpose?.trim() || '—'}</div>
+        </div>
+        {/* Details: the requester's own words — the one place Administration reads
+            WHY the car is needed and anything the drop-down fields cannot say. */}
+        <div className="col-span-2 sm:col-span-4 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
+          <div className="text-gray-400 text-xs uppercase tracking-wide">Details</div>
+          <div className="mt-1 text-gray-800 whitespace-pre-wrap break-words">
+            {car.request?.description?.trim() || car.request?.title?.trim() || '—'}
+          </div>
+        </div>
         {/* Approval and assignment are Administration's steps; Noted / Ready /
             Back at office are the driver's. They fail independently, so they get
             separate lanes — "approved but no car" must not look like "driver
@@ -313,11 +330,28 @@ export function CarPanel({
                   {car.sharedRide.brandModel && <span className="text-xs text-gray-500">{car.sharedRide.brandModel}</span>}
                   <span className="text-xs text-gray-500">🤝 shared with {car.sharedRide.docNumber}</span>
                 </>
+              ) : assignment?.releasedAt && assignment.vehicle ? (
+                /* released after a real dispatch: naming the car+driver is the
+                   whole point — "No vehicle picked yet" said the opposite */
+                <>
+                  <Badge color="gray">🚗 {assignment.vehicle.vehicleNo}</Badge>
+                  <span className="text-xs text-gray-500">released</span>
+                  {assignment.driver?.name && (
+                    <span className="text-xs font-medium text-gray-700">👤 {assignment.driver.name}</span>
+                  )}
+                </>
               ) : (
                 <span className="text-sm text-gray-400">No vehicle picked yet</span>
               )}
-              {(car.driver ?? car.sharedRide?.driverName) && (
-                <span className="text-xs font-medium text-gray-700">👤 {car.driver?.name ?? car.sharedRide?.driverName}</span>
+              {(car.driver ?? car.sharedRide?.driverName ?? assignment?.driver?.name) && (
+                <span className="text-xs font-medium text-gray-700">
+                  👤 {car.driver?.name ?? car.sharedRide?.driverName ?? assignment?.driver?.name}
+                </span>
+              )}
+              {assignment?.releasedAt && missingTaps(assignment).length > 0 && (
+                <div className="w-full text-[11px] font-medium text-red-600">
+                  driver never tapped {missingTaps(assignment).join(', ')} — booking released
+                </div>
               )}
             </div>
           {/* ⏰ driver-reported ETA (Telegram ⏰ Delay) — red when it passes the planned end */}
@@ -817,6 +851,9 @@ export function CarPanel({
  */
 export function TripProgress({ status, car }: { status: string; car: CarRequest }) {
   const a = car.assignment;
+  // once the booking was released, a tap that never came is history ("– Noted"),
+  // not a pending step the driver is still expected to press
+  const never: 'off' | 'pending' = a?.releasedAt ? 'off' : 'pending';
   const approved = ['APPROVED', 'IN_PROGRESS', 'COMPLETED'].includes(status);
   const refused = ['REJECTED', 'CANCELLED', 'RETURNED'].includes(status);
   // a RELEASED row is history, not a car: the request is back in the assign queue
@@ -850,17 +887,20 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
             : chip('pending', 'Awaiting approval')}
         {assigned
           ? chip('done', 'Car assigned')
-          : approved
-            ? chip('pending', 'Not assigned yet')
-            : chip('off', 'Car assigned')}
+          : a?.releasedAt
+            // a car WAS assigned and handed back — "not assigned yet" hid that
+            ? chip('pending', 'Released — re-assign')
+            : approved
+              ? chip('pending', 'Not assigned yet')
+              : chip('off', 'Car assigned')}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-28 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">Driver</span>
         {a || car.sharedRide?.notedAt || car.sharedRide?.backAtOfficeAt ? (
           <>
-            {chip(a?.driverNotedAt || car.sharedRide?.notedAt ? 'done' : 'pending', 'Noted', a?.driverNotedAt ?? car.sharedRide?.notedAt)}
-            {chip(a?.driverArrivedAt || car.sharedRide?.arrivedAt ? 'done' : 'pending', 'Ready', a?.driverArrivedAt ?? car.sharedRide?.arrivedAt)}
-            {chip(a?.driverBackAtOfficeAt || car.sharedRide?.backAtOfficeAt ? 'done' : 'pending', 'Back at office', a?.driverBackAtOfficeAt ?? car.sharedRide?.backAtOfficeAt)}
+            {chip(a?.driverNotedAt || car.sharedRide?.notedAt ? 'done' : never, 'Noted', a?.driverNotedAt ?? car.sharedRide?.notedAt)}
+            {chip(a?.driverArrivedAt || car.sharedRide?.arrivedAt ? 'done' : never, 'Ready', a?.driverArrivedAt ?? car.sharedRide?.arrivedAt)}
+            {chip(a?.driverBackAtOfficeAt || car.sharedRide?.backAtOfficeAt ? 'done' : never, 'Back at office', a?.driverBackAtOfficeAt ?? car.sharedRide?.backAtOfficeAt)}
           </>
         ) : (
           <span className="text-xs text-gray-400">No driver assigned yet</span>
@@ -868,6 +908,17 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
       </div>
     </div>
   );
+}
+
+/** Confirmations that never arrived on a booking (empty for a fully tapped one). */
+function missingTaps(a?: CarRequest['assignment']): string[] {
+  if (!a) return [];
+  const stages: Array<[string, string | null | undefined]> = [
+    ['Noted', a.driverNotedAt],
+    ['Ready', a.driverArrivedAt],
+    ['Back at office', a.driverBackAtOfficeAt],
+  ];
+  return stages.filter(([, at]) => !at).map(([name]) => name);
 }
 
 /**

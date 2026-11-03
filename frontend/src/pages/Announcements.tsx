@@ -835,7 +835,7 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
         <Modal title={`Read stats — ${statsFor.code}`} onClose={() => setStatsFor(null)}>
           {stats ? (
             <div>
-              <div className="grid grid-cols-4 gap-3 text-center">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
                 <div><div className="text-2xl font-bold text-gray-800">{stats.target}</div><div className="text-xs text-gray-400">Target</div></div>
                 <div><div className="text-2xl font-bold text-blue-600">{stats.read}</div><div className="text-xs text-gray-400">Read</div></div>
                 <div><div className="text-2xl font-bold text-gray-500">{stats.unread}</div><div className="text-xs text-gray-400">Unread</div></div>

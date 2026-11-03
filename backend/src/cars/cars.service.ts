@@ -128,7 +128,20 @@ export class CarsService {
   async findByRequest(requestId: string, actor?: Actor) {
     const car = await this.prisma.carRequest.findUnique({
       where: { requestId },
-      include: { vehicle: true, driver: true, managerAckBy: { select: { fullName: true } }, assignment: { include: { trip: true } } },
+      include: {
+        vehicle: true, driver: true, managerAckBy: { select: { fullName: true } },
+        // Purpose + Details on the details card: the base document carries the
+        // title and the free-text description the requester wrote at creation.
+        request: { select: { title: true, description: true } },
+        // a released booking still has to name the car and driver that were sent
+        assignment: {
+          include: {
+            trip: true,
+            vehicle: { select: { vehicleNo: true, brandModel: true } },
+            driver: { select: { name: true } },
+          },
+        },
+      },
     });
     if (!car || !actor) return car;
 

@@ -998,7 +998,7 @@ export default function Fleet() {
             <details className="rounded-lg border border-gray-200 px-3 py-2">
               <summary className="cursor-pointer select-none text-sm text-gray-600 font-medium">Identification &amp; specs (optional)</summary>
               <div className="space-y-3 pt-3">
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label htmlFor="fleet-make" className="block text-xs text-gray-500 mb-1">Make</label>
                     <Input id="fleet-make" placeholder="Toyota" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />
@@ -1103,7 +1103,7 @@ export default function Fleet() {
                     <NumberField id="fleet-capacity" min={1} max={60} integer value={vForm.capacity === '' ? null : Number(vForm.capacity)} onChange={(capacity) => setVForm({ ...vForm, capacity })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label htmlFor="fleet-make-2" className="block text-xs text-gray-500 mb-1">Make</label>
                     <Input id="fleet-make-2" value={vForm.make} onChange={(e) => setVForm({ ...vForm, make: e.target.value })} />

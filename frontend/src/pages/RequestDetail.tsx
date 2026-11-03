@@ -238,11 +238,15 @@ export default function RequestDetail() {
           <Empty label="No actions yet" />
         ) : (
           <ol className="space-y-3">
+            {/* phones: level + action share a line, the comment and date go
+                underneath — three fixed columns squeezed a comment to 3 words */}
             {detail.actions.map((a) => (
-              <li key={a.id} className="flex gap-3 text-sm">
-                <span className="w-10 text-gray-400">L{a.level}</span>
-                <span className="font-medium w-28">{a.action}</span>
-                <span className="text-gray-600 flex-1">
+              <li key={a.id} className="flex flex-col sm:flex-row gap-1 sm:gap-3 text-sm">
+                <div className="flex items-center gap-2 sm:contents">
+                  <span className="sm:w-10 text-gray-400">L{a.level}</span>
+                  <span className="font-medium sm:w-28">{a.action}</span>
+                </div>
+                <span className="text-gray-600 flex-1 min-w-0 break-words">
                   {a.approver?.fullName ?? '—'}
                   {a.comment && <span className="text-gray-400"> — “{a.comment}”</span>}
                 </span>
@@ -259,8 +263,8 @@ export default function RequestDetail() {
         <ul className="space-y-2 mb-4">
           {detail.attachments.map((a) => (
             <li key={a.id} className="flex items-center justify-between text-sm">
-              <a href={`/api/attachments/${a.id}/download`} className="text-blue-600 hover:underline">{a.filename}</a>
-              <span className="text-gray-400">{(a.size / 1024).toFixed(1)} KB</span>
+              <a href={`/api/attachments/${a.id}/download`} className="text-blue-600 hover:underline truncate min-w-0 mr-2">{a.filename}</a>
+              <span className="text-gray-400 shrink-0 whitespace-nowrap">{(a.size / 1024).toFixed(1)} KB</span>
             </li>
           ))}
         </ul>

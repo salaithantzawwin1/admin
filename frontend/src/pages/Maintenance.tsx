@@ -539,7 +539,7 @@ export default function Maintenance() {
               <label className="block text-xs font-medium text-gray-500 mb-1">What is the schedule?</label>
               <Input value={scheduleForm.title} onChange={(e) => setScheduleForm({ ...scheduleForm, title: e.target.value })} placeholder="e.g. Aircon gas service" />
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Every (months)</label>
                 <Input type="number" min={1} max={120} value={scheduleForm.intervalMonths} onChange={(e) => setScheduleForm({ ...scheduleForm, intervalMonths: e.target.value })} />

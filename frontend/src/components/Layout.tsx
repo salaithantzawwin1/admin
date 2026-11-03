@@ -99,6 +99,9 @@ export function Layout() {
     return window.innerWidth < 768;
   });
   const [menuOpen, setMenuOpen] = useState(false);
+  // phones: the sidebar is an overlay drawer — a permanent rail on a 360px
+  // screen leaves too little room for the tables every page is built around
+  const [mobileNav, setMobileNav] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   // collapsed group titles → persisted so the layout survives reload
@@ -163,6 +166,11 @@ export function Layout() {
     };
   }, []);
 
+  // navigating always closes the drawer
+  useEffect(() => {
+    setMobileNav(false);
+  }, [location.pathname]);
+
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, collapsed ? 'collapsed' : 'open');
   }, [collapsed]);
@@ -195,6 +203,15 @@ export function Layout() {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
         <div className="flex items-center justify-between px-3 sm:px-6 py-3">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <button
+              onClick={() => setMobileNav(true)}
+              className="md:hidden shrink-0 w-9 h-9 -ml-1 flex items-center justify-center rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"
+              title="Open menu"
+              aria-label="Open menu"
+              aria-expanded={mobileNav}
+            >
+              ☰
+            </button>
             {/* logo on a white rounded tile so its dark lines stay visible against the header */}
             <div className="w-11 h-11 shrink-0 rounded-lg bg-white border border-gray-200 shadow-sm flex items-center justify-center p-1">
               <img src="/GLG.png" alt="GLG logo" className="max-w-full max-h-full object-contain" />
@@ -246,9 +263,75 @@ export function Layout() {
         </div>
       </header>
 
+      {/* phones: full menu in a drawer (the desktop rail is hidden below md) */}
+      {mobileNav && (
+        <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Menu">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setMobileNav(false)} />
+          <div className="absolute left-0 top-0 h-full w-72 max-w-[85vw] bg-white border-r border-gray-200 shadow-xl overflow-y-auto px-3 py-3">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">Menu</span>
+              <button
+                onClick={() => setMobileNav(false)}
+                className="w-8 h-8 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
+                aria-label="Close menu"
+              >
+                ×
+              </button>
+            </div>
+            <nav className="space-y-1">
+              {groups.map((group) => (
+                <div key={group.title} className="pt-2">
+                  <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-gray-400">{group.title}</div>
+                  <div className="space-y-1">
+                    {group.items.map((item) => (
+                      <NavLink
+                        key={item.to}
+                        to={item.to}
+                        end={item.to === '/'}
+                        onClick={() => setMobileNav(false)}
+                        className={({ isActive }) =>
+                          `flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                            isActive ? 'bg-gold/10 text-gold-dark font-medium ring-1 ring-inset ring-gold/30' : 'text-gray-600 hover:bg-gray-50'
+                          }`
+                        }
+                      >
+                        <span className="leading-none text-center text-base w-5">{item.icon}</span>
+                        <span>{item.label}</span>
+                        {item.to === '/settings' && pendingJoins > 0 && (
+                          <span className="ml-auto inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1">
+                            {pendingJoins}
+                          </span>
+                        )}
+                      </NavLink>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </nav>
+            <div className="mt-4 pt-3 border-t border-gray-100 space-y-1">
+              <div className="px-3 text-xs text-gray-500 truncate">
+                {user?.fullName} · {user?.username}
+              </div>
+              <button
+                onClick={() => { setMobileNav(false); setPwOpen(true); }}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg"
+              >
+                🔑 Change password
+              </button>
+              <button
+                onClick={logout}
+                className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-lg"
+              >
+                ⏻ Logout
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex">
         <aside
-          className={`${collapsed ? 'w-16' : 'w-60'} transition-all duration-200 sticky top-[57px] self-start max-h-[calc(100vh-57px)] overflow-y-auto bg-white border-r border-gray-200 py-3 flex flex-col shrink-0`}
+          className={`hidden md:flex ${collapsed ? 'w-16' : 'w-60'} transition-all duration-200 sticky top-[57px] self-start max-h-[calc(100vh-57px)] overflow-y-auto bg-white border-r border-gray-200 py-3 flex-col shrink-0`}
         >
           <button
             onClick={() => setCollapsed(!collapsed)}

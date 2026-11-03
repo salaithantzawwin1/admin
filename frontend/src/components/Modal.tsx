@@ -99,14 +99,14 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`bg-white rounded-xl shadow-xl w-full ${xl ? 'max-w-4xl' : wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[85vh] overflow-y-auto outline-none animate-[modalIn_.15s_ease-out]`}
+        className={`bg-white rounded-xl shadow-xl w-full mx-3 sm:mx-0 ${xl ? 'max-w-4xl' : wide ? 'max-w-2xl' : 'max-w-lg'} max-h-[85vh] overflow-y-auto outline-none animate-[modalIn_.15s_ease-out]`}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+        <div className="flex items-center justify-between px-4 sm:px-5 py-4 border-b border-gray-100">
           <h2 className="font-semibold text-gray-800">{title}</h2>
           <button className="text-gray-400 hover:text-gray-600 text-xl leading-none" onClick={onClose}>×</button>
         </div>
-        <div className="p-5">
+        <div className="p-4 sm:p-5">
           {error ? (
             <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
           ) : null}
