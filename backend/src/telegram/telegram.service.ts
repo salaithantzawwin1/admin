@@ -908,6 +908,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Not authorized' });
       return;
     }
+    // Stale-card guard: re-assigning rewrites the same assignment row and sends a
+    // fresh card, but the OLD message keeps its buttons forever — Telegram cannot
+    // delete what the driver already scrolled to, and both cards look identical.
+    // A tap on the old one used to stamp the NEW trip as Noted / Ready / Back
+    // (the row is shared, so the write had no way to tell the cards apart).
+    // The assignment stores the message id of the card it last sent; only a tap
+    // on THAT message may drive the stage. Missing ids (map trimmed, older card,
+    // repaint before the id was stored) stay permissive rather than locking the
+    // driver out of their own trip.
+    const tappedMessageId = this.callbackMessages.get(`${fromChatId}:${callbackId}`);
+    if (tappedMessageId && assignment.telegramMessageId && String(tappedMessageId) !== assignment.telegramMessageId) {
+      await this.call('answerCallbackQuery', {
+        callback_query_id: callbackId,
+        text: '⚠️ ဒီ message က ဟောင်းသွားပါပြီ — အသစ်ဆုံး assignment message ကို သုံးပါ',
+      });
+      return;
+    }
     // "🏁 Back at Office — BOTH trips": two-tap confirm (arm → confirm within 30s)
     // — completing two requests from one tap must never be a single accidental press.
     // (AFTER the driver-binding check above — closing trips is a driver-only power.)

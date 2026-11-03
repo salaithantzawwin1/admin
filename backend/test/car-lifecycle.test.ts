@@ -416,6 +416,59 @@ async function main() {
     );
   });
 
+  // ------------------------------------------------ 7) stale Telegram card
+  function staleCard(tapped: number, current: string | null) {
+    const row: any = {
+      id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1', telegramMessageId: current,
+      driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null, estimatedReturnAt: null,
+      driver: { id: 'd1', name: 'U Aung', telegramChatId: 'chat-1' },
+      vehicle: { vehicleNo: 'YGN-1' },
+      carRequest: { destination: 'D', pickupLocation: 'P', startDate: new Date(), endDate: new Date(), timeSlot: 'FULL_DAY', purpose: null, sharedTripId: null },
+      request: { id: 'r1', docNumber: 'CAR-1', requesterId: 'u-req', requester: { fullName: 'U Req' } },
+    };
+    const updates: any[] = [];
+    const answers: string[] = [];
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => row,
+        findMany: async () => [],
+        update: async (a: any) => {
+          Object.assign(row, a.data);
+          updates.push(a);
+          return row;
+        },
+      },
+      vehicle: { update: async () => undefined },
+      driver: { update: async () => undefined },
+      user: { findUnique: async () => null },
+      notification: { create: async () => undefined, createMany: async () => undefined },
+    };
+    const svc: any = new TelegramService(prisma, { log: async () => undefined }, { usersWithPermissions: async () => [] }, { publish: () => 0 });
+    svc.call = async (_m: string, payload: any) => { if (payload?.callback_query_id) answers.push(String(payload.text ?? '')); };
+    svc.editStageMessage = async () => undefined;
+    svc.mirrorToUser = async () => undefined;
+    svc.callbackMessages.set('chat-1:cb1', tapped);
+    return { svc, updates, answers };
+  }
+
+  await test('a tap on a superseded Telegram card cannot stamp the new trip', async () => {
+    const { svc, updates, answers } = staleCard(111, '999'); // old message tapped
+    await svc.handleCallback('noted:a1', 'chat-1', 'cb1');
+    assert.strictEqual(updates.length, 0, 'an outdated card must not write a stage stamp');
+    assert.ok(answers.some((t) => /ဟောင်း/.test(t)), 'the driver must be told the card is out of date');
+  });
+
+  await test('a tap on the current card still stamps the stage', async () => {
+    const { svc, updates } = staleCard(999, '999');
+    try {
+      await svc.handleCallback('noted:a1', 'chat-1', 'cb1');
+    } catch {
+      /* notify stubs are intentionally minimal — only the stamp matters here */
+    }
+    assert.strictEqual(updates.length, 1, 'the live card must still work');
+    assert.ok(updates[0].data.driverNotedAt instanceof Date);
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);
 }
