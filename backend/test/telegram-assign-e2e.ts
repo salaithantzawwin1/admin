@@ -626,11 +626,15 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   });
   (prisma as any).user.findUnique = async ({ where }: any) => (where.id === 'rqA' ? { telegramChatId: '555000881' } : where.id === 'rqB' ? { telegramChatId: '555000882' } : null);
   // FIRST tap arms the confirm — nothing closes yet
-  await tap('b2b:aA', 'cb-b2b-1', 8001, Number(DRIVER_CHAT));
+  // The repaint above sent a FRESH card; a tap must come from that card's message id
+  // (the stale-card guard rejects old ids by design).
+  const aACardMsgId = Number(sharedAssignments.aA.telegramMessageId);
+  check(aACardMsgId !== 8001, 'repaint stored the fresh card id on aA (stale id superseded)');
+  await tap('b2b:aA', 'cb-b2b-1', aACardMsgId, Number(DRIVER_CHAT));
   check(statuses().every((s) => s === 'IN_PROGRESS'), 'first b2b tap only ARMS the confirm — both trips still IN_PROGRESS');
   check(last('answerCallbackQuery')?.payload?.text === 'ခရီးစဉ် နှစ်ခုလုံး ပြီးကြောင်း အတည်ပြုရန် ထပ်နှိပ်ပါ', 'first tap answers with the confirm prompt');
   // SECOND tap within 30s executes — both trips close with ONE logical action
-  await tap('b2b:aA', 'cb-b2b-2', 8001, Number(DRIVER_CHAT));
+  await tap('b2b:aA', 'cb-b2b-2', aACardMsgId, Number(DRIVER_CHAT));
   check(statuses().every((s) => s === 'COMPLETED'), 'confirmed b2b tap completes BOTH shared requests');
   check(txWrites.filter((w) => w.table === 'requestDocument' && w.data.status === 'COMPLETED').length === 2, 'both base documents closed (COMPLETED)');
   check(auditCalls.filter((a) => a === 'REQUEST_AUTO_COMPLETED').length === 2, 'auto-complete audit fired for BOTH trips');
