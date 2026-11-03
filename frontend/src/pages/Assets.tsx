@@ -309,7 +309,7 @@ export default function Assets() {
   const [page, setPage] = useState(0);
   const [photoModal, setPhotoModal] = useState<{ assetId: string; code: string; name: string; version?: string | null } | null>(null);
   // the detail dialog shows one section at a time, each with its own page
-  const [detailTab, setDetailTab] = useState<'components' | 'cost' | 'movement'>('components');
+  const [detailTab, setDetailTab] = useState<'details' | 'components' | 'cost' | 'movement'>('details');
   const [partsPage, setPartsPage] = useState(0);
   const [costPage, setCostPage] = useState(0);
   const [movePage, setMovePage] = useState(0);
@@ -319,7 +319,7 @@ export default function Assets() {
     setError(null);
     try {
       setDetail(await api<AssetDetail>(`/assets/${id}`));
-      setDetailTab('components');
+      setDetailTab('details');
       setPartsPage(0);
       setCostPage(0);
       setMovePage(0);
@@ -621,8 +621,9 @@ export default function Assets() {
   const detailMovements = detail?.movements ?? [];
   const movePageCount = Math.max(1, Math.ceil(detailMovements.length / DETAIL_PAGE_SIZE));
   const safeMovePage = Math.min(movePage, movePageCount - 1);
-  const detailTabDefs: { key: 'components' | 'cost' | 'movement'; label: string; count: number }[] = detail
+  const detailTabDefs: { key: 'details' | 'components' | 'cost' | 'movement'; label: string; count: number }[] = detail
     ? [
+        { key: 'details', label: 'Details', count: 0 },
         { key: 'components', label: 'Installed components', count: detailParts.filter((p) => !p.removedAt).length },
         { key: 'cost', label: 'Cost & spending', count: detailCosts.length },
         { key: 'movement', label: 'Movement history', count: detailMovements.length },
@@ -905,11 +906,30 @@ export default function Assets() {
       {/* detail with movement history (§16/§40) */}
       {detail && (
         <Modal title={`${detail.assetCode} — ${detail.name}`} onClose={() => setDetail(null)} wide>
+          {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+          {/* Sections sit behind tabs at the very top, so the open one gets the
+              whole dialog height instead of sharing it with three others. */}
+          <div className="flex flex-wrap gap-1 border-b border-gray-200 mb-3">
+            {detailTabDefs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={`px-3 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+                  detailTab === t.key
+                    ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+                onClick={() => setDetailTab(t.key)}
+              >
+                {t.label}{t.key === 'details' ? '' : ` (${t.count})`}
+              </button>
+            ))}
+          </div>
+          <div className={detailTab === 'details' ? '' : 'hidden'}>
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <span className="text-xs text-gray-400">Scan the printed label to open this asset on a signed-in device</span>
             <Button variant="ghost" onClick={() => setQrOpen(true)}>🏷️ QR label</Button>
           </div>
-          {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
           {/* Asset photo — one picture, replaceable. Stored privately and shown
               only through the token-guarded endpoint. */}
           <div className="mb-4 flex flex-wrap items-start gap-4">
@@ -992,23 +1012,6 @@ export default function Assets() {
           ) : null}
           {detail.description && <p className="text-sm text-gray-600 mb-4">{detail.description}</p>}
 
-          {/* One section at a time: parts, money and movement each have their own
-              list and their own page, so none of them pushes the others away. */}
-          <div className="flex flex-wrap gap-1 border-b border-gray-200 mb-3">
-            {detailTabDefs.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                className={`px-3 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
-                  detailTab === t.key
-                    ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-                }`}
-                onClick={() => setDetailTab(t.key)}
-              >
-                {t.label} ({t.count})
-              </button>
-            ))}
           </div>
 
           {/* Parts fitted into this asset (a cartridge in a printer): the same link
