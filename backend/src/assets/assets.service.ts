@@ -8,6 +8,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { Actor } from '../org/org.service';
+import { stripPhotoMetadata } from './photo-metadata';
 
 const ASSET_STATUSES = ['ACTIVE', 'IN_STORAGE', 'MAINTENANCE', 'DISPOSED'] as const;
 
@@ -632,13 +633,16 @@ export class AssetsService {
     const dir = path.join(this.uploadRoot, PHOTO_DIR);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const storedName = `${crypto.randomUUID()}.${kind.ext}`;
-    fs.writeFileSync(path.join(dir, storedName), file.buffer, { mode: 0o600 });
+    // EXIF/GPS never reaches the volume: a photo of a machine should not say
+    // where and when it was taken.
+    const stored = stripPhotoMetadata(file.buffer, kind.mime);
+    fs.writeFileSync(path.join(dir, storedName), stored, { mode: 0o600 });
 
     let updated: { photoUpdatedAt: Date | null; photoMime: string | null; photoSize: number | null };
     try {
       updated = await this.prisma.asset.update({
         where: { id: assetId },
-        data: { photoStoredName: storedName, photoMime: kind.mime, photoSize: file.size, photoUpdatedAt: new Date() },
+        data: { photoStoredName: storedName, photoMime: kind.mime, photoSize: stored.length, photoUpdatedAt: new Date() },
         select: { photoUpdatedAt: true, photoMime: true, photoSize: true },
       });
     } catch (e) {
@@ -651,7 +655,7 @@ export class AssetsService {
       userId: actor.userId, username: actor.username,
       action: asset.photoStoredName ? 'ASSET_PHOTO_REPLACED' : 'ASSET_PHOTO_ADDED',
       module: 'ASSETS', recordId: assetId,
-      newValue: { assetCode: asset.assetCode, mimeType: kind.mime, size: file.size },
+      newValue: { assetCode: asset.assetCode, mimeType: kind.mime, size: stored.length },
     });
     return {
       photo: { mimeType: updated.photoMime, size: updated.photoSize, updatedAt: updated.photoUpdatedAt },

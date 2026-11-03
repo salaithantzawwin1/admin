@@ -23,6 +23,8 @@ interface AssetRow {
   specs?: Record<string, string> | null;
   category?: { id: string; name: string; specFields?: SpecField[] | null } | null;
   location?: { id: string; name: string } | null;
+  /** the asset's own picture — the backend never exposes the stored file name */
+  photo?: { mimeType?: string | null; size?: number | null; updatedAt?: string | null } | null;
 }
 
 /** A specification field a category asks for (a printer's Connection: USB /
@@ -73,8 +75,6 @@ interface AssetDetail extends AssetRow {
   movements: MovementRow[];
   costs: CostRow[];
   costSummary: CostSummary;
-  /** the asset's own picture — the backend never exposes the stored file name */
-  photo?: { mimeType?: string | null; size?: number | null; updatedAt?: string | null } | null;
   poItems: { purchaseOrder: { poNumber: string; supplier: { name: string } } }[];
   /** parts fitted INTO this asset (a cartridge in a printer) */
   installedParts: {
@@ -136,6 +136,137 @@ function QrLabel({ assetId, assetCode, name }: { assetId: string; assetCode: str
   );
 }
 
+/** Square icon action for the register table. The label stays in `title` and
+ *  `aria-label`, so hovering and screen readers still name the action. */
+function IconButton({ label, onClick, danger, children }: {
+  label: string; onClick: () => void; danger?: boolean; children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={`inline-flex h-8 w-8 items-center justify-center rounded-md border bg-white transition-colors ${
+        danger
+          ? 'border-red-200 text-red-600 hover:bg-red-50'
+          : 'border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+      }`}
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8}
+        strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        {children}
+      </svg>
+    </button>
+  );
+}
+
+const IconEye = () => (<><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z" /><circle cx="12" cy="12" r="3" /></>);
+const IconTransfer = () => (<><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></>);
+const IconEdit = () => (<><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></>);
+const IconTrash = () => (<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>);
+const IconPhoto = () => (<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-4.5-4.5L9 18" /></>);
+
+/**
+ * The picture sits behind an authenticated route, so it is fetched as a blob
+ * (a plain <img src> cannot send the bearer token) and the object URL is
+ * revoked when the element goes away or the photo is replaced.
+ */
+function usePhotoBlob(assetId: string | undefined, version?: string | null) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let created: string | null = null;
+    let cancelled = false;
+    setUrl(null);
+    if (assetId && version !== null) {
+      void (async () => {
+        try {
+          const res = await fetch(`/api/assets/${assetId}/photo`, {
+            headers: { Authorization: `Bearer ${getToken()}` },
+          });
+          if (!res.ok) return;
+          created = URL.createObjectURL(await res.blob());
+          if (!cancelled) setUrl(created);
+        } catch {
+          /* a missing preview never breaks the row or the dialog */
+        }
+      })();
+    }
+    return () => {
+      cancelled = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [assetId, version]);
+  return url;
+}
+
+/** Register-table thumbnail; clicking it opens the photo modal. */
+function AssetThumb({ row, onOpen }: { row: AssetRow; onOpen: () => void }) {
+  const url = usePhotoBlob(row.photo ? row.id : undefined, row.photo?.updatedAt ?? null);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={row.photo ? 'View photo' : 'No photo yet'}
+      aria-label={row.photo ? `View ${row.assetCode} photo` : `${row.assetCode} has no photo`}
+      className="h-10 w-12 rounded-md border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center text-gray-300 hover:border-yellow-500 hover:text-gray-400"
+    >
+      {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : <IconPhoto />}
+    </button>
+  );
+}
+
+/** Shared pagination bar: range, page numbers (with gaps) and prev/next. */
+function Pager({ page, pageCount, total, from, to, onChange }: {
+  page: number; pageCount: number; total: number; from: number; to: number;
+  onChange: (p: number) => void;
+}) {
+  if (total === 0) return null;
+  const shown = Array.from({ length: pageCount }, (_, i) => i).filter(
+    (p) => pageCount <= 7 || p === 0 || p === pageCount - 1 || Math.abs(p - page) <= 1,
+  );
+  const btn = 'h-7 min-w-7 px-2 rounded-md border text-xs transition-colors';
+  let previous = -2;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-3 text-xs text-gray-500">
+      <span>Showing {from}–{to} of {total}</span>
+      <div className="flex items-center gap-1">
+        <button type="button" className={`${btn} border-gray-200 hover:bg-gray-50 disabled:opacity-40`}
+          disabled={page === 0} onClick={() => onChange(page - 1)}>Prev</button>
+        {shown.map((p) => {
+          const gap = p - previous > 1;
+          previous = p;
+          return (
+            <span key={p} className="flex items-center gap-1">
+              {gap && <span className="px-1">…</span>}
+              <button type="button" onClick={() => onChange(p)}
+                aria-current={p === page ? 'page' : undefined}
+                className={`${btn} ${p === page
+                  ? 'border-yellow-600 bg-yellow-50 text-yellow-800 font-semibold'
+                  : 'border-gray-200 hover:bg-gray-50'}`}>
+                {p + 1}
+              </button>
+            </span>
+          );
+        })}
+        <button type="button" className={`${btn} border-gray-200 hover:bg-gray-50 disabled:opacity-40`}
+          disabled={page >= pageCount - 1} onClick={() => onChange(page + 1)}>Next</button>
+      </div>
+    </div>
+  );
+}
+
+/** Full-size view of one asset photo (the register thumbnail and the detail
+ *  dialog's picture both open this). */
+function PhotoModalBody({ assetId, version }: { assetId: string; version?: string | null }) {
+  const url = usePhotoBlob(assetId, version);
+  if (!url) return <Empty label="Loading photo…" />;
+  return <img src={url} alt="Asset photo" className="mx-auto max-h-[70vh] w-auto rounded-lg border border-gray-200" />;
+}
+
+const REGISTER_PAGE_SIZE = 10;
+const DETAIL_PAGE_SIZE = 5;
+
 const emptyForm = {
   name: '', assetCode: '', categoryId: '', brand: '', model: '', serialNumber: '',
   custodian: '', locationId: '', purchaseDate: '', purchaseCost: '', description: '',
@@ -174,16 +305,31 @@ export default function Assets() {
   // asset photo: an authenticated blob URL (a plain <img src> cannot send the JWT)
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  // the register list is paged; the photo modal shows a picture full size
+  const [page, setPage] = useState(0);
+  const [photoModal, setPhotoModal] = useState<{ assetId: string; code: string; name: string; version?: string | null } | null>(null);
+  // the detail dialog shows one section at a time, each with its own page
+  const [detailTab, setDetailTab] = useState<'components' | 'cost' | 'movement'>('components');
+  const [partsPage, setPartsPage] = useState(0);
+  const [costPage, setCostPage] = useState(0);
+  const [movePage, setMovePage] = useState(0);
 
   /** Open one asset by id — shared by the list, the QR deep link and the part links. */
   const openAsset = async (id: string) => {
     setError(null);
     try {
       setDetail(await api<AssetDetail>(`/assets/${id}`));
+      setDetailTab('components');
+      setPartsPage(0);
+      setCostPage(0);
+      setMovePage(0);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to open asset');
     }
   };
+
+  // a new filter means a new result set — start again on page 1
+  useEffect(() => { setPage(0); }, [q, categoryId, locationId, status]);
 
   // Fetch the photo as a blob so the request carries the bearer token; revoke
   // the URL when the dialog closes or the picture is replaced.
@@ -459,6 +605,29 @@ export default function Assets() {
     () => rows.reduce((sum, r) => sum + (r.purchaseCost ? Number(r.purchaseCost) : 0), 0),
     [rows],
   );
+  // client-side paging over the filtered list: the API returns the filtered
+  // set in one go, so the QR deep link and the CSV export still see every row
+  const pageCount = Math.max(1, Math.ceil(rows.length / REGISTER_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = rows.slice(safePage * REGISTER_PAGE_SIZE, safePage * REGISTER_PAGE_SIZE + REGISTER_PAGE_SIZE);
+  // each detail section is paged on its own, so a long cost ledger never hides
+  // the movement history
+  const detailParts = detail?.installedParts ?? [];
+  const partsPageCount = Math.max(1, Math.ceil(detailParts.length / DETAIL_PAGE_SIZE));
+  const safePartsPage = Math.min(partsPage, partsPageCount - 1);
+  const detailCosts = detail?.costs ?? [];
+  const costPageCount = Math.max(1, Math.ceil(detailCosts.length / DETAIL_PAGE_SIZE));
+  const safeCostPage = Math.min(costPage, costPageCount - 1);
+  const detailMovements = detail?.movements ?? [];
+  const movePageCount = Math.max(1, Math.ceil(detailMovements.length / DETAIL_PAGE_SIZE));
+  const safeMovePage = Math.min(movePage, movePageCount - 1);
+  const detailTabDefs: { key: 'components' | 'cost' | 'movement'; label: string; count: number }[] = detail
+    ? [
+        { key: 'components', label: 'Installed components', count: detailParts.filter((p) => !p.removedAt).length },
+        { key: 'cost', label: 'Cost & spending', count: detailCosts.length },
+        { key: 'movement', label: 'Movement history', count: detailMovements.length },
+      ]
+    : [];
   const tabDefs: { key: 'register' | 'setup'; label: string }[] = canManage
     ? [{ key: 'register', label: 'Asset Register' }, { key: 'setup', label: 'Asset Setup (New)' }]
     : [{ key: 'register', label: 'Asset Register' }];
@@ -534,13 +703,19 @@ export default function Assets() {
         <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
       )}
 
-      <Table head={['CODE', 'NAME', 'CATEGORY', 'SERIAL', 'CUSTODIAN', 'LOCATION', 'STATUS', 'COST (MMK)', 'ACTIONS']}>
+      <Table head={['PHOTO', 'CODE', 'NAME', 'CATEGORY', 'SERIAL', 'CUSTODIAN', 'LOCATION', 'STATUS', 'COST (MMK)', 'ACTIONS']}>
         {loading ? (
-          <tr><td colSpan={9}><Empty label="Loading…" /></td></tr>
+          <tr><td colSpan={10}><Empty label="Loading…" /></td></tr>
         ) : rows.length === 0 ? (
-          <tr><td colSpan={9}><Empty label="No assets match the filters" /></td></tr>
-        ) : rows.map((a) => (
+          <tr><td colSpan={10}><Empty label="No assets match the filters" /></td></tr>
+        ) : pageRows.map((a) => (
           <tr key={a.id} className="hover:bg-gray-50/60">
+            <td className="px-4 py-2.5">
+              <AssetThumb
+                row={a}
+                onOpen={() => setPhotoModal({ assetId: a.id, code: a.assetCode, name: a.name, version: a.photo?.updatedAt ?? null })}
+              />
+            </td>
             <td className="px-4 py-2.5 font-medium text-gray-900">{a.assetCode}</td>
             <td className="px-4 py-2.5">{a.name}</td>
             <td className="px-4 py-2.5">{a.category?.name ?? '—'}</td>
@@ -550,16 +725,20 @@ export default function Assets() {
             <td className="px-4 py-2.5 text-center">{statusBadge(a.status)}</td>
             <td className="px-4 py-2.5 text-right tabular-nums">{a.purchaseCost ? Number(a.purchaseCost).toLocaleString() : '—'}</td>
             <td className="px-4 py-2.5 text-center">
-              <div className="flex flex-wrap justify-center gap-1.5">
-                <Button variant="ghost" onClick={() => void openDetail(a.id)}>View</Button>
+              <div className="flex flex-wrap justify-center gap-1">
+                <IconButton label="View details" onClick={() => void openDetail(a.id)}><IconEye /></IconButton>
                 {canManage && a.status !== 'DISPOSED' && (
-                  <Button variant="ghost" onClick={() => setTransfer({ id: a.id, name: a.name, toLocationId: a.location?.id ?? '', custodian: a.custodian ?? '', note: '' })}>
-                    Transfer
-                  </Button>
+                  <IconButton
+                    label="Transfer to another location / custodian"
+                    onClick={() => setTransfer({ id: a.id, name: a.name, toLocationId: a.location?.id ?? '', custodian: a.custodian ?? '', note: '' })}
+                  ><IconTransfer /></IconButton>
+                )}
+                {canManage && a.status === 'DISPOSED' && (
+                  <span className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-dashed border-gray-200 text-[10px] text-gray-300" title="A DISPOSED asset cannot be transferred">—</span>
                 )}
                 {canManage && (
                   <>
-                    <Button variant="ghost" onClick={() => setForm({
+                    <IconButton label="Edit asset" onClick={() => setForm({
                       ...emptyForm, id: a.id, name: a.name, assetCode: a.assetCode,
                       categoryId: a.category?.id ?? '', brand: a.brand ?? '', model: a.model ?? '',
                       serialNumber: a.serialNumber ?? '', custodian: a.custodian ?? '',
@@ -567,8 +746,8 @@ export default function Assets() {
                       purchaseDate: a.purchaseDate ? a.purchaseDate.slice(0, 10) : '',
                       purchaseCost: a.purchaseCost ?? '', description: a.description ?? '',
                       specs: { ...(a.specs ?? {}) },
-                    })}>Edit</Button>
-                    <Button variant="danger" onClick={() => setToDelete(a)}>Delete</Button>
+                    })}><IconEdit /></IconButton>
+                    <IconButton label="Delete asset" danger onClick={() => setToDelete(a)}><IconTrash /></IconButton>
                   </>
                 )}
               </div>
@@ -576,6 +755,19 @@ export default function Assets() {
           </tr>
         ))}
       </Table>
+      <Pager
+        page={safePage}
+        pageCount={pageCount}
+        total={rows.length}
+        from={rows.length ? safePage * REGISTER_PAGE_SIZE + 1 : 0}
+        to={Math.min(rows.length, (safePage + 1) * REGISTER_PAGE_SIZE)}
+        onChange={setPage}
+      />
+      {rows.length > REGISTER_PAGE_SIZE && (
+        <p className="text-[11px] text-gray-400 mt-1">
+          {REGISTER_PAGE_SIZE} assets per page — CSV export and search always cover the whole filtered list.
+        </p>
+      )}
 
       </>
       )}
@@ -723,13 +915,22 @@ export default function Assets() {
           <div className="mb-4 flex flex-wrap items-start gap-4">
             <div className="w-44 h-32 shrink-0 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
               {photoUrl ? (
-                <img src={photoUrl} alt={`${detail.assetCode} photo`} className="w-full h-full object-cover" />
+                <button
+                  type="button"
+                  title="View photo"
+                  aria-label={`View ${detail.assetCode} photo`}
+                  className="w-full h-full"
+                  onClick={() => setPhotoModal({ assetId: detail.id, code: detail.assetCode, name: detail.name, version: detail.photo?.updatedAt ?? null })}
+                >
+                  <img src={photoUrl} alt={`${detail.assetCode} photo`} className="w-full h-full object-cover" />
+                </button>
               ) : (
                 <span className="text-xs text-gray-400">No photo</span>
               )}
             </div>
             <div className="min-w-0 flex-1">
               <span className="text-gray-400 text-xs block mb-1">Photo · JPEG / PNG / WebP, max 5 MB</span>
+              <span className="text-[11px] text-gray-400 block mb-2">Location data (EXIF/GPS) is removed on upload.</span>
               {detail.photo && (
                 <span className="text-xs text-gray-500 block mb-2">
                   {detail.photo.size ? `${Math.round(detail.photo.size / 1024)} KB` : ''}
@@ -791,12 +992,28 @@ export default function Assets() {
           ) : null}
           {detail.description && <p className="text-sm text-gray-600 mb-4">{detail.description}</p>}
 
+          {/* One section at a time: parts, money and movement each have their own
+              list and their own page, so none of them pushes the others away. */}
+          <div className="flex flex-wrap gap-1 border-b border-gray-200 mb-3">
+            {detailTabDefs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                className={`px-3 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+                  detailTab === t.key
+                    ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+                onClick={() => setDetailTab(t.key)}
+              >
+                {t.label} ({t.count})
+              </button>
+            ))}
+          </div>
+
           {/* Parts fitted into this asset (a cartridge in a printer): the same link
               that puts the part's price on this asset's cost of ownership. */}
-          <div className="mb-4">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">
-              Installed components ({detail.installedParts.filter((p) => !p.removedAt).length})
-            </h3>
+          <div className={`mb-4 ${detailTab === 'components' ? '' : 'hidden'}`}>
             {detail.installedIn.filter((l) => !l.removedAt).map((l) => (
               <div key={l.id} className="mb-2 text-sm">
                 <span className="text-gray-400 text-xs block">Installed in</span>
@@ -805,11 +1022,11 @@ export default function Assets() {
                 </button>
               </div>
             ))}
-            {detail.installedParts.length === 0 ? (
+            {detailParts.length === 0 ? (
               <Empty label="No components fitted" />
             ) : (
               <ul className="divide-y divide-gray-100 text-sm">
-                {detail.installedParts.map((p) => (
+                {detailParts.slice(safePartsPage * DETAIL_PAGE_SIZE, (safePartsPage + 1) * DETAIL_PAGE_SIZE).map((p) => (
                   <li key={p.id} className="py-2 flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <span className="font-medium text-gray-800">{p.component.assetCode}</span>
@@ -836,6 +1053,14 @@ export default function Assets() {
                 ))}
               </ul>
             )}
+            <Pager
+              page={safePartsPage}
+              pageCount={partsPageCount}
+              total={detailParts.length}
+              from={detailParts.length ? safePartsPage * DETAIL_PAGE_SIZE + 1 : 0}
+              to={Math.min(detailParts.length, (safePartsPage + 1) * DETAIL_PAGE_SIZE)}
+              onChange={setPartsPage}
+            />
             {canManage && (
               <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center mt-2">
                 <Select value={installPick} onChange={(e) => setInstallPick(e.target.value)} className="!w-full sm:!w-72">
@@ -859,6 +1084,7 @@ export default function Assets() {
           </div>
 
           {/* §14.5 cost ledger — purchase price + everything spent since */}
+          <div className={detailTab === 'cost' ? '' : 'hidden'}>
           <div className="flex items-center justify-between gap-2 mb-2">
             <h3 className="text-sm font-semibold text-gray-700">Cost &amp; spending</h3>
             {canManage && (
@@ -893,7 +1119,7 @@ export default function Assets() {
             <Empty label="No costs recorded yet" />
           ) : (
             <ul className="divide-y divide-gray-100 text-sm mb-4">
-              {detail.costs.map((c) => (
+              {detailCosts.slice(safeCostPage * DETAIL_PAGE_SIZE, (safeCostPage + 1) * DETAIL_PAGE_SIZE).map((c) => (
                 <li key={c.id} className="py-2 flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <span className="font-medium text-gray-800">{c.kind}</span>
@@ -923,13 +1149,22 @@ export default function Assets() {
               ))}
             </ul>
           )}
+          <Pager
+            page={safeCostPage}
+            pageCount={costPageCount}
+            total={detailCosts.length}
+            from={detailCosts.length ? safeCostPage * DETAIL_PAGE_SIZE + 1 : 0}
+            to={Math.min(detailCosts.length, (safeCostPage + 1) * DETAIL_PAGE_SIZE)}
+            onChange={setCostPage}
+          />
+          </div>
 
-          <h3 className="text-sm font-semibold text-gray-700 mb-2">Movement history</h3>
-          {detail.movements.length === 0 ? (
+          <div className={detailTab === 'movement' ? '' : 'hidden'}>
+          {detailMovements.length === 0 ? (
             <Empty label="No movements recorded" />
           ) : (
             <ul className="divide-y divide-gray-100 text-sm">
-              {detail.movements.map((m) => (
+              {detailMovements.slice(safeMovePage * DETAIL_PAGE_SIZE, (safeMovePage + 1) * DETAIL_PAGE_SIZE).map((m) => (
                 <li key={m.id} className="py-2 flex items-start justify-between gap-3">
                   <div>
                     <span className="font-medium text-gray-800">{m.type}</span>
@@ -948,12 +1183,32 @@ export default function Assets() {
               ))}
             </ul>
           )}
+          <Pager
+            page={safeMovePage}
+            pageCount={movePageCount}
+            total={detailMovements.length}
+            from={detailMovements.length ? safeMovePage * DETAIL_PAGE_SIZE + 1 : 0}
+            to={Math.min(detailMovements.length, (safeMovePage + 1) * DETAIL_PAGE_SIZE)}
+            onChange={setMovePage}
+          />
+          </div>
         </Modal>
       )}
 
       {qrOpen && detail && (
         <Modal title={`QR label — ${detail.assetCode}`} onClose={() => setQrOpen(false)}>
           <QrLabel assetId={detail.id} assetCode={detail.assetCode} name={detail.name} />
+        </Modal>
+      )}
+
+      {/* full-size photo — opened from a register thumbnail or the detail picture */}
+      {photoModal && (
+        <Modal title={`${photoModal.code} — photo`} onClose={() => setPhotoModal(null)} wide>
+          <p className="text-sm text-gray-600 mb-3">{photoModal.name}</p>
+          <PhotoModalBody assetId={photoModal.assetId} version={photoModal.version} />
+          <p className="text-[11px] text-gray-400 mt-3">
+            Served through the signed-in photo route — the picture is never a public file.
+          </p>
         </Modal>
       )}
 

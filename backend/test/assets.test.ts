@@ -713,6 +713,58 @@ async function main() {
   });
 
   await test('NumberingService.next(…, 2): two-digit year, same monthly counter key', async () => {
+  await test('asset photo: EXIF/GPS is stripped, pixels and headers survive', async () => {
+    const { stripPhotoMetadata } = require('../src/assets/photo-metadata');
+    const seg = (marker: number, payload: Buffer) => {
+      const head = Buffer.alloc(4);
+      head[0] = 0xff; head[1] = marker; head.writeUInt16BE(payload.length + 2, 2);
+      return Buffer.concat([head, payload]);
+    };
+    const jpeg = Buffer.concat([
+      Buffer.from([0xff, 0xd8]),
+      seg(0xe1, Buffer.from('Exif\0\0GPS 16.8,96.1', 'latin1')),
+      seg(0xe0, Buffer.from('JFIF\0', 'latin1')),
+      Buffer.from([0xff, 0xda, 0x00, 0x08, 1, 2, 3, 4, 5, 6]),
+    ]);
+    const outJpeg = stripPhotoMetadata(jpeg, 'image/jpeg');
+    assert.ok(!outJpeg.includes(Buffer.from('Exif')), 'no EXIF marker survives');
+    assert.ok(outJpeg.includes(Buffer.from('JFIF')), 'APP0 is kept (needed to decode)');
+    assert.strictEqual(outJpeg.length, jpeg.length - seg(0xe1, Buffer.from('Exif\0\0GPS 16.8,96.1', 'latin1')).length, 'exactly the EXIF segment is removed');
+    assert.ok(outJpeg.includes(Buffer.from([0xff, 0xda])), 'the scan survives');
+
+    const chunk = (type: string, data: Buffer) => {
+      const head = Buffer.alloc(8);
+      head.writeUInt32BE(data.length, 0); head.write(type, 4, 'latin1');
+      return Buffer.concat([head, data, Buffer.alloc(4)]);
+    };
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      chunk('IHDR', Buffer.alloc(13)),
+      chunk('tEXt', Buffer.from('Author\0someone', 'latin1')),
+      chunk('eXIf', Buffer.from('MM\0*', 'latin1')),
+      chunk('IDAT', Buffer.alloc(8)),
+      chunk('IEND', Buffer.alloc(0)),
+    ]);
+    const outPng = stripPhotoMetadata(png, 'image/png');
+    assert.ok(!outPng.includes(Buffer.from('tEXt')) && !outPng.includes(Buffer.from('eXIf')), 'text + EXIF chunks gone');
+    assert.ok(outPng.includes(Buffer.from('IHDR')) && outPng.includes(Buffer.from('IDAT')), 'pixels kept');
+
+    const riffChunk = (type: string, data: Buffer) => {
+      const head = Buffer.alloc(8);
+      head.write(type, 0, 'latin1'); head.writeUInt32LE(data.length, 4);
+      return Buffer.concat([head, data, data.length % 2 ? Buffer.alloc(1) : Buffer.alloc(0)]);
+    };
+    const exif = riffChunk('EXIF', Buffer.from('GPS 16.8,96.1', 'latin1'));
+    const body = Buffer.concat([riffChunk('VP8X', Buffer.from([0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0])), exif]);
+    const riff = Buffer.alloc(12);
+    riff.write('RIFF', 0, 'latin1'); riff.writeUInt32LE(4 + body.length, 4); riff.write('WEBP', 8, 'latin1');
+    const webp = Buffer.concat([riff, body]);
+    const outWebp = stripPhotoMetadata(webp, 'image/webp');
+    assert.ok(!outWebp.includes(Buffer.from('EXIF')), 'the EXIF chunk is gone');
+    assert.strictEqual(outWebp.readUInt32LE(4), outWebp.length - 8, 'RIFF size stays consistent');
+    assert.strictEqual(outWebp[20] & 0x0c, 0, 'VP8X no longer announces EXIF/XMP');
+  });
+
     const { NumberingService } = require('../src/numbering/numbering.service');
     const keys: string[] = [];
     let counter = 0;
