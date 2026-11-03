@@ -226,7 +226,7 @@ function Pager({ page, pageCount, total, from, to, onChange }: {
     (p) => pageCount <= 7 || p === 0 || p === pageCount - 1 || Math.abs(p - page) <= 1,
   );
   const btn = 'h-7 min-w-7 px-2 rounded-md border text-xs transition-colors';
-  let previous = -2;
+  let previous = -1;
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 px-1 pt-3 text-xs text-gray-500">
       <span>Showing {from}–{to} of {total}</span>
