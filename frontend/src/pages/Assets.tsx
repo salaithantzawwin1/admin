@@ -165,6 +165,11 @@ const IconEye = () => (<><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-
 const IconTransfer = () => (<><path d="m16 3 4 4-4 4" /><path d="M20 7H4" /><path d="m8 21-4-4 4-4" /><path d="M4 17h16" /></>);
 const IconEdit = () => (<><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></>);
 const IconTrash = () => (<><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>);
+const IconQr = () => (<>
+  <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+  <rect x="3" y="14" width="7" height="7" rx="1" /><path d="M14 14h4v4h-4z" />
+  <path d="M21 14h.01" /><path d="M14 21h.01" /><path d="M21 21h.01" />
+</>);
 const IconPhoto = () => (<><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-4.5-4.5L9 18" /></>);
 
 /**
@@ -299,8 +304,10 @@ export default function Assets() {
   // §14.5 cost ledger: add form + the row queued for removal
   const [costForm, setCostForm] = useState<{ kind: string; date: string; amount: string; description: string } | null>(null);
   const [costToDelete, setCostToDelete] = useState<CostRow | null>(null);
-  // asset parts (a cartridge fitted into a printer) + the QR label dialog
-  const [qrOpen, setQrOpen] = useState(false);
+  // asset parts (a cartridge fitted into a printer) + the QR label dialog —
+  // held as the asset it belongs to, so a row can print a label without the
+  // detail panel being open
+  const [qrAsset, setQrAsset] = useState<{ id: string; assetCode: string; name: string } | null>(null);
   const [installPick, setInstallPick] = useState('');
   // asset photo: an authenticated blob URL (a plain <img src> cannot send the JWT)
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -728,6 +735,9 @@ export default function Assets() {
             <td className="px-4 py-2.5 text-center">
               <div className="flex flex-wrap justify-center gap-1">
                 <IconButton label="View details" onClick={() => void openDetail(a.id)}><IconEye /></IconButton>
+                <IconButton label="Print QR label" onClick={() => setQrAsset({ id: a.id, assetCode: a.assetCode, name: a.name })}>
+                  <IconQr />
+                </IconButton>
                 {canManage && a.status !== 'DISPOSED' && (
                   <IconButton
                     label="Transfer to another location / custodian"
@@ -928,7 +938,9 @@ export default function Assets() {
           <div className={detailTab === 'details' ? '' : 'hidden'}>
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <span className="text-xs text-gray-400">Scan the printed label to open this asset on a signed-in device</span>
-            <Button variant="ghost" onClick={() => setQrOpen(true)}>🏷️ QR label</Button>
+            <Button variant="ghost" onClick={() => setQrAsset({ id: detail.id, assetCode: detail.assetCode, name: detail.name })}>
+              🏷️ QR label
+            </Button>
           </div>
           {/* Asset photo — one picture, replaceable. Stored privately and shown
               only through the token-guarded endpoint. */}
@@ -1198,9 +1210,9 @@ export default function Assets() {
         </Modal>
       )}
 
-      {qrOpen && detail && (
-        <Modal title={`QR label — ${detail.assetCode}`} onClose={() => setQrOpen(false)}>
-          <QrLabel assetId={detail.id} assetCode={detail.assetCode} name={detail.name} />
+      {qrAsset && (
+        <Modal title={`QR label — ${qrAsset.assetCode}`} onClose={() => setQrAsset(null)}>
+          <QrLabel assetId={qrAsset.id} assetCode={qrAsset.assetCode} name={qrAsset.name} />
         </Modal>
       )}
 
