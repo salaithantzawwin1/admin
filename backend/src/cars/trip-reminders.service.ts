@@ -128,13 +128,13 @@ export class TripRemindersService {
           await this.telegram.sendRaw(
             a.driver.telegramChatId,
             [
-              `⏰ <b>Reminder — ${escapeHtml(a.request.docNumber)}</b>`,
-              `Your trip started at ${escapeHtml(when)} but has not been acknowledged yet.`,
+              `⏰ <b>သတိပေးချက် — ${escapeHtml(a.request.docNumber)}</b>`,
+              `သင့်ခရီးစဉ်ကို ${escapeHtml(when)} မှာ စတင်ခဲ့ပြီး ဖြစ်ပေမယ့် လက်ခံကြောင်း (acknowledge) မလုပ်ရသေးပါ။`,
               ``,
-              `📍 Pickup: ${escapeHtml(pickup)}`,
-              `🗺 Destination: ${escapeHtml(dest)}`,
+              `📍 ကားထွက်မည့်နေရာ: ${escapeHtml(pickup)}`,
+              `🗺 သွားရမည့်နေရာ: ${escapeHtml(dest)}`,
               ``,
-              `Please open your assignment message and tap <b>"✓ Noted"</b> so Administration knows you are on it.`,
+              `ခရီးစဉ်ကို ကြည့်ပြီး <b>"✓ Noted"</b> ကို နှိပ်ပေးပါ၊ ဒါမှ Administration က သင်ခရီးစဉ်ကို သိရှိကြောင်း သိပါမယ်။`,
             ].join('\n'),
           ).catch(() => undefined);
         }
@@ -739,12 +739,12 @@ export class TripRemindersService {
           },
         }).catch(() => undefined);
         const driverMsg = [
-          `⏳ <b>Ending soon — ${escapeHtml(a.request.docNumber)}</b>`,
-          `The booking window ends at ${escapeHtml(when)}.`,
+          `⏳ <b>အချိန်ကုန်တော့မည် — ${escapeHtml(a.request.docNumber)}</b>`,
+          `ခရီးစဉ်အတွက် ယူထားသော အချိန် (booking window) သည် ${escapeHtml(when)} မှာ ကုန်ဆုံးပါမယ်။`,
           ``,
-          `Can you make it back on time?`,
-          `• Yes — tap <b>"🏁 Back at Office"</b> on your assignment message right when you return.`,
-          `• Running late — tap <b>"⏰ နောက်ကျ"</b> and report your new return time so Administration knows the car is still out.`,
+          `အချိန်မီ ပြန်ရောက်နိုင်မှာလား?`,
+          `• ရောက်နိုင်တယ် — ပြန်ရောက်တာနဲ့ သင့်အတွက် သတ်မှတ်ထားတဲ့ ခရီးစဉ်ပေါ်က <b>"🏁 Back at Office"</b> ကို နှိပ်ပါ။`,
+          `• နောက်ကျမယ် — <b>"⏰ နောက်ကျ"</b> ကို နှိပ်ပြီး ပြန်ရောက်နိုင်မယ့် အချိန်အသစ်ကို အသိပေးပါ၊ ဒါမှ Administration က ကား အပြင်မှာ ရှိနေတုန်းဆိုတာ သိပါမယ်။`,
         ].join('\n');
         if (a.driver?.telegramChatId) {
           await this.telegram.sendRaw(a.driver.telegramChatId, driverMsg).catch(() => undefined);
@@ -757,8 +757,8 @@ export class TripRemindersService {
               data: {
                 userId: uid,
                 type: 'WINDOW_ENDING' as never,
-                title: `⏳ Trip ending soon — ${a.request.docNumber}`,
-                body: `The booking window ends at ${when}. If you are running late, tell Administration so they can note the new return time.`,
+                title: `⏳ ခရီးစဉ် အချိန်ကုန်တော့မည် — ${a.request.docNumber}`,
+                body: `ခရီးစဉ်အတွက် ယူထားသော အချိန် (booking window) သည် ${when} မှာ ကုန်ဆုံးပါမယ်။ နောက်ကျမည်ဆိုရင် Administration ကို အသိပေးပါ။`,
                 link: `/requests/${a.request.id}`,
                 requestId: a.request.id,
               },
@@ -960,11 +960,11 @@ export class TripRemindersService {
           await this.telegram.sendRaw(
             a.driver.telegramChatId,
             [
-              `🏁 <b>Overdue — ${escapeHtml(a.request.docNumber)}</b>`,
-              `The booking window ended at ${escapeHtml(when)} (${overMins} min ago) but the trip is still open.`,
-              `Vehicle ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} is still reserved.`,
+              `🏁 <b>အချိန်ကျော်နေသည် — ${escapeHtml(a.request.docNumber)}</b>`,
+              `ခရီးစဉ်အတွက် ယူထားသော အချိန်သည် ${escapeHtml(when)} မှာ ကုန်ဆုံးခဲ့ပြီး (${overMins} မိနစ် ကြာပြီ) ခရီးစဉ် မပိတ်ရသေးပါ။`,
+              `ကား ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} ကို ဆက်လက် သိမ်းထားဆဲ ဖြစ်ပါတယ်။`,
               ``,
-              `If you are back, tap <b>"🏁 Back at Office"</b> on your assignment message — the car frees up immediately.`,
+              `ရုံးပြန်ရောက်ပြီဆိုရင် သင့် assignment message ပေါ်က <b>"🏁 Back at Office"</b> ကို နှိပ်ပါ — ကား ချက်ချင်း ပြန်လွတ်ပါမယ်။`,
             ].join('\n'),
           ).catch(() => undefined);
         }

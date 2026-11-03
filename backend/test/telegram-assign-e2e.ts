@@ -472,17 +472,17 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
         : fullAssignment(where.id),
     update: async ({ data }: any) => ({ ...fullAssignment('a4', { id: 'd9', name: 'Bound Driver', telegramChatId: DRIVER_CHAT }), ...data }),
   };
-  const assignedMsgCount = () => sent('Car Assigned — CAR-202609-0036').length;
+  const assignedMsgCount = () => sent('ကား တာဝန်ပေးအပ်ပြီး — CAR-202609-0036').length;
   apiLog.length = 0; // isolate the matrix
   (prisma.userRole as any).findMany = async () => [{ userId: 'u9' }]; // pin roster shape (userId) for notifyStage
 
   // 16. assignment → driver receives the FULL route card (real sendAssignment)
   await (telegram as any).sendAssignment('a3');
-  const driverCard = sent('Car Assigned — CAR-202609-0036').pop();
+  const driverCard = sent('ကား တာဝန်ပေးအပ်ပြီး — CAR-202609-0036').pop();
   check(!!driverCard && driverCard.payload.chat_id === DRIVER_CHAT, 'assigned → driver card with route details (driver chat)');
-  check(!!driverCard && String(driverCard.payload.text).includes('📍 Pickup: Head Office'), 'driver card carries pickup, destination');
-  check(!!driverCard && String(driverCard.payload.text).includes('👤 Requester: Salai Thant Zaw Win'), 'driver card carries requester + vehicle info');
-  check(!!driverCard && String(driverCard.payload.text).includes('Open in Maps'), 'driver card carries a Maps link');
+  check(!!driverCard && String(driverCard.payload.text).includes('📍 ကားထွက်မည့်နေရာ: Head Office'), 'driver card carries pickup, destination');
+  check(!!driverCard && String(driverCard.payload.text).includes('👤 တောင်းခံသူ: Salai Thant Zaw Win'), 'driver card carries requester + vehicle info');
+  check(!!driverCard && String(driverCard.payload.text).includes('မြေပုံတွင် ကြည့်ရန်'), 'driver card carries a Maps link');
   const dkb2 = driverCard?.payload?.reply_markup?.inline_keyboard?.[0] ?? [];
   check(dkb2.length === 3 && dkb2.every((b: any) => !String(b.text).startsWith('✅')), 'driver card shows all 3 stage buttons (none done yet)');
   check(assignedMsgCount() === 1, 'exactly ONE assignment card was sent overall (requester/admin chats get none of it)');
@@ -493,7 +493,7 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   check(sent('✓ Bound Driver noted CAR-202609-0036').length === 2, 'Noted mirrors = 2 (assigner + Administration chats)');
   check(sent('✓ Bound Driver noted CAR-202609-0036').every((m) => [CHAT_OK, ADMIN_CHAT].includes(m.payload.chat_id)), 'Noted mirrors go to assigner + Administration only');
   const notedToast = last('answerCallbackQuery');
-  check(!!notedToast && notedToast.payload.text.includes('Administration notified'), 'Noted tap acknowledged to the DRIVER with a toast');
+  check(!!notedToast && notedToast.payload.text.includes('Administration ကို အသိပေးပြီးပါပြီ'), 'Noted tap acknowledged to the DRIVER with a toast');
   check(!!last('editMessageText') && last('editMessageText')!.payload.message_id === 555, 'driver card repaints with stage progress (same message)');
 
   // 18. driver taps Ready → requester rich message + mirrors
@@ -562,11 +562,11 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
 
   // 24. joining repaints BOTH cards — the peer's stale first-trip card is the regression
   await (telegram as any).repaintDriverCards('aB');
-  const sharedCards = apiLog.filter((e) => e.method === 'sendMessage' && typeof e.payload?.text === 'string' && e.payload.text.includes('🧑‍🤝‍🧑 Shared trip'));
+  const sharedCards = apiLog.filter((e) => e.method === 'sendMessage' && typeof e.payload?.text === 'string' && e.payload.text.includes('🧑‍🤝‍🧑 ခရီးစဉ် မျှဝေ'));
   check(sharedCards.length === 2, 'shared repaint sends BOTH member cards (the stale first-trip card included)');
   // match on the card TITLE — every shared card also lists the peer's doc in its rider section
-  const firstCard = sharedCards.find((m) => String(m.payload.text).includes('Car Assigned — CAR-202609-0050'));
-  const secondCard = sharedCards.find((m) => String(m.payload.text).includes('Car Assigned — CAR-202609-0051'));
+  const firstCard = sharedCards.find((m) => String(m.payload.text).includes('ကား တာဝန်ပေးအပ်ပြီး — CAR-202609-0050'));
+  const secondCard = sharedCards.find((m) => String(m.payload.text).includes('ကား တာဝန်ပေးအပ်ပြီး — CAR-202609-0051'));
   check(!!firstCard && String(firstCard.payload.text).includes('CAR-202609-0051 — Office Run · Second Rider'), 'first-trip card now lists the joining peer (regression fixed)');
   check(!!secondCard && String(secondCard.payload.text).includes('CAR-202609-0050 — Taunggyi · First Rider'), 'joining card lists the first rider too');
   const b2bRow = (msg: any) => (msg?.payload?.reply_markup?.inline_keyboard ?? []).flat().find((b: any) => b?.text === '🏁 Back at Office — BOTH trips');
@@ -628,7 +628,7 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   // FIRST tap arms the confirm — nothing closes yet
   await tap('b2b:aA', 'cb-b2b-1', 8001, Number(DRIVER_CHAT));
   check(statuses().every((s) => s === 'IN_PROGRESS'), 'first b2b tap only ARMS the confirm — both trips still IN_PROGRESS');
-  check(last('answerCallbackQuery')?.payload?.text === 'Tap again to confirm BOTH trips are done', 'first tap answers with the confirm prompt');
+  check(last('answerCallbackQuery')?.payload?.text === 'ခရီးစဉ် နှစ်ခုလုံး ပြီးကြောင်း အတည်ပြုရန် ထပ်နှိပ်ပါ', 'first tap answers with the confirm prompt');
   // SECOND tap within 30s executes — both trips close with ONE logical action
   await tap('b2b:aA', 'cb-b2b-2', 8001, Number(DRIVER_CHAT));
   check(statuses().every((s) => s === 'COMPLETED'), 'confirmed b2b tap completes BOTH shared requests');
@@ -638,13 +638,13 @@ const tap = (data: string, callbackId: string, msgId: number, chatId: number = N
   check(sharedAssignments.aA.driverBackAtOfficeAt && sharedAssignments.aB.driverBackAtOfficeAt, 'both assignments carry driverBackAtOfficeAt');
   check(sharedUpdateCalls.includes('aA') && sharedUpdateCalls.includes('aB'), 'stage machine ran for both assignment rows');
   const b2bDone = [...apiLog].reverse().find((e) => e.method === 'answerCallbackQuery');
-  check(!!b2bDone && String(b2bDone.payload?.text ?? '').includes('BOTH trips completed'), 'final toast confirms BOTH trips are done');
+  check(!!b2bDone && String(b2bDone.payload?.text ?? '').includes('ခရီးစဉ် နှစ်ခုလုံး ပြီးပါပြီ'), 'final toast confirms BOTH trips are done');
 
   // 27. stray chat cannot trigger the combined back (driver-binding enforced)
   const strayBefore = statuses().join(',');
   await tap('b2b:aB', 'cb-b2b-stray', 8002, Number(CHAT_STRANGER));
   check(statuses().join(',') === strayBefore, 'stranger chat tapping b2b → nothing happens (not authorized)');
-  check(last('answerCallbackQuery')?.payload?.text === 'Not authorized', 'stranger tap answered with Not authorized');
+  check(last('answerCallbackQuery')?.payload?.text === 'ခွင့်ပြုချက် မရှိပါ', 'stranger tap answered with Not authorized');
 
   console.log(failures === 0 ? '\nALL CHECKS PASSED ✅' : `\n${failures} CHECK(S) FAILED ❌`);
   process.exit(failures === 0 ? 0 : 1);

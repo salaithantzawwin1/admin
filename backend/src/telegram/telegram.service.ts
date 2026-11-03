@@ -861,7 +861,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const minutes = Number(assignmentId);
       const targetId = data.split(':')[2] ?? '';
       if (!Number.isFinite(minutes) || !targetId) {
-        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Bad delay request' });
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'မမှန်ကန်သော delay တောင်းခံမှု' });
         return;
       }
       if (minutes === 0) {
@@ -880,7 +880,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             ],
           },
         });
-        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Pick how late' });
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'နောက်ကျမည့် အချိန်ကို ရွေးပါ' });
         return;
       }
       if (!this.etaRef) {
@@ -900,12 +900,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       },
     });
     if (!assignment) {
-      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Assignment not found' });
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'ခရီးစဉ် တာဝန်ပေးမှု မတွေ့ပါ' });
       return;
     }
     // Security: only the bound driver's chat may act on their assignment
     if (!assignment.driver?.telegramChatId || assignment.driver.telegramChatId !== fromChatId) {
-      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Not authorized' });
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'ခွင့်ပြုချက် မရှိပါ' });
       return;
     }
     // Stale-card guard: re-assigning rewrites the same assignment row and sends a
@@ -936,12 +936,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         } catch {
           /* the toast below still answers — completion failures surface via the per-trip stamps */
         }
-        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: '✅ Back at office — BOTH trips completed' });
+        await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: '✅ ရုံးပြန်ရောက် — ခရီးစဉ် နှစ်ခုလုံး ပြီးပါပြီ' });
         return;
       }
       this.pendingCombinedBack.set(fromChatId, assignmentId);
       setTimeout(() => this.pendingCombinedBack.delete(fromChatId), 30_000).unref?.();
-      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Tap again to confirm BOTH trips are done' });
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'ခရီးစဉ် နှစ်ခုလုံး ပြီးကြောင်း အတည်ပြုရန် ထပ်နှိပ်ပါ' });
       return;
     }
     if (action === 'etacustom') {
@@ -953,7 +953,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         chat_id: fromChatId,
         text: '✏️ ပြန်ရောက်မယ့် အချိန်ကို ရေးပါ — (ဥပမာ: 15:30 သို့မဟုတ် 3:30pm)',
       });
-      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Type the time' });
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'အချိန်ကို ရိုက်ထည့်ပါ' });
       return;
     }
     // Stage machine: each action only fires from its own stage (or later, filling gaps)
@@ -1177,7 +1177,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     callbackId: string,
     action: string,
   ) {
-    const label = action === 'noted' ? 'Noted — Administration notified' : action === 'arrived' ? 'Car ready — requester & Administration notified' : 'Back at office — car is available again';
+    const label = action === 'noted'
+      ? '✓ လက်ခံပြီး — Administration ကို အသိပေးပြီးပါပြီ'
+      : action === 'arrived'
+        ? '🚦 ကား အသင့် — တောင်းခံသူနှင့် Administration ကို အသိပေးပြီးပါပြီ'
+        : '🏁 ရုံးပြန်ရောက်ပြီး — ကား ပြန်လွတ်ပါပြီ';
     await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: label });
   }
 
@@ -1329,7 +1333,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     stages?: { noted?: Date | null; arrived?: Date | null; back?: Date | null } | null,
     sharedRiders?: { docNumber: string; destination: string; requester: { fullName: string } }[] | null,  ): string {
     const cr = a.carRequest;
-    if (!cr) return escapeHtml(`🚗 Car Assigned — ${a.request.docNumber}`);
+    if (!cr) return escapeHtml(`🚗 ကား တာဝန်ပေးအပ်ပြီး — ${a.request.docNumber}`);
     // the rider list arrives as the 3rd parameter (sendAssignment / editStageMessage);
     // a.sharedRiders is kept as a legacy fallback — the prisma row never carries it,
     // so the section silently never rendered before this was fixed.
@@ -1338,39 +1342,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const pickup = cr.pickupLocation || '—';
     const phone = a.request.requester.employee?.phone;
     const lines = [
-      `<b>🚗 Car Assigned — ${escapeHtml(a.request.docNumber)} · ${escapeHtml(cr.destination)}</b>`,
+      `<b>🚗 ကား တာဝန်ပေးအပ်ပြီး — ${escapeHtml(a.request.docNumber)} · ${escapeHtml(cr.destination)}</b>`,
       ``,
       `📅 ${escapeHtml(when)}`,
       `🚙 ${a.vehicle ? escapeHtml(`${a.vehicle.brandModel} · ${a.vehicle.vehicleNo}`) : '—'}`,
-      `📍 Pickup: ${escapeHtml(pickup)}`,
-      `🗺 Destination: ${escapeHtml(cr.destination)}`,
-      `👥 Passengers: ${cr.passengers ?? 1}`,
-      `👤 Requester: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
+      `📍 ကားထွက်မည့်နေရာ: ${escapeHtml(pickup)}`,
+      `🗺 သွားရမည့်နေရာ: ${escapeHtml(cr.destination)}`,
+      `👥 လူဦးရေ: ${cr.passengers ?? 1}`,
+      `👤 တောင်းခံသူ: ${escapeHtml(a.request.requester.fullName)}${phone ? ` (${escapeHtml(phone)})` : ''}`,
       cr.purpose ? `📝 ${escapeHtml(cr.purpose)}` : '',
       // driver-reported ETA (⏰ Delay) — replaces the planned end on the card
       // until Back at Office clears it
-      a.estimatedReturnAt ? `⏰ ETA: ${fmtTime(a.estimatedReturnAt)} (${fmtDate(a.estimatedReturnAt)})` : '',
+      a.estimatedReturnAt ? `⏰ ခန့်မှန်း ပြန်ရောက်ချိန်: ${fmtTime(a.estimatedReturnAt)} (${fmtDate(a.estimatedReturnAt)})` : '',
       // requester's special instruction ("wait and call me", "carrying goods…")
       // — the driver must see it BEFORE heading out
-      cr.specialRequest ? `⭐ Special: ${escapeHtml(cr.specialRequest)}` : '',
+      cr.specialRequest ? `⭐ အထူး ညွှန်ကြားချက်: ${escapeHtml(cr.specialRequest)}` : '',
       // shared trip — the driver sees who else is riding the same car
       ...(riders && riders.length > 0
-        ? [``, `<b>🧑‍🤝‍🧑 Shared trip</b>`, ...riders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
+        ? [``, `<b>🧑‍🤝‍🧑 ခရီးစဉ် မျှဝေ</b>`, ...riders.map((r) => `• ${escapeHtml(r.docNumber)} — ${escapeHtml(r.destination)} · ${escapeHtml(r.requester.fullName)}`)]
         : []),
     ].filter((l) => l !== undefined);
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${pickup} to ${cr.destination}`)}`;
     // Burmese guidance — the #1 operational failure is a driver who never taps
     // "🏁 Back at Office" (the car then blocks until the auto-close cron fires)
-    const guide = '<i>📌 Trip ပြီးရင် ရုံးပြန်ရောက်ချိန်မှာ "🏁 Back at Office" နှိပ်ပါ — ကား ချက်ချင်း လွတ်ပြီး trip ပိတ်မည်။ မနှိပ်ဘဲထားခဲ့ရင် window ကုန်ပြီး မကြာမီ အလိုအလျောက် ပိတ်သွားမည်။</i>';
+    const guide = '<i>📌 Trip ပြီးရင် ရုံးပြန်ရောက်ချိန်မှာ "🏁 Back at Office" နှိပ်ပါ — မနှိပ်ဘဲထားခဲ့ရင် window ကုန်ပြီး မကြာမီ အလိုအလျောက် ပိတ်သွားမည်။</i>';
     if (stages) {
-      if (stages.noted) lines.push(`✓ Noted · ${fmtTime(stages.noted)}`);
-      if (stages.arrived) lines.push(`🚦 Car ready · ${fmtTime(stages.arrived)}`);
-      if (stages.back) lines.push(`🏁 Back at office · ${fmtTime(stages.back)}`);
+      if (stages.noted) lines.push(`✓ လက်ခံပြီး · ${fmtTime(stages.noted)}`);
+      if (stages.arrived) lines.push(`🚦 ကား အသင့် · ${fmtTime(stages.arrived)}`);
+      if (stages.back) lines.push(`🏁 ရုံးပြန်ရောက် · ${fmtTime(stages.back)}`);
       lines.push('', guide);
     } else {
-      lines.push(`Tap "✓ Noted" to acknowledge the route.`, '', guide);
+      lines.push(`ခရီးစဉ်ကို လက်ခံကြောင်း သိရအောင် "✓ Noted" ကို နှိပ်ပါ။`, '', guide);
     }
-    return `${lines.join('\n')}\n🗺 <a href="${mapsUrl}">Open in Maps</a>`;
+    return `${lines.join('\n')}\n🗺 <a href="${mapsUrl}">မြေပုံတွင် ကြည့်ရန်</a>`;
   }
 
   /** Push the assignment message (all three stage buttons) to the driver's chat.

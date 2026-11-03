@@ -934,7 +934,7 @@ async function main() {
     );
     await svcNudge.endingSoonNudge();
     assert.strictEqual(raws.length, 1, 'driver must get exactly one Telegram nudge');
-    assert.ok(raws[0].includes('Ending soon') && raws[0].includes('နောက်ကျ'), 'nudge must name the window end and the ⏰ Late button');
+    assert.ok(raws[0].includes('အချိန်ကုန်တော့မည်') && raws[0].includes('နောက်ကျ'), 'nudge must name the window end and the ⏰ Late button');
     assert.ok(notifs.some((n) => n.type === 'WINDOW_ENDING' && n.userId === 'u-req'), 'requester must get the ending-soon bell');
     // second run: idempotent — no duplicate nudge/bell
     await svcNudge.endingSoonNudge();
