@@ -682,7 +682,10 @@ export class TripRemindersService {
         } catch { /* best-effort — the close itself already happened */ }
         expired++;
       }
-      if (expired > 0) this.logger.log(`auto-expired ${expired} stale car request(s) (window ended >24h ago)`);
+      if (expired > 0) {
+        const hours = Math.round(STALE_AFTER_MS / 3_600_000);
+        this.logger.log(`auto-expired ${expired} unserved car request(s) (window ended >${hours}h ago)`);
+      }
     } catch (e) {
       this.logger.warn(`expireStaleRequests failed: ${(e as Error).message}`);
     }
