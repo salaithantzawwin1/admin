@@ -63,6 +63,8 @@ interface RequestRow {
     assignment?: {
       id: string;
       assignedAt: string;
+      /** set when the janitor/Administration released the booking — a car WAS picked */
+      releasedAt?: string | null;
       driverNotedAt?: string | null;
       driverArrivedAt?: string | null;
       driverBackAtOfficeAt?: string | null;
@@ -525,10 +527,25 @@ export default function CarRequests() {
                   )}
                   {/* APPROVED but nobody picked a car — the status cell must say so,
                       otherwise a green APPROVED pill reads like a finished job */}
+                  {/* APPROVED without a live car link means one of two very different
+                      things: nobody assigned yet, or a car WAS assigned and the booking
+                      was released again (window ended before the driver confirmed).
+                      The second one used to read "vehicle not assigned" too, so a
+                      dispatch that did happen looked like one that never did
+                      (CAR-202611-0005). The released assignment row keeps the trail. */}
                   {r.status === 'APPROVED' && r.carRequest && !r.carRequest.vehicleId && (
-                    <div className="text-xs text-amber-600 font-medium mt-1" title="No vehicle assigned yet">
-                      🚗 vehicle not assigned
-                    </div>
+                    r.carRequest.assignment?.releasedAt || r.carRequest.assignment ? (
+                      <div
+                        className="text-xs text-slate-500 font-medium mt-1"
+                        title="A car and driver were assigned, then the booking was released — assign again if the ride still has to happen"
+                      >
+                        🚗 assigned then released — re-assign
+                      </div>
+                    ) : (
+                      <div className="text-xs text-amber-600 font-medium mt-1" title="No vehicle assigned yet">
+                        🚗 vehicle not assigned
+                      </div>
+                    )
                   )}
                   {r.status === 'IN_PROGRESS' && (r.carRequest?.assignment || r.carRequest?.sharedRide) && (
                     <DriverAckStages a={r.carRequest?.assignment} sharedRide={r.carRequest?.sharedRide} />

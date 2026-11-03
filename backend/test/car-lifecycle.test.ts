@@ -229,6 +229,7 @@ async function main() {
   // ------------------------------------------------ 5) expired-trip janitor
   function janitor(over: { holders?: any[]; row?: any } = {}) {
     const writes: any[] = [];
+    const notices: any[] = [];
     const row = over.row ?? {
       id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1',
       driverBackAtOfficeAt: null, driverNotedAt: null, driverArrivedAt: null, estimatedReturnAt: null,
@@ -255,11 +256,11 @@ async function main() {
     };
     const svc: any = new TripRemindersService(
       prisma,
-      { notifyMany: async () => undefined, notify: async () => undefined },
+      { notifyMany: async (ids: string[], n: any) => notices.push({ ids, ...n }), notify: async () => undefined },
       { mirrorToUser: async () => undefined },
       { usersWithPermissions: async () => ['u-admin'] },
     );
-    return { svc, writes };
+    return { svc, writes, notices };
   }
 
   await test('janitor keeps the car IN_USE when the next trip already took it', async () => {
@@ -293,6 +294,65 @@ async function main() {
     await svc.releaseExpired();
     assert.ok(!writes.some((w) => w.__w === 'vehicle'), 'a completed ride must not free a car still on the road');
     assert.ok(writes.some((w) => w.__w === 'requestDocument' && w.data.status === 'COMPLETED'), 'the ride itself still closes');
+  });
+
+  // ------------------------------------------------ 6) CAR-202611-0005
+  await test('janitor tells Administration a car was released, not that none was picked', async () => {
+    const { svc, notices } = janitor({ holders: [] });
+    await svc.releaseExpired();
+    assert.ok(
+      notices.some((n) => n.ids.includes('u-admin')),
+      'Administration must learn the assigned car was released at window end',
+    );
+  });
+
+  function returnedAfterRelease(over: { status?: string; docStatus?: string; taps?: any } = {}) {
+    const writes: any[] = [];
+    const taps = over.taps ?? { releasedAt: new Date('2026-11-02T04:00:00Z'), driverBackAtOfficeAt: new Date('2026-11-02T04:10:00Z') };
+    const tx: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          status: over.status ?? 'APPROVED',
+          docNumber: 'CAR-202611-0005',
+          requesterId: 'u-req',
+          carAssignment: { vehicleId: 'v1', driverId: 'd1', trip: null, ...taps },
+        }),
+        update: async (a: any) => writes.push({ __w: 'requestDocument', ...a }),
+      },
+      carRequest: { update: async (a: any) => writes.push({ __w: 'carRequest', ...a }) },
+    };
+    const prisma: any = {
+      $transaction: async (cb: any) => cb(tx),
+      notification: { create: async (a: any) => writes.push({ __w: 'notification', ...a }) },
+    };
+    const svc: any = new TelegramService(prisma, { log: async (e: any) => writes.push({ __w: 'audit', ...e }) }, {}, { publish: () => 0 });
+    svc.mirrorToUser = async () => undefined; // no Telegram traffic from a unit test
+    return { svc, writes };
+  }
+
+  await test('Back at Office still closes a trip whose window was released a minute earlier', async () => {
+    const { svc, writes } = returnedAfterRelease();
+    await svc.completeAfterReturn('r1');
+    assert.ok(
+      writes.some((w) => w.__w === 'requestDocument' && w.data.status === 'COMPLETED'),
+      'the ride happened — the released booking must close, not stay APPROVED',
+    );
+    const cr = writes.find((w) => w.__w === 'carRequest');
+    assert.strictEqual(cr?.data.status, 'COMPLETED');
+    assert.strictEqual(cr?.data.vehicleId, 'v1', 'the closed request keeps the car it actually used');
+    assert.strictEqual(cr?.data.driverId, 'd1', 'the closed request keeps the driver it actually used');
+  });
+
+  await test('Back at Office does not re-open a request that was cancelled meanwhile', async () => {
+    const { svc, writes } = returnedAfterRelease({ status: 'CANCELLED' });
+    await svc.completeAfterReturn('r1');
+    assert.ok(!writes.some((w) => w.__w === 'requestDocument'), 'a cancelled request must stay cancelled');
+  });
+
+  await test('Back at Office with an unfinished trip still leaves completion to the trip form', async () => {
+    const { svc, writes } = returnedAfterRelease({ taps: { releasedAt: null, driverBackAtOfficeAt: null, trip: { status: 'STARTED' } } });
+    await svc.completeAfterReturn('r1');
+    assert.ok(!writes.some((w) => w.__w === 'requestDocument'), 'open mileage must block auto-completion');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

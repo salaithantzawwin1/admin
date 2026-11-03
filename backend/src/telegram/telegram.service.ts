@@ -1085,16 +1085,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (!requestId) return;
     try {
       const done = await this.prisma.$transaction(async (tx: {
-        requestDocument: { findUnique: (a: unknown) => Promise<{ status: string; docNumber: string; requesterId: string; carAssignment?: { trip?: { status: string } } | null } | null>; update: (a: unknown) => Promise<unknown> };
+        requestDocument: { findUnique: (a: unknown) => Promise<{ status: string; docNumber: string; requesterId: string; carAssignment?: { releasedAt?: Date | null; driverBackAtOfficeAt?: Date | null; vehicleId?: string | null; driverId?: string | null; trip?: { status: string } | null } | null } | null>; update: (a: unknown) => Promise<unknown> };
         carRequest: { update: (a: unknown) => Promise<unknown> };
       }) => {
         const r = await tx.requestDocument.findUnique({
           where: { id: requestId },
-          select: { status: true, docNumber: true, requesterId: true, carAssignment: { select: { trip: { select: { status: true } } } } },
+          select: {
+            status: true, docNumber: true, requesterId: true,
+            carAssignment: {
+              select: { releasedAt: true, driverBackAtOfficeAt: true, vehicleId: true, driverId: true, trip: { select: { status: true } } },
+            },
+          },
         });
-        if (!r || r.status !== 'IN_PROGRESS') return null;
+        if (!r) return null;
+        // The janitor releases a booking at its window end and re-queues the
+        // request as APPROVED. A driver still on the road reaches Telegram a
+        // minute later: the taps land on that released assignment, the trip did
+        // happen, and gating completion on IN_PROGRESS alone left the request
+        // APPROVED with every ack stamped (CAR-202611-0005 on 2026-11-02 —
+        // vehicle 10:30 release, "back at office" 10:40). Accept the driver's
+        // own return as proof, whatever the row status became meanwhile.
+        const releasedButReturned = r.status === 'APPROVED' && r.carAssignment?.driverBackAtOfficeAt != null;
+        if (r.status !== 'IN_PROGRESS' && !releasedButReturned) return null;
         if (r.carAssignment?.trip?.status === 'STARTED') return null; // mileage open — Admin completes via the trip form
-        await tx.carRequest.update({ where: { requestId }, data: { status: 'COMPLETED' } });
+        await tx.carRequest.update({
+          where: { requestId },
+          data: {
+            status: 'COMPLETED',
+            // re-link the car and driver the janitor unlinked, so the closed
+            // request keeps its cost/usage history
+            ...(r.carAssignment?.vehicleId ? { vehicleId: r.carAssignment.vehicleId } : {}),
+            ...(r.carAssignment?.driverId ? { driverId: r.carAssignment.driverId } : {}),
+          },
+        });
         await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'COMPLETED' } });
         return r;
       });
@@ -1103,7 +1126,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         action: 'REQUEST_AUTO_COMPLETED',
         module: 'CARS',
         recordId: requestId,
-        newValue: { reason: 'Back at Office', auto: true },
+        newValue: {
+          reason:
+            done.status === 'IN_PROGRESS'
+              ? 'Back at Office'
+              : 'Back at Office — booking had already been released at window end',
+          auto: true,
+        },
       });
       await this.prisma.notification.create({
         data: {

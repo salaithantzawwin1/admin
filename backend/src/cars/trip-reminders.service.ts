@@ -353,6 +353,32 @@ export class TripRemindersService {
           this.prisma.carRequest.update({ where: { requestId: a.requestId }, data: { vehicleId: null, driverId: null, status: 'APPROVED' } }),
           this.prisma.requestDocument.update({ where: { id: a.requestId }, data: { status: 'APPROVED' } }),
         ]);
+        // Unlinking the car is right (it goes back to the pool) but silent: the
+        // row then reads "vehicle not assigned" even though Administration did
+        // assign one, so a dispatch that did happen looked like one that never
+        // did. The assignment row keeps the history — say what happened, once,
+        // where Administration will actually read it.
+        await this.prisma.auditLog.create({
+          data: {
+            action: 'CAR_TRIP_WINDOW_RELEASED', module: 'CARS', recordId: a.requestId,
+            newValue: {
+              reason: 'Window ended with no driver confirmation — vehicle and driver released',
+              vehicleId: a.vehicleId, driverId: a.driverId, vehicleNo: a.vehicle?.vehicleNo ?? null,
+              driverName: a.driver?.name ?? null, auto: true,
+            },
+          },
+        }).catch(() => undefined);
+        try {
+          const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+          await this.notifications.notifyMany(adminIds.filter((id) => id !== a.request.requesterId), {
+            type: 'TRIP_COMPLETED' as never,
+            title: `⏰ Window ended — ${a.request.docNumber}`,
+            body: `${a.vehicle?.vehicleNo ?? 'The vehicle'} / ${a.driver?.name ?? 'the driver'} were assigned, but nobody confirmed the trip, so the booking was released and the car returned to the pool. Assign again if the ride still has to happen.`,
+            link: `/requests/${a.requestId}`,
+            requestId: a.requestId,
+          });
+        } catch { /* best-effort — the release itself already succeeded */ }
+        console.log(`[cars] released ${a.request.docNumber} at window end (no driver confirmation)`);
       }
     }
     if (stuck.length > 0) {

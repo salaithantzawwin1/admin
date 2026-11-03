@@ -330,7 +330,10 @@ export class WorkflowService {
                 // — see attachSharedRideAcks()
                 sharedTripId: true,
                 driver: { select: { name: true } },
-                assignment: { select: { driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
+                // releasedAt: an APPROVED row with no live car but an assignment
+                // row means the booking was RELEASED after a car was picked — the
+                // list must not call that "vehicle not assigned" (CAR-202611-0005)
+                assignment: { select: { releasedAt: true, driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
               },
             },
           } : {}),
