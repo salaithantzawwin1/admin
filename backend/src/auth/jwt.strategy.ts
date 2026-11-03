@@ -23,8 +23,13 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     if (!user || user.status !== 'ACTIVE') throw new UnauthorizedException();
     // A password change/reset ends every session that existed before it: a
     // stolen token must not survive the remedy for the theft.
-    if (user.passwordChangedAt && payload.iat && payload.iat * 1000 < user.passwordChangedAt.getTime()) {
-      throw new UnauthorizedException('Your password changed — sign in again');
+    if (user.passwordChangedAt && payload.iat) {
+      // iat is in whole seconds: a token minted in the same second as the
+      // change must still work, or the login that follows a reset would 401.
+      const changedAtSec = Math.floor(user.passwordChangedAt.getTime() / 1000);
+      if (payload.iat < changedAtSec) {
+        throw new UnauthorizedException('Your password changed — sign in again');
+      }
     }
     return { id: user.id, username: user.username, fullName: user.fullName, roles: user.userRoles.map((ur) => ur.role) };
   }
