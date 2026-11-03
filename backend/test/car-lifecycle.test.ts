@@ -368,6 +368,54 @@ async function main() {
     assert.ok(!writes.some((w) => w.__w === 'requestDocument'), 'open mileage must block auto-completion');
   });
 
+  // the stage stamp must exist BEFORE completion runs (CAR-202611-0005 ordering)
+  await test('a driver tap stamps the stage before the released booking is closed', async () => {
+    const row: any = {
+      id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1',
+      driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null,
+      estimatedReturnAt: null, telegramMessageId: null,
+      request: { id: 'r1', docNumber: 'CAR-202611-0005', requesterId: 'u-req', requester: { fullName: 'U Req' } },
+    };
+    const writes: any[] = [];
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => row,
+        findMany: async () => [],
+        update: async (a: any) => {
+          Object.assign(row, a.data);
+          writes.push({ __w: 'carAssignment', ...a });
+          return { ...row, vehicle: { vehicleNo: 'YGN-1' }, driver: { id: 'd1', name: 'U Aung' } };
+        },
+      },
+      vehicle: { update: async () => undefined },
+      driver: { update: async () => undefined },
+      user: { findUnique: async () => null },
+      notification: { create: async () => undefined, createMany: async () => undefined },
+      requestDocument: {
+        // the janitor already released this booking; the stamp is what is missing
+        findUnique: async () => ({
+          status: 'APPROVED', docNumber: 'CAR-202611-0005', requesterId: 'u-req',
+          carAssignment: {
+            releasedAt: new Date('2026-11-02T04:00:00Z'),
+            driverBackAtOfficeAt: row.driverBackAtOfficeAt,
+            vehicleId: 'v1', driverId: 'd1', trip: null,
+          },
+        }),
+        update: async (a: any) => writes.push({ __w: 'requestDocument', ...a }),
+      },
+      carRequest: { update: async (a: any) => writes.push({ __w: 'carRequest', ...a }) },
+      $transaction: async (cb: any) => cb(prisma),
+    };
+    const svc: any = new TelegramService(prisma, { log: async () => undefined }, { usersWithPermissions: async () => [] }, { publish: () => 0 });
+    svc.call = async () => undefined; // no Telegram traffic from a unit test
+    svc.mirrorToUser = async () => undefined;
+    await svc.manualAck('a1', 'returned', { userId: 'u-admin', username: 'admin' });
+    assert.ok(
+      writes.some((w) => w.__w === 'requestDocument' && w.data.status === 'COMPLETED'),
+      'the released booking must close on the driver own Back-at-Office tap',
+    );
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) process.exit(1);
 }

@@ -1112,6 +1112,11 @@ export class CarsService {
           driverId: data.driverId ?? null,
           assignedById: actor.userId,
           assignedAt: new Date(),
+          // a changed car/driver is a fresh booking: no leftover release flag and
+          // no ⏰ ETA from the previous one (a stale future ETA kept the janitor
+          // away past the new window and stretched the conflict window)
+          releasedAt: null,
+          estimatedReturnAt: null,
           driverNotedAt: null,
           driverArrivedAt: null,
           driverBackAtOfficeAt: null,
@@ -1811,8 +1816,15 @@ export class CarsService {
       });
       await tx.carRequest.update({ where: { requestId }, data: { status: 'COMPLETED' } });
       await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'COMPLETED' } });
+      // a driver is one person: finishing ONE trip of a shared convoy must not put
+      // them back in the pool while the partner request is still on the road
       if (assignment.driverId) {
-        await tx.driver.update({ where: { id: assignment.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        const otherTrips = await tx.carAssignment.count({
+          where: { driverId: assignment.driverId, id: { not: assignment.id }, releasedAt: null },
+        });
+        if (otherTrips === 0) {
+          await tx.driver.update({ where: { id: assignment.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        }
       }
       return t;
     });

@@ -954,12 +954,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'Already done' });
       return;
     }
+    // Stamp the stage BEFORE the completion step: completeAfterReturn() reads the
+    // driver's own "Back at Office" as proof that a ride whose booking was released
+    // at window end really happened (CAR-202611-0005). With the old order the stamp
+    // was still missing at that moment, so the request stayed APPROVED and the list
+    // kept calling it "not assigned".
+    const updated = await this.applyAckStage(assignment.id, patch, action);
     if (action === 'returned') {
       await this.freeVehicle(assignment.id);
       await this.completeAfterReturn(assignment.requestId);
     }
-
-    const updated = await this.applyAckStage(assignment.id, patch, action);
     await this.editStageMessage(updated);
     await this.answerCallback(updated, callbackId, action);
     await this.audit.log({
@@ -1013,11 +1017,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!assignment.driverNotedAt) patch.driverNotedAt = now;
       if (!assignment.driverArrivedAt) patch.driverArrivedAt = now;
     } else return null; // already done
+    // same order as the Telegram callback: stamp first, then complete
+    const updated = await this.applyAckStage(assignmentId, patch, action);
     if (action === 'returned') {
       await this.freeVehicle(assignmentId);
       await this.completeAfterReturn(assignment.requestId);
     }
-    const updated = await this.applyAckStage(assignmentId, patch, action);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: action === 'noted' ? 'DRIVER_NOTED' : action === 'arrived' ? 'DRIVER_ARRIVED' : 'DRIVER_RETURNED',
