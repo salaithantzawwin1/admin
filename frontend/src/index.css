@@ -116,3 +116,16 @@ body.modal-open {
   border: 1px solid #e5e7eb;
   cursor: zoom-in;
 }
+
+/* Asset QR sticker: printing shows only the label, nothing else on the page */
+@media print {
+  body * { visibility: hidden; }
+  .qr-print, .qr-print * { visibility: visible; }
+  .qr-print {
+    position: fixed;
+    inset: 0;
+    margin: 1cm auto;
+    border: none !important;
+    box-shadow: none !important;
+  }
+}

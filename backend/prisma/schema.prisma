@@ -83,6 +83,7 @@ model User {
   monthlyBudgetsCreated  MonthlyBudget[]         @relation("BudgetCreatedBy")
   assetMovementsCreated  AssetMovement[]         @relation("AssetMovements")
   assetCostsCreated      AssetCost[]             @relation("AssetCostCreator")
+  assetInstallations     AssetInstallation[]     @relation("AssetInstallations")
   maintenanceCreated     MaintenanceRecord[]     @relation("MaintenanceCreatedBy")
   maintenanceSchedulesCreated MaintenanceSchedule[] @relation("MaintenanceScheduleCreatedBy")
   pettyCashCreated       PettyCashTransaction[]  @relation("PettyCashTransactions")
@@ -1456,6 +1457,10 @@ model Asset {
   maintenanceRecords   MaintenanceRecord[]   // service history (§13/§14)
   maintenanceSchedules MaintenanceSchedule[] // preventive due dates (§15)
   stockTxns    StockTransaction[] @relation("StockTxAsset") // consumables used on it
+  /// Parts fitted INTO this asset (a cartridge installed in a printer)
+  installedParts AssetInstallation[] @relation("AssetInstalledParts")
+  /// Where this asset itself is fitted (the cartridge's side of the same link)
+  installedIn    AssetInstallation[] @relation("AssetInstalledIn")
 
   @@index([categoryId])
   @@index([locationId])
@@ -1483,6 +1488,32 @@ model AssetMovement {
 
   @@index([assetId, createdAt])
   @@map("asset_movements")
+}
+
+// Asset -> asset component link (§14 / §24): a cartridge that was bought as its
+// own asset and is then fitted into a machine. Installing transfers the part's
+// price onto the machine's cost ledger (AssetCost kind CONSUMABLE, sourceType
+// ASSET_INSTALL) and marks the part IN_USE; removing it sends the part back to
+// the store or retires it when it is used up. One physical part lives in one
+// machine at a time (removedAt = null means "fitted").
+model AssetInstallation {
+  id               String    @id @default(uuid()) @db.Uuid
+  parentAssetId    String    @db.Uuid // the machine (printer)
+  componentAssetId String    @db.Uuid // the part (cartridge)
+  installedAt      DateTime  @default(now())
+  removedAt        DateTime?
+  costTransferred  Decimal?  @db.Decimal(12, 2)
+  note             String?
+  createdById      String    @db.Uuid
+  createdAt        DateTime  @default(now())
+
+  parent    Asset @relation("AssetInstalledParts", fields: [parentAssetId], references: [id], onDelete: Cascade)
+  component Asset @relation("AssetInstalledIn", fields: [componentAssetId], references: [id], onDelete: Cascade)
+  createdBy User  @relation("AssetInstallations", fields: [createdById], references: [id])
+
+  @@index([parentAssetId])
+  @@index([componentAssetId])
+  @@map("asset_installations")
 }
 
 // Asset cost ledger (§14.5 cost / §17 account-vs-asset) — the ONE place that

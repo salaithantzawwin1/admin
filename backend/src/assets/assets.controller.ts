@@ -246,6 +246,30 @@ export class AssetsController {
   }
 
   /** §39 register a fixed asset from a PO line (cost/date/serial provenance). */
+  /** Fit a component asset (a cartridge) into this asset (a printer). */
+  @Post(':id/components')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  installComponent(@Req() req, @Param('id') id: string, @Body() body: { componentAssetId?: string; note?: string }) {
+    return this.assets.installComponent(id, { componentAssetId: body?.componentAssetId, note: body?.note }, this.actor(req));
+  }
+
+  /** Remove a fitted part — `?retire=true` when it is used up. */
+  @Delete(':id/components/:linkId')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  removeComponent(@Req() req, @Param('id') id: string, @Param('linkId') linkId: string, @Query('retire') retire?: string) {
+    return this.assets.removeComponent(id, linkId, { retire: retire === 'true' }, this.actor(req));
+  }
+
+  /** QR label (SVG) for the printed asset sticker. */
+  @Get(':id/qr.svg')
+  @RequirePermissions(PERMISSIONS.ASSETS_READ)
+  async qrLabel(@Req() req, @Param('id') id: string, @Res() res: Response) {
+    const { svg } = await this.assets.qrLabel(id, req);
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(svg);
+  }
+
   @Post('register-from-po/:poItemId')
   @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
   registerFromPo(@Req() req, @Param('poItemId') poItemId: string, @Body() dto: AssetDto) {

@@ -74,15 +74,65 @@ interface AssetDetail extends AssetRow {
   costs: CostRow[];
   costSummary: CostSummary;
   poItems: { purchaseOrder: { poNumber: string; supplier: { name: string } } }[];
+  /** parts fitted INTO this asset (a cartridge in a printer) */
+  installedParts: {
+    id: string;
+    installedAt: string;
+    removedAt?: string | null;
+    note?: string | null;
+    component: { id: string; assetCode: string; name: string; status: string; purchaseCost?: string | null; category?: { name: string } | null };
+  }[];
+  /** where THIS asset is fitted (the cartridge's side of the link) */
+  installedIn: {
+    id: string;
+    installedAt: string;
+    removedAt?: string | null;
+    parent: { id: string; assetCode: string; name: string; status: string };
+  }[];
 }
 
 interface Category { id: string; name: string; specFields?: SpecField[] | null }
 interface Location { id: string; name: string }
 interface Custodian { id: string; name: string }
 
-const STATUS_COLORS: Record<string, 'green' | 'gray' | 'yellow' | 'red'> = {
+const STATUS_COLORS: Record<string, 'green' | 'gray' | 'yellow' | 'red' | 'blue'> = {
   ACTIVE: 'green', IN_STORAGE: 'gray', MAINTENANCE: 'yellow', DISPOSED: 'red',
+  // set by "fit component": the part is physically inside a machine right now
+  IN_USE: 'blue',
 };
+
+/** Printable asset sticker: the SVG QR encodes this asset's own page on the AMS origin. */
+function QrLabel({ assetId, assetCode, name }: { assetId: string; assetCode: string; name: string }) {
+  const [svg, setSvg] = useState('');
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    const token = localStorage.getItem('ams_token');
+    setErr('');
+    setSvg('');
+    fetch(`/api/assets/${assetId}/qr.svg`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`QR request failed (${r.status})`))))
+      .then(setSvg)
+      .catch((e) => setErr(e instanceof Error ? e.message : 'Failed'));
+  }, [assetId]);
+  if (err) return <div className="text-sm text-red-600">{err}</div>;
+  if (!svg) return <Empty label="Preparing label…" />;
+  return (
+    <div>
+      <div className="qr-print mx-auto w-72 bg-white border border-gray-200 rounded-xl p-4 text-center">
+        <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: svg }} />
+        <div className="mt-2 font-mono text-sm font-semibold">{assetCode}</div>
+        <div className="text-xs text-gray-600 truncate">{name}</div>
+        <div className="text-[10px] text-gray-400 mt-1">AMS — scan to open this asset</div>
+      </div>
+      <div className="flex justify-center mt-3">
+        <Button onClick={() => window.print()}>🖨 Print label</Button>
+      </div>
+      <p className="text-[11px] text-gray-400 mt-2 text-center">
+        Scanning opens this asset for anyone already signed in — the label carries no token.
+      </p>
+    </div>
+  );
+}
 
 const emptyForm = {
   name: '', assetCode: '', categoryId: '', brand: '', model: '', serialNumber: '',
@@ -116,6 +166,57 @@ export default function Assets() {
   // §14.5 cost ledger: add form + the row queued for removal
   const [costForm, setCostForm] = useState<{ kind: string; date: string; amount: string; description: string } | null>(null);
   const [costToDelete, setCostToDelete] = useState<CostRow | null>(null);
+  // asset parts (a cartridge fitted into a printer) + the QR label dialog
+  const [qrOpen, setQrOpen] = useState(false);
+  const [installPick, setInstallPick] = useState('');
+
+  /** Open one asset by id — shared by the list, the QR deep link and the part links. */
+  const openAsset = async (id: string) => {
+    setError(null);
+    try {
+      setDetail(await api<AssetDetail>(`/assets/${id}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to open asset');
+    }
+  };
+
+  // deep link from the printed label: /asset-register?asset=AST-...
+  useEffect(() => {
+    const code = searchParams.get('asset');
+    if (!code || detail) return;
+    const row = rows.find((r) => r.assetCode === code);
+    if (row) void openAsset(row.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+
+  const installPart = async () => {
+    if (!detail || !installPick) return;
+    setError(null);
+    try {
+      setDetail(await api<AssetDetail>(`/assets/${detail.id}/components`, {
+        method: 'POST',
+        body: { componentAssetId: installPick },
+      }));
+      setInstallPick('');
+      void load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to fit the component');
+    }
+  };
+
+  const removePart = async (linkId: string, retire: boolean) => {
+    if (!detail) return;
+    setError(null);
+    try {
+      setDetail(await api<AssetDetail>(
+        `/assets/${detail.id}/components/${linkId}${retire ? '?retire=true' : ''}`,
+        { method: 'DELETE' },
+      ));
+      void load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove the component');
+    }
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -534,6 +635,11 @@ export default function Assets() {
       {/* detail with movement history (§16/§40) */}
       {detail && (
         <Modal title={`${detail.assetCode} — ${detail.name}`} onClose={() => setDetail(null)} wide>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <span className="text-xs text-gray-400">Scan the printed label to open this asset on a signed-in device</span>
+            <Button variant="ghost" onClick={() => setQrOpen(true)}>🏷️ QR label</Button>
+          </div>
+          {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm mb-4">
             <div><span className="text-gray-400 text-xs block">Status</span>{statusBadge(detail.status)}</div>
             <div><span className="text-gray-400 text-xs block">Category</span>{detail.category?.name ?? '—'}</div>
@@ -559,6 +665,73 @@ export default function Assets() {
             </div>
           ) : null}
           {detail.description && <p className="text-sm text-gray-600 mb-4">{detail.description}</p>}
+
+          {/* Parts fitted into this asset (a cartridge in a printer): the same link
+              that puts the part's price on this asset's cost of ownership. */}
+          <div className="mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-2">
+              Installed components ({detail.installedParts.filter((p) => !p.removedAt).length})
+            </h3>
+            {detail.installedIn.filter((l) => !l.removedAt).map((l) => (
+              <div key={l.id} className="mb-2 text-sm">
+                <span className="text-gray-400 text-xs block">Installed in</span>
+                <button type="button" className="text-blue-600 hover:underline" onClick={() => void openAsset(l.parent.id)}>
+                  🖨 {l.parent.assetCode} — {l.parent.name}
+                </button>
+              </div>
+            ))}
+            {detail.installedParts.length === 0 ? (
+              <Empty label="No components fitted" />
+            ) : (
+              <ul className="divide-y divide-gray-100 text-sm">
+                {detail.installedParts.map((p) => (
+                  <li key={p.id} className="py-2 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <span className="font-medium text-gray-800">{p.component.assetCode}</span>
+                      <span className="text-gray-500"> — {p.component.name}</span>
+                      <div className="text-xs text-gray-400">
+                        {p.removedAt ? `removed ${p.removedAt.slice(0, 10)}` : `fitted ${p.installedAt.slice(0, 10)}`}
+                        {p.component.purchaseCost
+                          ? ` · ${Number(p.component.purchaseCost).toLocaleString()} MMK on this asset`
+                          : ''}
+                        {p.note ? ` · ${p.note}` : ''}
+                      </div>
+                    </div>
+                    {canManage && !p.removedAt && (
+                      <div className="flex gap-2 shrink-0">
+                        <button type="button" className="text-xs text-gray-600 hover:underline" onClick={() => void removePart(p.id, false)}>
+                          Remove
+                        </button>
+                        <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => void removePart(p.id, true)}>
+                          Used up
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {canManage && (
+              <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center mt-2">
+                <Select value={installPick} onChange={(e) => setInstallPick(e.target.value)} className="!w-full sm:!w-72">
+                  <option value="">— pick an asset to fit —</option>
+                  {rows
+                    .filter((r) => r.id !== detail.id && r.status !== 'DISPOSED')
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>{r.assetCode} — {r.name}</option>
+                    ))}
+                </Select>
+                <Button variant="ghost" disabled={!installPick} onClick={() => void installPart()}>
+                  + Fit component
+                </Button>
+              </div>
+            )}
+            <p className="text-[11px] text-gray-400 mt-1">
+              A part bought as its own asset (a toner cartridge) is fitted here: its price moves onto this asset's cost
+              ledger and the part shows IN_USE. Parts that are never reused again are better kept as Inventory stock and
+              issued to the asset.
+            </p>
+          </div>
 
           {/* §14.5 cost ledger — purchase price + everything spent since */}
           <div className="flex items-center justify-between gap-2 mb-2">
@@ -650,6 +823,12 @@ export default function Assets() {
               ))}
             </ul>
           )}
+        </Modal>
+      )}
+
+      {qrOpen && detail && (
+        <Modal title={`QR label — ${detail.assetCode}`} onClose={() => setQrOpen(false)}>
+          <QrLabel assetId={detail.id} assetCode={detail.assetCode} name={detail.name} />
         </Modal>
       )}
 

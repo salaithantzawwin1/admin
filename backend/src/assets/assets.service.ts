@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
@@ -112,6 +113,23 @@ export class AssetsService {
           include: { fromLocation: true, toLocation: true, createdBy: { select: { username: true, fullName: true } } },
         },
         poItems: { include: { purchaseOrder: { select: { poNumber: true, supplier: { select: { name: true } } } } } },
+        // parts fitted into this asset (a cartridge in a printer) and, for a part,
+        // the machine it currently sits in — both sides of the same link
+        installedParts: {
+          orderBy: [{ removedAt: 'asc' }, { installedAt: 'desc' }],
+          include: {
+            component: {
+              select: {
+                id: true, assetCode: true, name: true, status: true, purchaseCost: true,
+                category: { select: { name: true } },
+              },
+            },
+          },
+        },
+        installedIn: {
+          orderBy: [{ removedAt: 'asc' }, { installedAt: 'desc' }],
+          include: { parent: { select: { id: true, assetCode: true, name: true, status: true } } },
+        },
         // the cost ledger, newest first — "how much has this asset cost us"
         costs: {
           orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
@@ -366,6 +384,151 @@ export class AssetsService {
 
   /** §66 policy — assets referenced by procurement history never hard-delete:
    *  dispose (status row) keeps the audit chain; only unlinked master rows go. */
+  /**
+   * Fit a part asset into this asset (a cartridge into a printer).
+   *
+   * A cartridge bought as an asset is still a COMPONENT: the machine's cost of
+   * ownership has to carry its price, and the part must stop looking like a
+   * free-standing asset in the store. Installing does both — one active link per
+   * part, the price posted to the parent's ledger, the movement trail on the part.
+   * Consumables that are never reused are better kept as Inventory stock and
+   * issued to the asset (StockTransaction ASSET_USE) instead.
+   */
+  async installComponent(
+    parentId: string,
+    data: { componentAssetId?: string; note?: string },
+    actor: Actor,
+  ) {
+    const componentAssetId = (data.componentAssetId ?? '').trim();
+    if (!componentAssetId) throw new BadRequestException('Pick the asset to install');
+    if (componentAssetId === parentId) throw new BadRequestException('An asset cannot be installed in itself');
+
+    const [parent, component] = await Promise.all([
+      this.prisma.asset.findUnique({ where: { id: parentId }, select: { id: true, assetCode: true, name: true, status: true } }),
+      this.prisma.asset.findUnique({
+        where: { id: componentAssetId },
+        select: { id: true, assetCode: true, name: true, status: true, purchaseCost: true },
+      }),
+    ]);
+    if (!parent) throw new NotFoundException('Asset not found');
+    if (!component) throw new NotFoundException('Component asset not found');
+    if (parent.status === 'DISPOSED') throw new BadRequestException(`${parent.assetCode} is disposed — restore it first`);
+    if (component.status === 'DISPOSED') throw new BadRequestException(`${component.assetCode} is disposed — restore it first`);
+
+    // one physical part sits in one machine: its other holder must remove it first
+    const active = await this.prisma.assetInstallation.findFirst({
+      where: { componentAssetId, removedAt: null },
+      include: { parent: { select: { assetCode: true } } },
+    });
+    if (active) {
+      throw new ConflictException(
+        `${component.assetCode} is already installed in ${active.parent.assetCode} — remove it there first`,
+      );
+    }
+
+    const cost = component.purchaseCost != null ? Number(component.purchaseCost) : 0;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.assetInstallation.create({
+        data: {
+          parentAssetId: parentId,
+          componentAssetId,
+          note: data.note?.trim() || null,
+          createdById: actor.userId,
+          costTransferred: cost > 0 ? cost : null,
+        },
+      });
+      await tx.asset.update({ where: { id: componentAssetId }, data: { status: 'IN_USE' } });
+      await tx.assetMovement.create({
+        data: {
+          assetId: componentAssetId,
+          type: 'INSTALL',
+          createdById: actor.userId,
+          note: `Installed in ${parent.assetCode} — ${parent.name}${data.note?.trim() ? ` (${data.note.trim()})` : ''}`,
+        },
+      });
+      // the part's price belongs to the machine's cost of ownership from now on
+      if (cost > 0) {
+        await tx.assetCost.create({
+          data: {
+            assetId: parentId,
+            kind: 'CONSUMABLE',
+            amount: cost,
+            quantity: 1,
+            description: `${component.assetCode} — ${component.name} installed`,
+            sourceType: 'ASSET_INSTALL',
+            sourceId: component.id,
+            createdById: actor.userId,
+          },
+        });
+      }
+    });
+
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ASSET_COMPONENT_INSTALLED', module: 'ASSETS', recordId: parentId,
+      newValue: { parent: parent.assetCode, component: component.assetCode, cost },
+    });
+    return this.detail(parentId);
+  }
+
+  /** Take a fitted part out: back to the store, or retired when it is used up. */
+  async removeComponent(parentId: string, linkId: string, data: { retire?: boolean } = {}, actor: Actor) {
+    const link = await this.prisma.assetInstallation.findUnique({
+      where: { id: linkId },
+      include: {
+        component: { select: { id: true, assetCode: true, name: true } },
+        parent: { select: { assetCode: true } },
+      },
+    });
+    if (!link || link.parentAssetId !== parentId) throw new NotFoundException('That part is not installed on this asset');
+    if (link.removedAt) throw new BadRequestException('This part was already removed');
+
+    const retire = data.retire === true;
+    await this.prisma.$transaction([
+      this.prisma.assetInstallation.update({ where: { id: linkId }, data: { removedAt: new Date() } }),
+      this.prisma.asset.update({
+        where: { id: link.componentAssetId },
+        data: { status: retire ? 'DISPOSED' : 'IN_STORAGE' },
+      }),
+      this.prisma.assetMovement.create({
+        data: {
+          assetId: link.componentAssetId,
+          type: retire ? 'DISPOSE' : 'UNINSTALL',
+          createdById: actor.userId,
+          note: retire
+            ? `Used up — removed from ${link.parent.assetCode}`
+            : `Removed from ${link.parent.assetCode} — back to store`,
+        },
+      }),
+    ]);
+
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: retire ? 'ASSET_COMPONENT_RETIRED' : 'ASSET_COMPONENT_REMOVED', module: 'ASSETS', recordId: parentId,
+      newValue: { parent: link.parent.assetCode, component: link.component.assetCode, retired: retire },
+    });
+    return this.detail(parentId);
+  }
+
+  /**
+   * Printable QR label for one asset: the SVG encodes this asset's own page on
+   * whatever origin served the request (:80 or :8030), so scanning it opens the
+   * asset for anyone already signed in — no token is baked into the label.
+   */
+  async qrLabel(id: string, req: { protocol?: string; headers: Record<string, unknown> }) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id },
+      select: { id: true, assetCode: true, name: true },
+    });
+    if (!asset) throw new NotFoundException('Asset not found');
+    const forwarded = String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim();
+    const proto = forwarded || req.protocol || 'http';
+    const host = String(req.headers['host'] ?? 'localhost');
+    const url = `${proto}://${host}/asset-register?asset=${encodeURIComponent(asset.assetCode)}`;
+    const svg = await QRCode.toString(url, { type: 'svg', margin: 1, width: 320, errorCorrectionLevel: 'M' });
+    return { url, svg, assetCode: asset.assetCode, name: asset.name };
+  }
+
   async remove(id: string, actor: Actor) {
     const asset = await this.prisma.asset.findUnique({ where: { id } });
     if (!asset) throw new NotFoundException('Asset not found');
