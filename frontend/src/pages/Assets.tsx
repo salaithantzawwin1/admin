@@ -73,6 +73,8 @@ interface AssetDetail extends AssetRow {
   movements: MovementRow[];
   costs: CostRow[];
   costSummary: CostSummary;
+  /** the asset's own picture — the backend never exposes the stored file name */
+  photo?: { mimeType?: string | null; size?: number | null; updatedAt?: string | null } | null;
   poItems: { purchaseOrder: { poNumber: string; supplier: { name: string } } }[];
   /** parts fitted INTO this asset (a cartridge in a printer) */
   installedParts: {
@@ -169,6 +171,9 @@ export default function Assets() {
   // asset parts (a cartridge fitted into a printer) + the QR label dialog
   const [qrOpen, setQrOpen] = useState(false);
   const [installPick, setInstallPick] = useState('');
+  // asset photo: an authenticated blob URL (a plain <img src> cannot send the JWT)
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
 
   /** Open one asset by id — shared by the list, the QR deep link and the part links. */
   const openAsset = async (id: string) => {
@@ -177,6 +182,79 @@ export default function Assets() {
       setDetail(await api<AssetDetail>(`/assets/${id}`));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to open asset');
+    }
+  };
+
+  // Fetch the photo as a blob so the request carries the bearer token; revoke
+  // the URL when the dialog closes or the picture is replaced.
+  useEffect(() => {
+    let url: string | null = null;
+    let cancelled = false;
+    setPhotoUrl(null);
+    const assetId = detail?.id;
+    const hasPhoto = !!detail?.photo;
+    if (assetId && hasPhoto) {
+      void (async () => {
+        try {
+          const res = await fetch(`/api/assets/${assetId}/photo`, {
+            headers: { Authorization: `Bearer ${getToken()}` },
+          });
+          if (!res.ok) return;
+          url = URL.createObjectURL(await res.blob());
+          if (!cancelled) setPhotoUrl(url);
+        } catch {
+          /* a missing preview never blocks the dialog */
+        }
+      })();
+    }
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [detail?.id, detail?.photo?.updatedAt]);
+
+  const uploadPhoto = async (file: File) => {
+    if (!detail) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setError('Photo too large (max 5 MB)');
+      return;
+    }
+    setError(null);
+    setPhotoBusy(true);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch(`/api/assets/${detail.id}/photo`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg = Array.isArray(data?.message) ? data.message.join(', ') : data?.message;
+        throw new Error(typeof msg === 'string' ? msg : `Upload failed (${res.status})`);
+      }
+      await openAsset(detail.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to upload the photo');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const removePhoto = async () => {
+    if (!detail) return;
+    setError(null);
+    setPhotoBusy(true);
+    try {
+      await api(`/assets/${detail.id}/photo`, { method: 'DELETE' });
+      await openAsset(detail.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to remove the photo');
+    } finally {
+      setPhotoBusy(false);
     }
   };
 
@@ -640,6 +718,53 @@ export default function Assets() {
             <Button variant="ghost" onClick={() => setQrOpen(true)}>🏷️ QR label</Button>
           </div>
           {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+          {/* Asset photo — one picture, replaceable. Stored privately and shown
+              only through the token-guarded endpoint. */}
+          <div className="mb-4 flex flex-wrap items-start gap-4">
+            <div className="w-44 h-32 shrink-0 rounded-lg border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center">
+              {photoUrl ? (
+                <img src={photoUrl} alt={`${detail.assetCode} photo`} className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-xs text-gray-400">No photo</span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <span className="text-gray-400 text-xs block mb-1">Photo · JPEG / PNG / WebP, max 5 MB</span>
+              {detail.photo && (
+                <span className="text-xs text-gray-500 block mb-2">
+                  {detail.photo.size ? `${Math.round(detail.photo.size / 1024)} KB` : ''}
+                  {detail.photo.updatedAt ? ` · updated ${detail.photo.updatedAt.slice(0, 10)}` : ''}
+                </span>
+              )}
+              {canManage && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <label
+                    className={`inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium cursor-pointer ${
+                      photoBusy ? 'bg-gray-200 text-gray-500' : 'bg-yellow-600 text-white hover:bg-yellow-700'
+                    }`}
+                  >
+                    {photoBusy ? 'Uploading…' : detail.photo ? 'Replace photo' : 'Upload photo'}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className="hidden"
+                      disabled={photoBusy}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.currentTarget.value = ''; // picking the same file again must still fire
+                        if (file) void uploadPhoto(file);
+                      }}
+                    />
+                  </label>
+                  {detail.photo && (
+                    <Button variant="ghost" onClick={() => void removePhoto()} disabled={photoBusy}>
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm mb-4">
             <div><span className="text-gray-400 text-xs block">Status</span>{statusBadge(detail.status)}</div>
             <div><span className="text-gray-400 text-xs block">Category</span>{detail.category?.name ?? '—'}</div>

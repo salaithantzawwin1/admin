@@ -1,5 +1,8 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as crypto from 'crypto';
 import QRCode from 'qrcode';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
@@ -58,6 +61,28 @@ const SPEC_TYPES = ['text', 'number', 'select'] as const;
 const MAX_SPEC_FIELDS = 30;
 const MAX_SPEC_VALUE = 200;
 
+/** Asset photos: 5 MB, and only three raster formats. SVG is deliberately
+ *  excluded — it can carry script, and this file is rendered inline. */
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const PHOTO_DIR = 'asset-photos';
+const STORED_PHOTO_NAME = /^[0-9a-f-]{36}\.(jpg|png|webp)$/;
+
+/**
+ * Trust the bytes, not the browser-supplied Content-Type: a field named
+ * "photo.png" carrying text/html must never reach the disk.
+ */
+export function sniffImageType(buf: Buffer): { mime: string; ext: string } | null {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    return { mime: 'image/png', ext: 'png' };
+  }
+  if (buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP') {
+    return { mime: 'image/webp', ext: 'webp' };
+  }
+  return null;
+}
+
 /** 2-decimal money rounding — totals are compared and printed in kyat. */
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -71,6 +96,8 @@ function specKeyFrom(label: string): string {
 
 @Injectable()
 export class AssetsService {
+  private uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
+
   constructor(
     private prisma: PrismaService,
     private audit: AuditService,
@@ -94,11 +121,12 @@ export class AssetsService {
         { custodian: { contains: filters.q, mode: 'insensitive' } },
       ];
     }
-    return this.prisma.asset.findMany({
+    const rows = await this.prisma.asset.findMany({
       where,
       orderBy: { assetCode: 'asc' },
       include: { category: true, location: true },
     });
+    return rows.map((r) => this.withPhoto(r));
   }
 
   /** One asset with its full movement history + procurement provenance (§39). */
@@ -148,7 +176,7 @@ export class AssetsService {
     const purchaseCost = asset.purchaseCost != null ? Number(asset.purchaseCost) : 0;
     const recordedCost = asset.costs.reduce((sum, c) => sum + Number(c.amount), 0);
     return {
-      ...asset,
+      ...this.withPhoto(asset),
       costSummary: {
         purchaseCost: round2(purchaseCost),
         recordedCost: round2(recordedCost),
@@ -542,11 +570,123 @@ export class AssetsService {
       throw new ConflictException(`Asset has ${used} procurement reference(s) — set status DISPOSED instead of deleting`);
     }
     await this.prisma.asset.delete({ where: { id } }); // movements cascade (FK CASCADE)
+    this.unlinkPhoto(asset.photoStoredName); // the picture goes with the row
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ASSET_DELETED', module: 'ASSETS', recordId: id,
       oldValue: { assetCode: asset.assetCode, name: asset.name },
       severity: 'WARNING',
+    });
+    return { success: true };
+  }
+
+  // ---------- asset photo ----------
+
+  /** The public shape of an asset: the on-disk file name never leaves the API. */
+  private withPhoto<T extends { photoStoredName?: string | null; photoMime?: string | null; photoSize?: number | null; photoUpdatedAt?: Date | null }>(asset: T) {
+    const { photoStoredName, photoMime, photoSize, photoUpdatedAt, ...rest } = asset;
+    return {
+      ...rest,
+      photo: photoStoredName
+        ? { mimeType: photoMime ?? null, size: photoSize ?? null, updatedAt: photoUpdatedAt ?? null }
+        : null,
+    };
+  }
+
+  /** Only the exact uuid + known extension this service writes may be opened —
+   *  a tampered row can never point outside the photo directory. */
+  private photoPath(storedName: string): string {
+    if (!STORED_PHOTO_NAME.test(storedName)) throw new NotFoundException('No photo');
+    return path.join(this.uploadRoot, PHOTO_DIR, storedName);
+  }
+
+  /** Best effort: a missing/orphaned file must never block the DB update. */
+  private unlinkPhoto(storedName?: string | null) {
+    if (!storedName) return;
+    try {
+      const file = this.photoPath(storedName);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {
+      /* ignore — the row is the source of truth */
+    }
+  }
+
+  /**
+   * Upload or replace the asset's photo. Everything is checked BEFORE a byte is
+   * written: size, and the real file signature (never the client's MIME type).
+   * The file is renamed to a random uuid with an extension derived from those
+   * bytes, so a crafted name can neither collide nor execute.
+   */
+  async setPhoto(assetId: string, file: Express.Multer.File | undefined, actor: Actor) {
+    if (!file?.buffer?.length) throw new BadRequestException('No file provided');
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      select: { id: true, assetCode: true, photoStoredName: true },
+    });
+    if (!asset) throw new NotFoundException('Asset not found');
+    if (file.size > PHOTO_MAX_BYTES) throw new BadRequestException('Photo too large (max 5 MB)');
+    if (file.size !== file.buffer.length) throw new BadRequestException('Upload was truncated — please try again');
+    const kind = sniffImageType(file.buffer);
+    if (!kind) throw new BadRequestException('Only JPEG, PNG or WebP images are allowed');
+
+    const dir = path.join(this.uploadRoot, PHOTO_DIR);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const storedName = `${crypto.randomUUID()}.${kind.ext}`;
+    fs.writeFileSync(path.join(dir, storedName), file.buffer, { mode: 0o600 });
+
+    let updated: { photoUpdatedAt: Date | null; photoMime: string | null; photoSize: number | null };
+    try {
+      updated = await this.prisma.asset.update({
+        where: { id: assetId },
+        data: { photoStoredName: storedName, photoMime: kind.mime, photoSize: file.size, photoUpdatedAt: new Date() },
+        select: { photoUpdatedAt: true, photoMime: true, photoSize: true },
+      });
+    } catch (e) {
+      this.unlinkPhoto(storedName); // never leave an orphan when the row failed
+      throw e;
+    }
+    this.unlinkPhoto(asset.photoStoredName); // replaced picture is gone for good
+
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: asset.photoStoredName ? 'ASSET_PHOTO_REPLACED' : 'ASSET_PHOTO_ADDED',
+      module: 'ASSETS', recordId: assetId,
+      newValue: { assetCode: asset.assetCode, mimeType: kind.mime, size: file.size },
+    });
+    return {
+      photo: { mimeType: updated.photoMime, size: updated.photoSize, updatedAt: updated.photoUpdatedAt },
+    };
+  }
+
+  /** Path for the guarded photo route; 404 whenever there is nothing to show. */
+  async photoFile(assetId: string) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      select: { id: true, assetCode: true, photoStoredName: true, photoMime: true },
+    });
+    if (!asset) throw new NotFoundException('Asset not found');
+    if (!asset.photoStoredName) throw new NotFoundException('This asset has no photo');
+    const filePath = this.photoPath(asset.photoStoredName);
+    if (!fs.existsSync(filePath)) throw new NotFoundException('This asset has no photo');
+    return { asset, filePath, mimeType: asset.photoMime ?? 'application/octet-stream' };
+  }
+
+  async removePhoto(assetId: string, actor: Actor) {
+    const asset = await this.prisma.asset.findUnique({
+      where: { id: assetId },
+      select: { id: true, assetCode: true, photoStoredName: true },
+    });
+    if (!asset) throw new NotFoundException('Asset not found');
+    if (!asset.photoStoredName) throw new NotFoundException('This asset has no photo');
+    await this.prisma.asset.update({
+      where: { id: assetId },
+      data: { photoStoredName: null, photoMime: null, photoSize: null, photoUpdatedAt: null },
+    });
+    this.unlinkPhoto(asset.photoStoredName);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ASSET_PHOTO_REMOVED', module: 'ASSETS', recordId: assetId,
+      oldValue: { assetCode: asset.assetCode }, severity: 'WARNING',
     });
     return { success: true };
   }

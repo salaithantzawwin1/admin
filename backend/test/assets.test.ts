@@ -650,6 +650,68 @@ async function main() {
     assert.ok((await validate(plainToInstance(SetupNameDto, { name: 'X', extra: 1 }), opts)).length > 0, 'extra prop rejected');
   });
 
+  await test('asset photo: bytes are sniffed, the old file is deleted on replace, nothing leaks', async () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ams-asset-photo-'));
+    const prevRoot = process.env.UPLOAD_PATH;
+    process.env.UPLOAD_PATH = root; // the service reads this when constructed
+    try {
+      const { svc, env } = makeSvc();
+      const asset = await svc.create({ name: 'Printer P' }, ACTOR);
+      const upload = (buffer: Buffer, over: any = {}) =>
+        ({ buffer, size: buffer.length, mimetype: 'image/png', originalname: 'x.png', ...over }) as any;
+
+      // 1. an HTML document wearing the name "x.png" never reaches the disk
+      await assert.rejects(
+        () => svc.setPhoto(asset.id, upload(Buffer.from('<html>alert(1)</html>')), ACTOR),
+        /Only JPEG, PNG or WebP/,
+      );
+      assert.strictEqual(fs.existsSync(path.join(root, 'asset-photos')), false, 'nothing written on a rejected upload');
+
+      // 2. the size cap is enforced server-side
+      const pngHead = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      await assert.rejects(
+        () => svc.setPhoto(asset.id, upload(pngHead, { size: 6 * 1024 * 1024 }), ACTOR),
+        /too large/i,
+      );
+
+      // 3. a real PNG is stored under a uuid, extension taken from the BYTES (not "evil.php")
+      const png = Buffer.concat([pngHead, Buffer.alloc(64)]);
+      const saved = await svc.setPhoto(asset.id, upload(png, { originalname: 'evil.php' }), ACTOR);
+      assert.strictEqual(saved.photo.mimeType, 'image/png');
+      const dir = path.join(root, 'asset-photos');
+      const firstFiles = fs.readdirSync(dir);
+      assert.strictEqual(firstFiles.length, 1);
+      assert.ok(/^[0-9a-f-]{36}\.png$/.test(firstFiles[0]), `uuid + sniffed extension, got ${firstFiles[0]}`);
+
+      // 4. replacing swaps the file (no orphan); the detail exposes metadata only
+      const jpg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
+      await svc.setPhoto(asset.id, upload(jpg, { mimetype: 'image/jpeg', originalname: 'a.jpg' }), ACTOR);
+      const afterReplace = fs.readdirSync(dir);
+      assert.strictEqual(afterReplace.length, 1, 'the replaced picture is deleted');
+      assert.ok(afterReplace[0].endsWith('.jpg'));
+      const detail = await svc.detail(asset.id);
+      assert.ok(detail.photo && detail.photo.mimeType === 'image/jpeg', 'detail carries the photo metadata');
+      assert.ok(!('photoStoredName' in detail), 'the on-disk file name never leaves the API');
+
+      // 5. a tampered row can never point outside the photo directory
+      await env.prisma.asset.update({ where: { id: asset.id }, data: { photoStoredName: '../../etc/passwd' } });
+      await assert.rejects(() => svc.photoFile(asset.id), /No photo/);
+      await env.prisma.asset.update({ where: { id: asset.id }, data: { photoStoredName: afterReplace[0] } });
+
+      // 6. remove deletes the pointer AND the file
+      await svc.removePhoto(asset.id, ACTOR);
+      assert.strictEqual(fs.readdirSync(dir).length, 0, 'remove deletes the file');
+      await assert.rejects(() => svc.photoFile(asset.id), /no photo/i);
+    } finally {
+      if (prevRoot === undefined) delete process.env.UPLOAD_PATH;
+      else process.env.UPLOAD_PATH = prevRoot;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   await test('NumberingService.next(…, 2): two-digit year, same monthly counter key', async () => {
     const { NumberingService } = require('../src/numbering/numbering.service');
     const keys: string[] = [];

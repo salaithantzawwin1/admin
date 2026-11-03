@@ -1444,6 +1444,13 @@ model Asset {
   /// Category-specific specification values: { [fieldKey]: string }. Only the
   /// keys the category defines are kept, so a category change prunes stale ones.
   specs        Json?
+  /// The asset's photo (one picture, replaceable). The file lives in
+  /// UPLOAD_PATH and is only ever served through the guarded
+  /// GET /assets/:id/photo route — never from a public directory.
+  photoStoredName String?
+  photoMime       String?
+  photoSize       Int?
+  photoUpdatedAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 

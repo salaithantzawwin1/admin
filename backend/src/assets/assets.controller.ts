@@ -1,7 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsDateString, IsIn, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { Response } from 'express';
+import * as fs from 'fs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
@@ -268,6 +270,35 @@ export class AssetsController {
     res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store');
     res.send(svg);
+  }
+
+  /** Asset photo (JPEG/PNG/WebP) — replaceable, one per asset. */
+  @Post(':id/photo')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  uploadPhoto(@Req() req, @Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
+    return this.assets.setPhoto(id, file, this.actor(req));
+  }
+
+  /** Streams the photo to anyone who may read assets. Served inline, but with
+   *  nosniff + a sandboxed CSP so a crafted file can never act as a page. */
+  @Get(':id/photo')
+  @RequirePermissions(PERMISSIONS.ASSETS_READ)
+  async photo(@Param('id') id: string, @Res() res: Response) {
+    const { asset, filePath, mimeType } = await this.assets.photoFile(id);
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${asset.assetCode.replace(/[^A-Za-z0-9._-]/g, '_')}-photo"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    fs.createReadStream(filePath).pipe(res);
+  }
+
+  @Delete(':id/photo')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  removePhoto(@Req() req, @Param('id') id: string) {
+    return this.assets.removePhoto(id, this.actor(req));
   }
 
   @Post('register-from-po/:poItemId')
