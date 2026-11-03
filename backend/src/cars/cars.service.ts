@@ -1619,7 +1619,17 @@ export class CarsService {
         requester: { select: { username: true, fullName: true } },
         department: { select: { name: true } },
         carRequest: {
-          select: { destination: true, startDate: true, endDate: true, vehicleTypeRequired: true, passengers: true },
+          select: {
+            destination: true, startDate: true, endDate: true, vehicleTypeRequired: true, passengers: true,
+            // a request re-queued after a release still carries the car + driver
+            // that WERE dispatched — the queue must not call it "no vehicle"
+            assignment: {
+              select: {
+                releasedAt: true, driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true,
+                vehicle: { select: { vehicleNo: true } }, driver: { select: { name: true } },
+              },
+            },
+          },
         },
       },
     });

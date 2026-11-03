@@ -333,7 +333,15 @@ export class WorkflowService {
                 // releasedAt: an APPROVED row with no live car but an assignment
                 // row means the booking was RELEASED after a car was picked — the
                 // list must not call that "vehicle not assigned" (CAR-202611-0005)
-                assignment: { select: { releasedAt: true, driverNotedAt: true, driverArrivedAt: true, driverBackAtOfficeAt: true, estimatedReturnAt: true } },
+                assignment: {
+                  select: {
+                    releasedAt: true, driverNotedAt: true, driverArrivedAt: true,
+                    driverBackAtOfficeAt: true, estimatedReturnAt: true,
+                    // who the booking was for: "assigned then released" has to name
+                    // the car and driver, not just say the request is unassigned
+                    vehicle: { select: { vehicleNo: true } }, driver: { select: { name: true } },
+                  },
+                },
               },
             },
           } : {}),

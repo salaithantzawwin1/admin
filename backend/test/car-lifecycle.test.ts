@@ -230,6 +230,7 @@ async function main() {
   function janitor(over: { holders?: any[]; row?: any } = {}) {
     const writes: any[] = [];
     const notices: any[] = [];
+    const sweepArgs: any[] = [];
     const row = over.row ?? {
       id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1',
       driverBackAtOfficeAt: null, driverNotedAt: null, driverArrivedAt: null, estimatedReturnAt: null,
@@ -243,7 +244,10 @@ async function main() {
     const prisma: any = {
       carAssignment: {
         // `id: { not: … }` is the holder query; the sweep query has no id filter
-        findMany: async (args: any) => (args?.where?.id ? over.holders ?? [] : [row]),
+        findMany: async (args: any) => {
+          sweepArgs.push(args);
+          return args?.where?.id ? over.holders ?? [] : [row];
+        },
         update: op('carAssignment'),
       },
       vehicle: { findMany: async () => [], update: op('vehicle') },
@@ -260,7 +264,7 @@ async function main() {
       { mirrorToUser: async () => undefined },
       { usersWithPermissions: async () => ['u-admin'] },
     );
-    return { svc, writes, notices };
+    return { svc, writes, notices, sweepArgs };
   }
 
   await test('janitor keeps the car IN_USE when the next trip already took it', async () => {
@@ -294,6 +298,15 @@ async function main() {
     await svc.releaseExpired();
     assert.ok(!writes.some((w) => w.__w === 'vehicle'), 'a completed ride must not free a car still on the road');
     assert.ok(writes.some((w) => w.__w === 'requestDocument' && w.data.status === 'COMPLETED'), 'the ride itself still closes');
+  });
+
+  await test('janitor waits out a late-return buffer before releasing a trip', async () => {
+    const { svc, sweepArgs } = janitor({ holders: [] });
+    await svc.releaseExpired();
+    const cutoff = sweepArgs[0]?.where?.AND?.[0]?.OR?.[0]?.request?.carRequest?.endDate?.lt as Date;
+    assert.ok(cutoff instanceof Date, 'the sweep must bound the window by a grace cutoff');
+    const minutes = (Date.now() - cutoff.getTime()) / 60000;
+    assert.ok(minutes > 5, `a driver tapping a few minutes late must still land on a live booking (grace ${minutes.toFixed(1)} min)`);
   });
 
   // ------------------------------------------------ 6) CAR-202611-0005

@@ -69,9 +69,15 @@ interface RequestRow {
       driverArrivedAt?: string | null;
       driverBackAtOfficeAt?: string | null;
       estimatedReturnAt?: string | null;
+      /** who the booking was for — kept so a released row still names them */
+      vehicle?: { vehicleNo?: string } | null;
+      driver?: { name?: string } | null;
     } | null;
   } | null;
 }
+
+/** One released/active booking row, as the request list and the queue see it. */
+export type RowAssignment = NonNullable<NonNullable<RequestRow['carRequest']>['assignment']>;
 
 interface QueueRow {
   id: string;
@@ -85,6 +91,8 @@ interface QueueRow {
     endDate: string;
     vehicleTypeRequired?: string | null;
     passengers: number;
+    /** present when a car+driver were dispatched and the booking was released */
+    assignment?: RowAssignment | null;
   } | null;
 }
 
@@ -153,14 +161,56 @@ function QueueRowView({ q, past }: { q: QueueRow; past: boolean }) {
       <td className="px-3 py-2">{q.carRequest?.destination ?? '—'}</td>
       <td className="px-3 py-2 text-gray-500 whitespace-nowrap">
         {q.carRequest && `${fmtDateTime(q.carRequest.startDate)} → ${fmtDateTime(q.carRequest.endDate)}`}
-        {startPassed && (
-          <div className="text-xs text-amber-600 mt-0.5">⚠ start time passed — still no vehicle</div>
+        {q.carRequest?.assignment ? (
+          <ReleasedTripNote a={q.carRequest.assignment} />
+        ) : (
+          startPassed && (
+            <div className="text-xs text-amber-600 mt-0.5">⚠ start time passed — still no vehicle</div>
+          )
         )}
       </td>
       <td className="px-3 py-2 text-gray-500">
         {q.carRequest?.vehicleTypeRequired ?? 'Any'} · {q.carRequest?.passengers ?? 1} pax
       </td>
     </tr>
+  );
+}
+
+/**
+ * What happened to an assigned booking that is no longer live: who was
+ * dispatched, and which driver confirmations never arrived. Administration DID
+ * assign a car, so the row must say that — it used to read "vehicle not
+ * assigned", the same words used for a request nobody ever picked a car for
+ * (CAR-202611-0005).
+ */
+function ReleasedTripNote({ a }: { a: RowAssignment }) {
+  const stages: Array<[string, string | null | undefined]> = [
+    ['Noted', a.driverNotedAt],
+    ['Ready', a.driverArrivedAt],
+    ['Back', a.driverBackAtOfficeAt],
+  ];
+  const missing = stages.filter(([, at]) => !at).map(([name]) => name);
+  return (
+    <div
+      className="mt-1"
+      title={
+        missing.length
+          ? `Assigned to ${a.vehicle?.vehicleNo ?? 'a car'} / ${a.driver?.name ?? 'a driver'}, then released — the driver never tapped ${missing.join(', ')}`
+          : 'Assigned and driven — the request closes on the driver’s return'
+      }
+    >
+      <div className="text-xs text-slate-600 font-medium">
+        🚗 {a.vehicle?.vehicleNo ?? 'vehicle'} · 👤 {a.driver?.name ?? 'no driver'}
+      </div>
+      <div className="text-[11px] font-medium">
+        {stages.map(([name, at]) => (
+          <span key={name} className={at ? 'text-teal-600' : 'text-red-600'}>
+            {name} {at ? '✓' : '✗'}{' '}
+          </span>
+        ))}
+        <span className="text-slate-400">· released</span>
+      </div>
+    </div>
   );
 }
 
@@ -445,7 +495,7 @@ export default function CarRequests() {
               {pastQueue.length > 0 && (
                 <div className="mt-6 pt-4 border-t border-red-200">
                   <h3 className="font-semibold text-red-600 mb-1 text-sm uppercase tracking-wide">
-                    ⌛ Window passed — no vehicle was assigned ({pastQueue.length})
+                    ⌛ Window passed — never assigned, or released ({pastQueue.length})
                   </h3>
                   <p className="text-xs text-gray-400 mb-3">
                     The trip time is over and these can no longer be served. They are kept out of the live list
@@ -534,13 +584,8 @@ export default function CarRequests() {
                       dispatch that did happen looked like one that never did
                       (CAR-202611-0005). The released assignment row keeps the trail. */}
                   {r.status === 'APPROVED' && r.carRequest && !r.carRequest.vehicleId && (
-                    r.carRequest.assignment?.releasedAt || r.carRequest.assignment ? (
-                      <div
-                        className="text-xs text-slate-500 font-medium mt-1"
-                        title="A car and driver were assigned, then the booking was released — assign again if the ride still has to happen"
-                      >
-                        🚗 assigned then released — re-assign
-                      </div>
+                    r.carRequest.assignment ? (
+                      <ReleasedTripNote a={r.carRequest.assignment} />
                     ) : (
                       <div className="text-xs text-amber-600 font-medium mt-1" title="No vehicle assigned yet">
                         🚗 vehicle not assigned

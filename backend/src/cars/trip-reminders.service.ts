@@ -195,6 +195,13 @@ export class TripRemindersService {
   @Cron('0 */30 * * * *')
   async releaseExpired() {
     const now = new Date();
+    // Late-return buffer: a driver who finishes the ride a few minutes after the
+    // planned end taps Noted/Ready/Back on his phone. Releasing exactly on the
+    // clock turned those taps into a released booking and a re-queued request
+    // (CAR-202611-0005: released 10:30, "Back at Office" 10:40). Give the
+    // driver this much room before the booking goes back to the pool.
+    const RELEASE_GRACE_MS = 15 * 60 * 1000;
+    const releaseAfter = new Date(now.getTime() - RELEASE_GRACE_MS);
 
     const stuck = await this.prisma.carAssignment.findMany({
       where: {
@@ -205,8 +212,8 @@ export class TripRemindersService {
         AND: [
           {
             OR: [
-              { request: { carRequest: { endDate: { lt: now } } }, estimatedReturnAt: null },
-              { estimatedReturnAt: { lt: now } },
+              { request: { carRequest: { endDate: { lt: releaseAfter } } }, estimatedReturnAt: null },
+              { estimatedReturnAt: { lt: releaseAfter } },
             ],
           },
           { OR: [{ trip: null }, { trip: { status: 'NOT_STARTED' } }] },
