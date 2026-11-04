@@ -431,14 +431,14 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
               aria-selected={on}
               aria-controls="asset-setup-panel"
               tabIndex={on ? 0 : -1}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 ${
+              className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 sm:gap-2 sm:px-3 sm:text-sm ${
                 on
                   ? 'bg-white font-semibold text-gray-900 shadow-sm'
                   : 'font-medium text-gray-500 hover:bg-white/60 hover:text-gray-800'
               }`}
               onClick={() => setActive(s.kind)}
             >
-              <span aria-hidden className={on ? 'text-yellow-700' : 'text-gray-400'}>{s.icon}</span>
+              <span aria-hidden className={on ? 'hidden text-yellow-700 sm:inline' : 'hidden text-gray-400 sm:inline'}>{s.icon}</span>
               {s.label}
               <span
                 className={`min-w-[1.35rem] rounded-full px-1.5 text-center text-[11px] font-semibold tabular-nums ${
