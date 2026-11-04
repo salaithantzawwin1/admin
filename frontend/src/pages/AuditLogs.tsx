@@ -168,7 +168,7 @@ export default function AuditLogs() {
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
       {/* ---------- filters ---------- */}
-      <Card className="mb-4 p-4">
+      <Card className="sticky top-[57px] z-20 mb-4 p-4 bg-white/95 backdrop-blur-sm">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
             <label htmlFor="audit-from" className="block text-xs text-gray-500 mb-1">From date</label>
