@@ -256,6 +256,9 @@ export default function Fleet() {
   // refresh or a shared link lands on the same half of the page.
   const setupSub: 'types' | 'docs' = searchParams.get('sub') === 'docs' ? 'docs' : 'types';
   const setSetupSub = (sub: 'types' | 'docs') => setSearchParams({ tab: 'setup', sub }, { replace: false });
+  // Vehicles and Drivers are two long tables — each gets its own sub-tab.
+  const mainSub: 'vehicles' | 'drivers' = searchParams.get('sub') === 'drivers' ? 'drivers' : 'vehicles';
+  const setMainSub = (sub: 'vehicles' | 'drivers') => setSearchParams(sub === 'vehicles' ? {} : { tab: 'main', sub }, { replace: false });
 
   const load = useCallback(() => {
     api<Vehicle[]>('/fleet/vehicles').then(setVehicles).catch((e) => setError(e.message));
@@ -1212,6 +1215,27 @@ export default function Fleet() {
 
       {fleetTab === 'main' && (
       <>
+      {/* main sub-tabs — the two tables are unrelated and each is long */}
+      <div className="flex flex-wrap gap-1 mb-3" role="tablist" aria-label="Fleet sections">
+        {([
+          { id: 'vehicles' as const, label: '🚚 Vehicles', count: vehicles.length },
+          { id: 'drivers' as const, label: '🧑‍✈️ Drivers', count: drivers.length },
+        ]).map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={mainSub === t.id}
+            className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+              mainSub === t.id ? 'bg-yellow-50 border-yellow-300 text-yellow-800' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+            }`}
+            onClick={() => setMainSub(t.id)}
+          >
+            {t.label} ({t.count})
+          </button>
+        ))}
+      </div>
+      {mainSub === 'vehicles' && (
+      <>
       <h2 className="font-semibold text-gray-700 mb-2">Vehicles</h2>
       <Card className="mb-6">
         <table className="w-full min-w-[880px] text-sm">
@@ -1302,6 +1326,11 @@ export default function Fleet() {
         </table>
       </Card>
 
+      </>
+      )}
+
+      {mainSub === 'drivers' && (
+      <>
       <h2 className="font-semibold text-gray-700 mb-2">Drivers</h2>
       <Card>
         <table className="w-full min-w-[840px] text-sm">
@@ -1450,6 +1479,7 @@ export default function Fleet() {
         </table>
       </Card>
       </>
+      )}      </>
       )}
 
       {fleetTab === 'absences' && (
