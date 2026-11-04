@@ -743,7 +743,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
 
       {deleting && (
         <ConfirmDialog
-          title={`Delete ${deleting.row.name.toLowerCase()}?`}
+          title={`Delete “${deleting.row.name}”?`}
           description={
             deleting.row.usage > 0
               ? `Still referenced by ${deleting.row.usage} record(s) — reassign those first; the API refuses to delete it.`
