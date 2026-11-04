@@ -24,6 +24,8 @@ import { categorySegment } from '../util/assetCode';
  *    and the form gets room for the hint + the live asset-code preview
  *  - "Add & new" keeps the batch workflow the old inline field had (one Enter
  *    per row) without leaving a form permanently parked on the page
+ *  - phones get a stacked card list instead of a 4-column table — the action
+ *    buttons were the first thing to fall off screen
  *  - rows sorted A→Z and searchable, because these lists only ever grow
  *  - a duplicate name is caught locally before the round-trip (409 still wins
  *    as the source of truth when two admins race)
@@ -313,6 +315,90 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
     requestAnimationFrame(() => document.getElementById(`asset-setup-tab-${next.param}`)?.focus());
   };
 
+  /** Row action buttons — shared by the table (≥sm) and the phone card list. */
+  const rowActions = (row: SetupRow) => (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {canManage ? (
+        <>
+          {active === 'categories' && (
+            <button
+              type="button"
+              className={ACTION_BTN}
+              title="Which specification fields do assets of this category ask for?"
+              onClick={() => {
+                setSpecEdit({ row, fields: (row.specFields ?? []).map((f) => ({ ...f, options: [...(f.options ?? [])] })) });
+                setSpecError(null);
+              }}
+            >
+              Spec fields
+            </button>
+          )}
+          <button
+            type="button"
+            className={ACTION_BTN}
+            onClick={() => { setEditing({ kind: active, row }); setEditName(row.name); setEditError(null); }}
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            className={DANGER_BTN}
+            title={row.usage ? `Used by ${row.usage} record(s) — reassign them first` : undefined}
+            onClick={() => setDeleting({ kind: active, row })}
+          >
+            Delete
+          </button>
+        </>
+      ) : (
+        <span className="text-xs text-gray-300">—</span>
+      )}
+    </div>
+  );
+
+  /** Usage + spec chips, shown inline on phones and as their own columns ≥sm. */
+  const usageChip = (row: SetupRow) =>
+    row.usage ? (
+      <span
+        title={`Referenced by ${row.usage} record(s) — cannot be deleted until they are reassigned`}
+        className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium tabular-nums text-amber-700 ring-1 ring-inset ring-amber-200"
+      >
+        {row.usage} in use
+      </span>
+    ) : (
+      <span className="whitespace-nowrap text-xs text-gray-400">unused</span>
+    );
+
+  const specChip = (row: SetupRow) =>
+    row.specFields?.length ? (
+      <span
+        title={row.specFields.map((f) => f.label).join(', ')}
+        className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium tabular-nums text-sky-700 ring-1 ring-inset ring-sky-200"
+      >
+        {row.specFields.length} field{row.specFields.length === 1 ? '' : 's'}
+      </span>
+    ) : (
+      <span className="text-xs text-gray-300">—</span>
+    );
+
+  const nameChip = (row: SetupRow) => (
+    <div className="flex min-w-0 items-center gap-2.5">
+      <span
+        aria-hidden
+        className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-bold ${toneOf(row.name)}`}
+      >
+        {row.name.trim().charAt(0).toUpperCase()}
+      </span>
+      <div className="min-w-0">
+        <div className="break-words font-medium text-gray-900">{row.name}</div>
+        {active === 'categories' && (
+          <div className="mt-0.5 font-mono text-[11px] text-gray-400">
+            AST-{codeSeg(row.name)}{codeSeg(row.name) ? '-' : ''}…
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   const createSection = creating ? sectionOf(creating) : null;
   const createSeg = createSection && creating === 'categories' ? codeSeg(newName) : '';
 
@@ -327,12 +413,13 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
         </p>
       </div>
 
-      {/* sub-tabs — segmented control so the counts read as one set of lists */}
+      {/* sub-tabs — segmented control so the counts read as one set of lists;
+          scrolls instead of wrapping when three pills don't fit a phone */}
       <div
         role="tablist"
         aria-label="Asset setup lists"
         onKeyDown={onTabKey}
-        className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-xl bg-gray-100/90 p-1"
+        className="mb-4 flex w-fit max-w-full gap-1 overflow-x-auto rounded-xl bg-gray-100/90 p-1"
       >
         {SECTIONS.map((s) => {
           const on = s.kind === active;
@@ -344,7 +431,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
               aria-selected={on}
               aria-controls="asset-setup-panel"
               tabIndex={on ? 0 : -1}
-              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 ${
+              className={`inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 ${
                 on
                   ? 'bg-white font-semibold text-gray-900 shadow-sm'
                   : 'font-medium text-gray-500 hover:bg-white/60 hover:text-gray-800'
@@ -402,7 +489,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
               <button
                 type="button"
                 onClick={() => openCreate(active)}
-                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-gold px-3.5 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:bg-gold-light focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-gold px-3.5 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:bg-gold-light focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70"
               >
                 <span aria-hidden className="text-base leading-none">+</span>
                 New {section.label.toLowerCase()}
@@ -411,135 +498,105 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           </div>
         </div>
 
-        {/* !min-w-0 opts this short 3-column table out of the global mobile
-            min-width:640px rule, so the actions stay on screen instead of
-            hiding behind a sideways scroll */}
-        <Table
-          head={active === 'categories' ? ['NAME', 'SPEC FIELDS', 'USED BY', 'ACTIONS'] : ['NAME', 'USED BY', 'ACTIONS']}
-          className="!min-w-0"
-        >
-          {loading ? (
-            <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label="Loading…" /></td></tr>
-          ) : rows[active].length === 0 ? (
-            <tr>
-              <td colSpan={active === 'categories' ? 4 : 3}>
-                <div className="py-12 text-center">
-                  <div aria-hidden className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-gray-50 text-lg text-gray-300">
-                    {section.icon}
+        {/* phones: one stacked card per entry — a 4-column table squeezed the
+            action buttons off screen */}
+        <div className="sm:hidden">
+          <div className="overflow-hidden rounded-xl border border-gray-200/80 bg-white shadow-card">
+            {loading ? (
+              <Empty label="Loading…" />
+            ) : rows[active].length === 0 ? (
+              <div className="px-4 py-10 text-center">
+                <div aria-hidden className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-gray-50 text-lg text-gray-300">
+                  {section.icon}
+                </div>
+                <p className="mt-2.5 text-sm font-medium text-gray-600">{section.empty}</p>
+                <p className="mt-0.5 text-xs text-gray-400">
+                  {canManage
+                    ? `Use “New ${section.label.toLowerCase()}” to add the first entry.`
+                    : 'Nothing here yet.'}
+                </p>
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <p className="text-sm text-gray-500">No {section.label.toLowerCase()} matches “{q.trim()}”</p>
+                <button
+                  type="button"
+                  onClick={() => setQ('')}
+                  className="mt-1.5 text-xs font-medium text-yellow-800 underline-offset-2 hover:underline"
+                >
+                  Clear search
+                </button>
+              </div>
+            ) : (
+              <ul className="divide-y divide-gray-100">
+                {visible.map((row) => (
+                  <li key={row.id} className="p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">{nameChip(row)}</div>
+                      {usageChip(row)}
+                    </div>
+                    {active === 'categories' && <div className="mt-2">{specChip(row)}</div>}
+                    <div className="mt-2.5">{rowActions(row)}</div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+
+        {/* ≥sm: the same rows as a table */}
+        <div className="hidden sm:block">
+          <Table
+            head={active === 'categories' ? ['NAME', 'SPEC FIELDS', 'USED BY', 'ACTIONS'] : ['NAME', 'USED BY', 'ACTIONS']}
+            className="!min-w-0"
+          >
+            {loading ? (
+              <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label="Loading…" /></td></tr>
+            ) : rows[active].length === 0 ? (
+              <tr>
+                <td colSpan={active === 'categories' ? 4 : 3}>
+                  <div className="py-12 text-center">
+                    <div aria-hidden className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-gray-50 text-lg text-gray-300">
+                      {section.icon}
+                    </div>
+                    <p className="mt-2.5 text-sm font-medium text-gray-600">{section.empty}</p>
+                    <p className="mt-0.5 text-xs text-gray-400">
+                      {canManage
+                        ? `Use “New ${section.label.toLowerCase()}” to add the first entry — it appears in the register straight away.`
+                        : 'Nothing here yet.'}
+                    </p>
                   </div>
-                  <p className="mt-2.5 text-sm font-medium text-gray-600">{section.empty}</p>
-                  <p className="mt-0.5 text-xs text-gray-400">
-                    {canManage
-                      ? `Use “New ${section.label.toLowerCase()}” to add the first entry — it appears in the register straight away.`
-                      : `Nothing here yet.`}
-                  </p>
-                </div>
-              </td>
-            </tr>
-          ) : visible.length === 0 ? (
-            <tr>
-              <td colSpan={active === 'categories' ? 4 : 3}>
-                <div className="py-10 text-center">
-                  <p className="text-sm text-gray-500">No {section.label.toLowerCase()} matches “{q.trim()}”</p>
-                  <button
-                    type="button"
-                    onClick={() => setQ('')}
-                    className="mt-1.5 text-xs font-medium text-yellow-800 underline-offset-2 hover:underline"
-                  >
-                    Clear search
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ) : visible.map((row) => (
-            <tr key={row.id} className="hover:bg-gray-50/70">
-              <td className="px-3 py-2.5 sm:px-4">
-                <div className="flex min-w-0 items-center gap-2.5">
-                  <span
-                    aria-hidden
-                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-bold ${toneOf(row.name)}`}
-                  >
-                    {row.name.trim().charAt(0).toUpperCase()}
-                  </span>
-                  <div className="min-w-0">
-                    <div className="break-words font-medium text-gray-900">{row.name}</div>
-                    {active === 'categories' && (
-                      <div className="mt-0.5 font-mono text-[11px] text-gray-400">
-                        AST-{codeSeg(row.name)}{codeSeg(row.name) ? '-' : ''}…
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </td>
-              {active === 'categories' && (
-                <td className="px-3 py-2.5 text-center sm:px-4">
-                  {row.specFields?.length ? (
-                    <span
-                      title={row.specFields.map((f) => f.label).join(', ')}
-                      className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium tabular-nums text-sky-700 ring-1 ring-inset ring-sky-200"
-                    >
-                      {row.specFields.length} field{row.specFields.length === 1 ? '' : 's'}
-                    </span>
-                  ) : (
-                    <span className="text-xs text-gray-300">—</span>
-                  )}
                 </td>
-              )}
-              <td className="px-3 py-2.5 text-right sm:px-4">
-                {row.usage ? (
-                  <span
-                    title={`Referenced by ${row.usage} record(s) — cannot be deleted until they are reassigned`}
-                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium tabular-nums text-amber-700 ring-1 ring-inset ring-amber-200"
-                  >
-                    {row.usage} in use
-                  </span>
-                ) : (
-                  <span className="text-xs text-gray-400">unused</span>
+              </tr>
+            ) : visible.length === 0 ? (
+              <tr>
+                <td colSpan={active === 'categories' ? 4 : 3}>
+                  <div className="py-10 text-center">
+                    <p className="text-sm text-gray-500">No {section.label.toLowerCase()} matches “{q.trim()}”</p>
+                    <button
+                      type="button"
+                      onClick={() => setQ('')}
+                      className="mt-1.5 text-xs font-medium text-yellow-800 underline-offset-2 hover:underline"
+                    >
+                      Clear search
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ) : visible.map((row) => (
+              <tr key={row.id} className="hover:bg-gray-50/70">
+                <td className="px-3 py-2.5 sm:px-4">{nameChip(row)}</td>
+                {active === 'categories' && (
+                  <td className="px-3 py-2.5 text-center sm:px-4">{specChip(row)}</td>
                 )}
-              </td>
-              {/* actions wrap below sm so the buttons stay reachable without
-                  scrolling the table sideways on a phone */}
-              <td className="px-3 py-2.5 sm:px-4">
-                <div className="flex flex-wrap items-center justify-center gap-1.5">
-                  {canManage ? (
-                    <>
-                      {active === 'categories' && (
-                        <button
-                          type="button"
-                          className={ACTION_BTN}
-                          title="Which specification fields do assets of this category ask for?"
-                          onClick={() => {
-                            setSpecEdit({ row, fields: (row.specFields ?? []).map((f) => ({ ...f, options: [...(f.options ?? [])] })) });
-                            setSpecError(null);
-                          }}
-                        >
-                          Spec fields
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className={ACTION_BTN}
-                        onClick={() => { setEditing({ kind: active, row }); setEditName(row.name); setEditError(null); }}
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        className={DANGER_BTN}
-                        title={row.usage ? `Used by ${row.usage} record(s) — reassign them first` : undefined}
-                        onClick={() => setDeleting({ kind: active, row })}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  ) : (
-                    <span className="text-xs text-gray-300">—</span>
-                  )}
-                </div>
-              </td>
-            </tr>
-          ))}
-        </Table>
+                <td className="px-3 py-2.5 text-right sm:px-4">{usageChip(row)}</td>
+                <td className="px-3 py-2.5 sm:px-4">
+                  <div className="flex justify-center">{rowActions(row)}</div>
+                </td>
+              </tr>
+            ))}
+          </Table>
+        </div>
 
         {!loading && rows[active].length > 0 && (
           <p className="mt-2 text-right text-[11px] tabular-nums text-gray-400">
