@@ -11,6 +11,7 @@ import { TimetableService } from '../settings/timetable.service';
 import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
 import { FleetComplianceService, ComplianceViolation } from './compliance.service';
+import { VehiclePhotosService } from './vehicle-photos.service';
 import { EXPIRY_WARNING_DAYS, ExpiryStatus, expiryStatus, daysUntilExpiry, ymd } from './expiry';
 
 // Phase A helpers moved to ./expiry.ts in Phase B — re-exported so existing
@@ -75,6 +76,8 @@ export class FleetService {
     /** Phase B — optional so legacy test constructions (7 args) keep working;
      *  the app provides it via FleetComplianceModule. */
     @Optional() private compliance?: FleetComplianceService,
+    /** Vehicle pictures — optional so legacy test constructions keep working. */
+    @Optional() private vehiclePhotos?: VehiclePhotosService,
   ) {}
 
   // ---------- vehicle type master data (Plan §6) ----------
@@ -482,7 +485,8 @@ export class FleetService {
     const rows = await this.prisma.vehicle.findMany({
       where: status ? { status } : undefined,
       orderBy: { vehicleNo: 'asc' },
-      include: { driver: true },
+      // photo metadata (never the stored name) so the table can show a thumbnail
+      include: { driver: true, photos: { select: { kind: true, size: true, updatedAt: true }, orderBy: { kind: 'asc' } } },
     });
     const live = await this.prisma.carRequest.findMany({
       // same filter as requesterFleetOverview: base document status is the
@@ -651,6 +655,8 @@ export class FleetService {
         : []),
       this.prisma.vehicle.delete({ where: { id } }),
     ]);
+    // the rows cascade with the vehicle — the files have to go explicitly
+    await this.vehiclePhotos?.purge(id);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'VEHICLE_DELETED', module: 'FLEET', recordId: id,
@@ -1045,7 +1051,7 @@ export class FleetService {
   async vehicleDetail(id: string) {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
-      include: { driver: true },
+      include: { driver: true, photos: { select: { kind: true, size: true, updatedAt: true }, orderBy: { kind: 'asc' } } },
     });
     if (!vehicle) throw new NotFoundException('Vehicle not found');
 

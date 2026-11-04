@@ -1179,8 +1179,29 @@ model Vehicle {
   carRequests      CarRequest[]
   unavailabilities VehicleUnavailability[]
   documents        VehicleDocument[]
+  photos           VehiclePhoto[]
 
   @@map("vehicles")
+}
+
+/// The pictures a vehicle carries: the car itself (PHOTO), its registration
+/// certificate (REGISTRATION) and one other document (DOCUMENT). One row per
+/// kind; the file lives in UPLOAD_PATH/vehicle-photos and is only served through
+/// the permission-guarded GET /fleet/vehicles/:id/photos/:kind route.
+model VehiclePhoto {
+  id          String   @id @default(uuid()) @db.Uuid
+  vehicleId   String   @db.Uuid
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  kind        String // PHOTO | REGISTRATION | DOCUMENT
+  storedName  String // uuid.ext — never leaves the server
+  mimeType    String // derived from the file signature, not the client
+  size        Int
+  updatedById String?  @db.Uuid
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([vehicleId, kind])
+  @@map("vehicle_photos")
 }
 
 model Driver {

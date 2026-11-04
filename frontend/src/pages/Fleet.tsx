@@ -8,6 +8,7 @@ import { Badge, Button, Card, Empty, Input, NumberField, PageHeader, Select } fr
 import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 import { FleetDocumentsModal, FleetDocType } from '../components/FleetDocumentsModal';
+import { VehiclePhotosModal, VehiclePhotoMeta, useVehiclePhotoBlob } from '../components/VehiclePhotosModal';
 
 interface Driver {
   id: string;
@@ -110,6 +111,8 @@ interface Vehicle {
   /** VMS §6.5 — server-side compliance verdict (mandatory documents / licence) */
   dispatchBlocked?: boolean;
   dispatchBlockReason?: string | null;
+  /** pictures on file — metadata only; the bytes come from the guarded route */
+  photos?: VehiclePhotoMeta[] | null;
 }
 
 const VEHICLE_STATUS: Record<string, 'green' | 'blue' | 'yellow' | 'red'> = {
@@ -142,6 +145,23 @@ function ExpiryPill({ label, date, status }: { label: string; date?: string | nu
     <div className="text-xs whitespace-nowrap" title={`${label} — ${fmtDate(date)}`}>
       {label} <span className={`px-1.5 py-0.5 rounded-full font-medium ${cls}`}>{fmtDate(date)}{flag}</span>
     </div>
+  );
+}
+
+/** Fleet-table thumbnail — the vehicle's PHOTO slot, fetched with the JWT. */
+function VehicleThumb({ row, onOpen }: { row: Vehicle; onOpen: () => void }) {
+  const photo = row.photos?.find((p) => p.kind === 'PHOTO');
+  const url = useVehiclePhotoBlob(photo ? row.id : undefined, 'PHOTO', photo?.updatedAt ?? null);
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={photo ? 'View vehicle photos' : 'No photo yet — open to upload'}
+      aria-label={photo ? `View ${row.vehicleNo} photos` : `${row.vehicleNo} has no photo`}
+      className="h-10 w-12 shrink-0 rounded-md border border-gray-200 bg-gray-50 overflow-hidden flex items-center justify-center text-gray-300 hover:border-yellow-500"
+    >
+      {url ? <img src={url} alt="" className="h-full w-full object-cover" /> : <span className="text-lg leading-none">📷</span>}
+    </button>
   );
 }
 
@@ -184,6 +204,7 @@ export default function Fleet() {
   const [deletingType, setDeletingType] = useState<VehicleTypeRow | null>(null);
   // document register (VMS Phase B §6.1/§6.2) — modal + Setup-tab master data
   const [docsFor, setDocsFor] = useState<Vehicle | null>(null);
+  const [photosFor, setPhotosFor] = useState<Vehicle | null>(null);
   const [docTypes, setDocTypes] = useState<FleetDocType[]>([]);
   const [dtForm, setDtForm] = useState({ code: '', name: '', vehicleType: '', mandatoryForDispatch: false, allowNoExpiry: false, warningDays: '30, 14, 7, 1' });
   const [editingDt, setEditingDt] = useState<FleetDocType | null>(null);
@@ -508,7 +529,7 @@ export default function Fleet() {
       {notice && <div className="mb-4 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{notice}</div>}
 
       {/* ---------- fleet tabs (URL-driven) ---------- */}
-      <div className="flex gap-1 mb-4">
+      <div className="flex flex-wrap gap-1 mb-4">
         {(['main', 'absences'] as const).map((t) => (
           <button
             key={t}
@@ -637,7 +658,7 @@ export default function Fleet() {
                 ))}
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-vu-start" className="block text-xs text-gray-500 mb-1">From *</label>
                 <Input id="fleet-vu-start" type="datetime-local" value={vuForm.startsAt} onChange={(e) => setVuForm({ ...vuForm, startsAt: e.target.value })} />
@@ -695,7 +716,7 @@ export default function Fleet() {
               };
               return (
                 <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label htmlFor="fleet-vu-start-2" className="block text-xs text-gray-500 mb-1">From *</label>
                       <Input id="fleet-vu-start-2" type="datetime-local" value={vuForm.startsAt || loc(editingVu.startsAt)} onChange={(e) => setVuForm({ ...vuForm, startsAt: e.target.value })} />
@@ -801,7 +822,7 @@ export default function Fleet() {
                 ))}
               </Select>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-date" className="block text-xs text-gray-500 mb-1">Date *</label>
                 <Input id="fleet-date" type="date" value={absenceForm.date} onChange={(e) => setAbsenceForm({ ...absenceForm, date: e.target.value })} />
@@ -867,7 +888,7 @@ export default function Fleet() {
         <Modal title={`Edit leave — ${editingAbsence.driver?.name ?? '?'}`} error={modalError} onClose={() => { setEditingAbsence(null); setModalError(''); }}>
           <div className="space-y-3">
             <div className="text-xs text-gray-500">The window is re-derived from the Company Time Table for the picked leave type and date.</div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-date-2" className="block text-xs text-gray-500 mb-1">Date *</label>
                 <Input id="fleet-date-2" type="date" value={editForm.date} onChange={(e) => setEditForm({ ...editForm, date: e.target.value })} />
@@ -933,7 +954,7 @@ export default function Fleet() {
               <label htmlFor="fleet-driver-name" className="block text-xs text-gray-500 mb-1">Driver name *</label>
               <Input id="fleet-driver-name" placeholder="e.g. U Aung Kyaw" invalid={!!modalError} value={dForm.name} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-phone" className="block text-xs text-gray-500 mb-1">Phone</label>
                 <Input id="fleet-phone" placeholder="09-xxx" value={dForm.phone} onChange={(e) => setDForm({ ...dForm, phone: e.target.value })} />
@@ -958,7 +979,7 @@ export default function Fleet() {
       {showV && (
         <Modal title="Add vehicle" error={vehicleBanner} onClose={() => { setShowV(false); setModalError(''); }}>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-vehicle-no" className="block text-xs text-gray-500 mb-1">Vehicle no. *</label>
                 <Input id="fleet-vehicle-no" placeholder="YGN-1234" error={vehNoError} value={vForm.vehicleNo} onChange={(e) => setVForm({ ...vForm, vehicleNo: e.target.value })} />
@@ -975,7 +996,7 @@ export default function Fleet() {
               <label htmlFor="fleet-brand-model" className="block text-xs text-gray-500 mb-1">Brand / model *</label>
               <Input id="fleet-brand-model" placeholder="Toyota Corolla" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-default-driver" className="block text-xs text-gray-500 mb-1">Default driver</label>
                 <Select id="fleet-default-driver" value={vForm.driverId} onChange={(e) => setVForm({ ...vForm, driverId: e.target.value })}>
@@ -984,7 +1005,7 @@ export default function Fleet() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-reg-expiry" className="block text-xs text-gray-500 mb-1">Registration expiry</label>
                 <Input id="fleet-reg-expiry" type="date" value={vForm.registrationExpiry} onChange={(e) => setVForm({ ...vForm, registrationExpiry: e.target.value })} />
@@ -1012,7 +1033,7 @@ export default function Fleet() {
                     <Input id="fleet-year" type="number" min={1950} max={2100} placeholder="2020" value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="fleet-vin-17" className="block text-xs text-gray-500 mb-1">VIN (17)</label>
                     <Input id="fleet-vin-17" placeholder="JTDKB20U577012345" maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
@@ -1025,7 +1046,7 @@ export default function Fleet() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="fleet-engine-no" className="block text-xs text-gray-500 mb-1">Engine no.</label>
                     <Input id="fleet-engine-no" value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
@@ -1048,7 +1069,7 @@ export default function Fleet() {
       {editingV && (
         <Modal title={`Edit vehicle — ${editingV.vehicleNo}`} error={vehicleBanner} onClose={() => { setEditingV(null); setModalError(''); }}>
           <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-vehicle-no-2" className="block text-xs text-gray-500 mb-1">Vehicle no.</label>
                 <Input id="fleet-vehicle-no-2" value={vForm.vehicleNo} disabled title="Vehicle number cannot be changed" />
@@ -1060,7 +1081,7 @@ export default function Fleet() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-brand-model-2" className="block text-xs text-gray-500 mb-1">Brand / model *</label>
                 <Input id="fleet-brand-model-2" value={vForm.brandModel} onChange={(e) => setVForm({ ...vForm, brandModel: e.target.value })} />
@@ -1073,7 +1094,7 @@ export default function Fleet() {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-reg-expiry-2" className="block text-xs text-gray-500 mb-1">Registration expiry</label>
                 <Input id="fleet-reg-expiry-2" type="date" value={vForm.registrationExpiry} onChange={(e) => setVForm({ ...vForm, registrationExpiry: e.target.value })} />
@@ -1090,7 +1111,7 @@ export default function Fleet() {
                 Identification &amp; specs {(vForm.vin || vForm.fuelType || vForm.engineNo || vForm.chassisNo || vForm.make || vForm.model || vForm.year) ? '(filled)' : '(empty)'}
               </summary>
               <div className="space-y-3 pt-3">
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="fleet-type-2" className="block text-xs text-gray-500 mb-1">Type</label>
                     <Select id="fleet-type-2" value={vForm.vehicleType} onChange={(e) => setVForm({ ...vForm, vehicleType: e.target.value })}>
@@ -1117,7 +1138,7 @@ export default function Fleet() {
                     <Input id="fleet-year-2" type="number" min={1950} max={2100} value={vForm.year} onChange={(e) => setVForm({ ...vForm, year: e.target.value })} />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="fleet-vin-17-2" className="block text-xs text-gray-500 mb-1">VIN (17)</label>
                     <Input id="fleet-vin-17-2" maxLength={17} error={vinError} value={vForm.vin} onChange={(e) => setVForm({ ...vForm, vin: e.target.value.toUpperCase() })} />
@@ -1130,7 +1151,7 @@ export default function Fleet() {
                     </Select>
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label htmlFor="fleet-engine-no-2" className="block text-xs text-gray-500 mb-1">Engine no.</label>
                     <Input id="fleet-engine-no-2" value={vForm.engineNo} onChange={(e) => setVForm({ ...vForm, engineNo: e.target.value })} />
@@ -1157,7 +1178,7 @@ export default function Fleet() {
               <label htmlFor="fleet-driver-name-2" className="block text-xs text-gray-500 mb-1">Driver name *</label>
               <Input id="fleet-driver-name-2" value={dForm.name} invalid={!!modalError} onChange={(e) => setDForm({ ...dForm, name: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="fleet-phone-2" className="block text-xs text-gray-500 mb-1">Phone</label>
                 <Input id="fleet-phone-2" placeholder="09-xxx" value={dForm.phone} onChange={(e) => setDForm({ ...dForm, phone: e.target.value })} />
@@ -1189,7 +1210,7 @@ export default function Fleet() {
       <>
       <h2 className="font-semibold text-gray-700 mb-2">Vehicles</h2>
       <Card className="mb-6">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[880px] text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Vehicle No.</th>
@@ -1207,10 +1228,20 @@ export default function Fleet() {
             {vehicles.map((v) => (
               <tr key={v.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">
-                  <div>{v.vehicleNo}</div>
-                  <button className="text-xs text-blue-600 hover:underline" onClick={() => setDocsFor(v)}>
-                    Docs
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <VehicleThumb row={v} onOpen={() => setPhotosFor(v)} />
+                    <div>
+                      <div>{v.vehicleNo}</div>
+                      <div className="flex flex-wrap gap-x-3">
+                        <button className="text-xs text-blue-600 hover:underline" onClick={() => setPhotosFor(v)}>
+                          Photos
+                        </button>
+                        <button className="text-xs text-blue-600 hover:underline" onClick={() => setDocsFor(v)}>
+                          Docs
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                   {v.dispatchBlocked && (
                     <div
                       className="text-[10px] font-semibold text-red-600 whitespace-nowrap"
@@ -1269,7 +1300,7 @@ export default function Fleet() {
 
       <h2 className="font-semibold text-gray-700 mb-2">Drivers</h2>
       <Card>
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[840px] text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Name</th>
@@ -1420,7 +1451,7 @@ export default function Fleet() {
       {fleetTab === 'absences' && (
       <>
       {canManage ? (
-      <div className="flex items-start justify-between gap-3 mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
           <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Record driver leave — the driver is skipped in assign pickers and auto-set to ON_LEAVE</div>
           <div className="text-xs text-gray-400">
@@ -1437,7 +1468,7 @@ export default function Fleet() {
         {absences.filter((a) => a.status === 'ACTIVE').length === 0 ? (
           <Empty label="No planned absences — drivers are assumed available." />
         ) : (
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[620px] text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Driver</th>
@@ -1504,7 +1535,7 @@ export default function Fleet() {
       {fleetTab === 'unavail' && (
       <>
       {canManage ? (
-      <div className="flex items-start justify-between gap-3 mb-4">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
           <div className="text-xs font-semibold text-gray-500 uppercase mb-1">Block a vehicle for a known period (service, inspection, repair) — the car is skipped in pickers and shown as blocked on the fleet card</div>
           <div className="text-xs text-gray-400">Existing bookings inside the window are NOT cancelled — the confirmation lists them so you can reshuffle. Assignments into a blocked window are refused.</div>
@@ -1518,7 +1549,7 @@ export default function Fleet() {
         {vUnavails.filter((u) => u.status === 'ACTIVE').length === 0 ? (
           <Empty label="No blocked windows — all vehicles are assumed available." />
         ) : (
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[620px] text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Vehicle</th>
@@ -1589,7 +1620,7 @@ export default function Fleet() {
               <Button onClick={createType} disabled={!newType.trim()}>Add type</Button>
             </div>
           )}
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[420px] text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
                 <th className="px-4 py-3 font-medium">Type</th>
@@ -1633,23 +1664,23 @@ export default function Fleet() {
           {dtError && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{dtError}</div>}
           {canSetup && (
             <div className="space-y-2 mb-4 border border-gray-200 rounded-lg p-3 bg-gray-50/60">
-              <div className="grid grid-cols-12 gap-2 items-end">
-                <div className="col-span-3">
+              <div className="grid grid-cols-2 sm:grid-cols-12 gap-2 items-end">
+                <div className="col-span-2 sm:col-span-3">
                   <label htmlFor="dt-code" className="block text-xs text-gray-500 mb-1">Code *</label>
                   <Input id="dt-code" placeholder="ROAD_TAX" value={dtForm.code} disabled={!!editingDt} onChange={(e) => setDtForm({ ...dtForm, code: e.target.value })} />
                 </div>
-                <div className="col-span-3">
+                <div className="col-span-2 sm:col-span-3">
                   <label htmlFor="dt-name" className="block text-xs text-gray-500 mb-1">Name *</label>
                   <Input id="dt-name" placeholder="Road tax" value={dtForm.name} onChange={(e) => setDtForm({ ...dtForm, name: e.target.value })} />
                 </div>
-                <div className="col-span-2">
+                <div className="col-span-1 sm:col-span-2">
                   <label htmlFor="dt-scope" className="block text-xs text-gray-500 mb-1">Applies to</label>
                   <Select id="dt-scope" value={dtForm.vehicleType} onChange={(e) => setDtForm({ ...dtForm, vehicleType: e.target.value })}>
                     <option value="">All vehicle types</option>
                     {types.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                   </Select>
                 </div>
-                <div className="col-span-2">
+                <div className="col-span-1 sm:col-span-2">
                   <label htmlFor="dt-warn" className="block text-xs text-gray-500 mb-1">Warn days</label>
                   <Input id="dt-warn" placeholder="30, 14, 7, 1" value={dtForm.warningDays} onChange={(e) => setDtForm({ ...dtForm, warningDays: e.target.value })} />
                 </div>
@@ -1672,7 +1703,7 @@ export default function Fleet() {
               </div>
             </div>
           )}
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[680px] text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
                 <th className="px-4 py-3 font-medium">Document</th>
@@ -1753,7 +1784,7 @@ export default function Fleet() {
             )}
             {history && history.assignments.length === 0 && <Empty label="No assignment history yet" />}
             {history && history.assignments.length > 0 && (
-              <table className="w-full text-sm border border-gray-200 rounded-lg overflow-hidden">
+              <table className="w-full min-w-[760px] text-sm border border-gray-200 rounded-lg overflow-hidden">
                 <thead>
                   <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wide">
                     <th className="px-3 py-2 font-medium">Request</th>
@@ -1787,6 +1818,15 @@ export default function Fleet() {
             )}
           </div>
         </div>
+      )}
+
+      {photosFor && (
+        <VehiclePhotosModal
+          vehicle={photosFor}
+          canManage={canManage}
+          onClose={() => setPhotosFor(null)}
+          onChanged={load}
+        />
       )}
 
       {docsFor && (

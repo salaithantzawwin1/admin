@@ -1,11 +1,15 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, Param, Patch, Post, Put, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
+import * as fs from 'fs';
 import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { DriverStatus, VehicleStatus, VehicleType } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { FleetService } from './fleet.service';
+import { VehiclePhotosService } from './vehicle-photos.service';
 import { Actor } from '../org/org.service';
 
 class VehicleTypeDto {
@@ -170,7 +174,10 @@ class DriverUpdateDto {
 @UseGuards(JwtAuthGuard)
 @Controller('fleet')
 export class FleetController {
-  constructor(private fleet: FleetService) {}
+  constructor(
+    private fleet: FleetService,
+    private photos: VehiclePhotosService,
+  ) {}
 
   private actor(req): Actor {
     return { userId: req.user.id, username: req.user.username };
@@ -203,6 +210,44 @@ export class FleetController {
   @RequirePermissions(PERMISSIONS.FLEET_READ)
   vehicleDetail(@Param('id') id: string) {
     return this.fleet.vehicleDetail(id);
+  }
+
+  // ---------- vehicle photos (PHOTO | REGISTRATION | DOCUMENT) ----------
+  /** Metadata for the three slots — the stored file name never appears here. */
+  @Get('vehicles/:id/photos')
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  vehiclePhotos(@Param('id') id: string) {
+    return this.photos.list(id);
+  }
+
+  /** Upload or replace one slot (multipart field "file", max 5 MB). */
+  @Post('vehicles/:id/photos/:kind')
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  uploadVehiclePhoto(@Req() req, @Param('id') id: string, @Param('kind') kind: string, @UploadedFile() file?: Express.Multer.File) {
+    return this.photos.upload(id, kind, file, this.actor(req));
+  }
+
+  /** Streams a stored picture to anyone who may read the fleet. Inline, but
+   *  with nosniff + a sandboxed CSP so a crafted file can never act as a page. */
+  @Get('vehicles/:id/photos/:kind')
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  async vehiclePhoto(@Param('id') id: string, @Param('kind') kind: string, @Res() res: Response) {
+    const { row, filePath } = await this.photos.file(id, kind);
+    const safeNo = row.vehicle.vehicleNo.replace(/[^A-Za-z0-9._-]/g, '_');
+    res.setHeader('Content-Type', row.mimeType);
+    res.setHeader('Content-Disposition', 'inline; filename="' + safeNo + '-' + kind.toLowerCase() + '"');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    fs.createReadStream(filePath).pipe(res);
+  }
+
+  @Delete('vehicles/:id/photos/:kind')
+  @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
+  removeVehiclePhoto(@Req() req, @Param('id') id: string, @Param('kind') kind: string) {
+    return this.photos.remove(id, kind, this.actor(req));
   }
 
   @Get('drivers')
