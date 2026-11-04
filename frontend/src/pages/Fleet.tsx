@@ -252,6 +252,10 @@ export default function Fleet() {
   const tabParam = searchParams.get('tab');
   const fleetTab: 'main' | 'absences' | 'unavail' | 'setup' = tabParam === 'absences' || tabParam === 'setup' || tabParam === 'unavail' ? tabParam : 'main';
   const setFleetTab = (t: 'main' | 'absences' | 'unavail' | 'setup') => setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
+  // Setup is split into two sub-tabs; the section lives in the URL too so a
+  // refresh or a shared link lands on the same half of the page.
+  const setupSub: 'types' | 'docs' = searchParams.get('sub') === 'docs' ? 'docs' : 'types';
+  const setSetupSub = (sub: 'types' | 'docs') => setSearchParams({ tab: 'setup', sub }, { replace: false });
 
   const load = useCallback(() => {
     api<Vehicle[]>('/fleet/vehicles').then(setVehicles).catch((e) => setError(e.message));
@@ -1599,7 +1603,32 @@ export default function Fleet() {
         )}
       </Card>
       </>
-      )}{fleetTab === 'setup' && (canManage || canSetup) && (
+      )}
+
+      {/* Setup sub-tabs — two unrelated master-data lists, each on its own tab
+          instead of one very long page */}
+      {fleetTab === 'setup' && (canManage || canSetup) && (
+        <div className="flex flex-wrap gap-1 mb-3" role="tablist" aria-label="Setup sections">
+          {([
+            { id: 'types' as const, label: '🚗 Vehicle types', count: types.length },
+            { id: 'docs' as const, label: '📄 Document types', count: docTypes.length },
+          ]).map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={setupSub === t.id}
+              className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                setupSub === t.id ? 'bg-yellow-50 border-yellow-300 text-yellow-800' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+              }`}
+              onClick={() => setSetupSub(t.id)}
+            >
+              {t.label} ({t.count})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {fleetTab === 'setup' && setupSub === 'types' && (canManage || canSetup) && (
         <Card className="mb-6 p-5">
           <div className="flex items-center justify-between mb-3">
             <div>
@@ -1649,7 +1678,7 @@ export default function Fleet() {
 
       {/* VMS §6.1 — configurable document types (Phase B): which documents a
           vehicle must carry and which of them BLOCK dispatch (§6.5) */}
-      {fleetTab === 'setup' && (canManage || canSetup) && (
+      {fleetTab === 'setup' && setupSub === 'docs' && (canManage || canSetup) && (
         <Card className="mb-6 p-5">
           <div className="flex items-center justify-between mb-3">
             <div>
