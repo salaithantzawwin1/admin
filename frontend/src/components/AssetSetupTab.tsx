@@ -473,7 +473,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="relative w-full min-w-0 flex-1 sm:max-w-sm xl:flex-none">
+            <div className="relative w-full min-w-0 flex-1 sm:max-w-sm xl:w-auto xl:flex-none">
               <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-gray-400">⌕</span>
               <Input
                 id="asset-setup-search"
