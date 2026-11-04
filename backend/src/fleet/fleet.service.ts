@@ -486,7 +486,10 @@ export class FleetService {
       where: status ? { status } : undefined,
       orderBy: { vehicleNo: 'asc' },
       // photo metadata (never the stored name) so the table can show a thumbnail
-      include: { driver: true, photos: { select: { kind: true, size: true, updatedAt: true }, orderBy: { kind: 'asc' } } },
+      include: {
+        driver: true,
+        photos: { select: { id: true, kind: true, size: true, updatedAt: true }, orderBy: [{ kind: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }] },
+      },
     });
     const live = await this.prisma.carRequest.findMany({
       // same filter as requesterFleetOverview: base document status is the
@@ -1051,7 +1054,10 @@ export class FleetService {
   async vehicleDetail(id: string) {
     const vehicle = await this.prisma.vehicle.findUnique({
       where: { id },
-      include: { driver: true, photos: { select: { kind: true, size: true, updatedAt: true }, orderBy: { kind: 'asc' } } },
+      include: {
+        driver: true,
+        photos: { select: { id: true, kind: true, size: true, updatedAt: true }, orderBy: [{ kind: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }] },
+      },
     });
     if (!vehicle) throw new NotFoundException('Vehicle not found');
 

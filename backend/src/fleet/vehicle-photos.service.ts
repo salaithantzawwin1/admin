@@ -8,7 +8,7 @@ import { Actor } from '../org/org.service';
 import { sniffImageType } from '../util/image-sniff';
 import { stripPhotoMetadata } from '../assets/photo-metadata';
 
-/** The three pictures a vehicle carries. */
+/** The three picture sections a vehicle carries. */
 export const VEHICLE_PHOTO_KINDS = ['PHOTO', 'REGISTRATION', 'DOCUMENT'] as const;
 export type VehiclePhotoKind = (typeof VEHICLE_PHOTO_KINDS)[number];
 
@@ -17,6 +17,9 @@ export const VEHICLE_PHOTO_LABELS: Record<VehiclePhotoKind, string> = {
   REGISTRATION: 'Registration photo',
   DOCUMENT: 'Document photo',
 };
+
+/** Pictures kept per section — the gallery holds up to this many of each. */
+export const VEHICLE_PHOTO_MAX_PER_KIND = 10;
 
 /**
  * Vehicle pictures: 5 MB, JPEG/PNG/WebP only. SVG is deliberately excluded —
@@ -27,13 +30,16 @@ const PHOTO_DIR = 'vehicle-photos';
 /** Only the uuid + extension this service itself writes may ever be opened, so
  *  a tampered row can never point outside the photo directory. */
 const STORED_NAME = /^[0-9a-f-]{36}\.(jpg|png|webp)$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Vehicle photographs (VMS §6) — the car itself, its registration certificate
- * and one other document picture. Files are written to UPLOAD_PATH/vehicle-photos
- * with mode 0600 and are only ever served through the permission-guarded
- * GET /fleet/vehicles/:id/photos/:kind route. The stored file name never leaves
- * the server; clients only see mime type, size and the update timestamp.
+ * Vehicle photo gallery (VMS §6) — the car itself, its registration
+ * certificate and other documents, up to ten pictures in each section. Files
+ * are written to UPLOAD_PATH/vehicle-photos with mode 0600 and are only ever
+ * served through the permission-guarded
+ * GET /fleet/vehicles/:id/photos/:photoId route. The stored file name never
+ * leaves the server; clients only see the photo id, mime type, size and the
+ * update timestamp.
  */
 @Injectable()
 export class VehiclePhotosService {
@@ -83,25 +89,31 @@ export class VehiclePhotosService {
     return vehicle;
   }
 
-  /** Metadata for all three slots (absent kinds are simply not in the array). */
+  /** Every picture of the vehicle, oldest first inside each section. */
   async list(vehicleId: string) {
     await this.assertVehicle(vehicleId);
-    const rows = await this.prisma.vehiclePhoto.findMany({
+    return this.prisma.vehiclePhoto.findMany({
       where: { vehicleId },
-      orderBy: { kind: 'asc' },
-      select: { kind: true, mimeType: true, size: true, updatedAt: true },
+      orderBy: [{ kind: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: { id: true, kind: true, mimeType: true, size: true, updatedAt: true },
     });
-    return rows;
   }
 
   /**
-   * Upload or replace one slot. Everything is checked BEFORE a byte is written:
-   * size, then the real file signature (never the client's Content-Type). The
-   * file is renamed to a random uuid with an extension derived from those bytes.
+   * Add one picture to a section. Everything is checked BEFORE a byte is
+   * written: the section cap, size, then the real file signature (never the
+   * client's Content-Type). The file is renamed to a random uuid with an
+   * extension derived from those bytes.
    */
   async upload(vehicleId: string, kindParam: string, file: Express.Multer.File | undefined, actor: Actor) {
     const kind = this.parseKind(kindParam);
     const vehicle = await this.assertVehicle(vehicleId);
+    const existing = await this.prisma.vehiclePhoto.count({ where: { vehicleId, kind } });
+    if (existing >= VEHICLE_PHOTO_MAX_PER_KIND) {
+      throw new BadRequestException(
+        `${VEHICLE_PHOTO_LABELS[kind]}: up to ${VEHICLE_PHOTO_MAX_PER_KIND} pictures — remove one before adding another`,
+      );
+    }
     if (!file?.buffer?.length) throw new BadRequestException('No file provided');
     if (file.size > MAX_BYTES) throw new BadRequestException('Photo too large (max 5 MB)');
     if (file.size !== file.buffer.length) throw new BadRequestException('Upload was truncated — please try again');
@@ -115,67 +127,66 @@ export class VehiclePhotosService {
     const stored = stripPhotoMetadata(file.buffer, type.mime);
     fs.writeFileSync(path.join(dir, storedName), stored, { mode: 0o600 });
 
-    let previous: string | null = null;
-    let saved: { mimeType: string; size: number; updatedAt: Date };
+    let saved: { id: string; kind: string; mimeType: string; size: number; updatedAt: Date };
     try {
-      const existing = await this.prisma.vehiclePhoto.findUnique({
-        where: { vehicleId_kind: { vehicleId, kind } },
-        select: { storedName: true },
-      });
-      previous = existing?.storedName ?? null;
-      saved = await this.prisma.vehiclePhoto.upsert({
-        where: { vehicleId_kind: { vehicleId, kind } },
-        create: { vehicleId, kind, storedName, mimeType: type.mime, size: stored.length, updatedById: actor.userId },
-        update: { storedName, mimeType: type.mime, size: stored.length, updatedById: actor.userId },
-        select: { mimeType: true, size: true, updatedAt: true },
+      saved = await this.prisma.vehiclePhoto.create({
+        data: {
+          vehicleId,
+          kind,
+          storedName,
+          mimeType: type.mime,
+          size: stored.length,
+          sortOrder: existing,
+          updatedById: actor.userId,
+        },
+        select: { id: true, kind: true, mimeType: true, size: true, updatedAt: true },
       });
     } catch (e) {
       this.unlink(storedName); // never leave an orphan when the row failed
       throw e;
     }
-    this.unlink(previous); // the replaced picture is gone for good
 
     await this.audit.log({
       userId: actor.userId,
       username: actor.username,
-      action: previous ? 'VEHICLE_PHOTO_REPLACED' : 'VEHICLE_PHOTO_ADDED',
+      action: 'VEHICLE_PHOTO_ADDED',
       module: 'FLEET',
-      recordId: vehicleId,
+      recordId: saved.id,
       newValue: { vehicleNo: vehicle.vehicleNo, kind, mimeType: type.mime, size: stored.length },
     });
-    return { kind, photo: saved };
+    return saved;
   }
 
   /** Everything the guarded route needs; 404 whenever there is nothing to show. */
-  async file(vehicleId: string, kindParam: string) {
-    const kind = this.parseKind(kindParam);
-    const row = await this.prisma.vehiclePhoto.findUnique({
-      where: { vehicleId_kind: { vehicleId, kind } },
+  async file(vehicleId: string, photoId: string) {
+    if (!UUID.test(photoId)) throw new NotFoundException('Photo not found');
+    const row = await this.prisma.vehiclePhoto.findFirst({
+      where: { id: photoId, vehicleId },
       include: { vehicle: { select: { vehicleNo: true } } },
     });
-    if (!row) throw new NotFoundException(`${VEHICLE_PHOTO_LABELS[kind]} not uploaded`);
+    if (!row) throw new NotFoundException('Photo not found');
     const filePath = this.pathFor(row.storedName);
-    if (!fs.existsSync(filePath)) throw new NotFoundException(`${VEHICLE_PHOTO_LABELS[kind]} not uploaded`);
+    if (!fs.existsSync(filePath)) throw new NotFoundException('Photo not found');
     return { row, filePath };
   }
 
-  async remove(vehicleId: string, kindParam: string, actor: Actor) {
-    const kind = this.parseKind(kindParam);
+  async remove(vehicleId: string, photoId: string, actor: Actor) {
+    if (!UUID.test(photoId)) throw new NotFoundException('Photo not found');
     const vehicle = await this.assertVehicle(vehicleId);
-    const row = await this.prisma.vehiclePhoto.findUnique({
-      where: { vehicleId_kind: { vehicleId, kind } },
-      select: { storedName: true },
+    const row = await this.prisma.vehiclePhoto.findFirst({
+      where: { id: photoId, vehicleId },
+      select: { id: true, kind: true, storedName: true },
     });
-    if (!row) throw new NotFoundException(`${VEHICLE_PHOTO_LABELS[kind]} not uploaded`);
-    await this.prisma.vehiclePhoto.delete({ where: { vehicleId_kind: { vehicleId, kind } } });
+    if (!row) throw new NotFoundException('Photo not found');
+    await this.prisma.vehiclePhoto.delete({ where: { id: row.id } });
     this.unlink(row.storedName);
     await this.audit.log({
       userId: actor.userId,
       username: actor.username,
       action: 'VEHICLE_PHOTO_REMOVED',
       module: 'FLEET',
-      recordId: vehicleId,
-      oldValue: { vehicleNo: vehicle.vehicleNo, kind },
+      recordId: row.id,
+      oldValue: { vehicleNo: vehicle.vehicleNo, kind: row.kind },
       severity: 'WARNING',
     });
     return { ok: true };

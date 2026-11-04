@@ -1185,9 +1185,9 @@ model Vehicle {
 }
 
 /// The pictures a vehicle carries: the car itself (PHOTO), its registration
-/// certificate (REGISTRATION) and one other document (DOCUMENT). One row per
-/// kind; the file lives in UPLOAD_PATH/vehicle-photos and is only served through
-/// the permission-guarded GET /fleet/vehicles/:id/photos/:kind route.
+/// certificate (REGISTRATION) and other documents (DOCUMENT) — up to ten in each
+/// section. The file lives in UPLOAD_PATH/vehicle-photos and is only served
+/// through the permission-guarded GET /fleet/vehicles/:id/photos/:photoId route.
 model VehiclePhoto {
   id          String   @id @default(uuid()) @db.Uuid
   vehicleId   String   @db.Uuid
@@ -1196,11 +1196,12 @@ model VehiclePhoto {
   storedName  String // uuid.ext — never leaves the server
   mimeType    String // derived from the file signature, not the client
   size        Int
+  sortOrder   Int      @default(0) // position inside its section
   updatedById String?  @db.Uuid
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@unique([vehicleId, kind])
+  @@index([vehicleId, kind])
   @@map("vehicle_photos")
 }
 

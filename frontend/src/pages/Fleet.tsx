@@ -151,7 +151,7 @@ function ExpiryPill({ label, date, status }: { label: string; date?: string | nu
 /** Fleet-table thumbnail — the vehicle's PHOTO slot, fetched with the JWT. */
 function VehicleThumb({ row, onOpen }: { row: Vehicle; onOpen: () => void }) {
   const photo = row.photos?.find((p) => p.kind === 'PHOTO');
-  const url = useVehiclePhotoBlob(photo ? row.id : undefined, 'PHOTO', photo?.updatedAt ?? null);
+  const url = useVehiclePhotoBlob(photo ? row.id : undefined, photo?.id, photo?.updatedAt ?? null);
   return (
     <button
       type="button"

@@ -213,7 +213,8 @@ export class FleetController {
   }
 
   // ---------- vehicle photos (PHOTO | REGISTRATION | DOCUMENT) ----------
-  /** Metadata for the three slots — the stored file name never appears here. */
+  /** Every picture of the vehicle (all three sections) — metadata only: the
+   *  stored file name never appears here. */
   @Get('vehicles/:id/photos')
   @RequirePermissions(PERMISSIONS.FLEET_READ)
   vehiclePhotos(@Param('id') id: string) {
@@ -229,25 +230,25 @@ export class FleetController {
     return this.photos.upload(id, kind, file, this.actor(req));
   }
 
-  /** Streams a stored picture to anyone who may read the fleet. Inline, but
+  /** Streams one stored picture to anyone who may read the fleet. Inline, but
    *  with nosniff + a sandboxed CSP so a crafted file can never act as a page. */
-  @Get('vehicles/:id/photos/:kind')
+  @Get('vehicles/:id/photos/:photoId')
   @RequirePermissions(PERMISSIONS.FLEET_READ)
-  async vehiclePhoto(@Param('id') id: string, @Param('kind') kind: string, @Res() res: Response) {
-    const { row, filePath } = await this.photos.file(id, kind);
+  async vehiclePhoto(@Param('id') id: string, @Param('photoId') photoId: string, @Res() res: Response) {
+    const { row, filePath } = await this.photos.file(id, photoId);
     const safeNo = row.vehicle.vehicleNo.replace(/[^A-Za-z0-9._-]/g, '_');
     res.setHeader('Content-Type', row.mimeType);
-    res.setHeader('Content-Disposition', 'inline; filename="' + safeNo + '-' + kind.toLowerCase() + '"');
+    res.setHeader('Content-Disposition', 'inline; filename="' + safeNo + '-' + row.kind.toLowerCase() + '"');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
     res.setHeader('Cache-Control', 'private, max-age=60');
     fs.createReadStream(filePath).pipe(res);
   }
 
-  @Delete('vehicles/:id/photos/:kind')
+  @Delete('vehicles/:id/photos/:photoId')
   @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
-  removeVehiclePhoto(@Req() req, @Param('id') id: string, @Param('kind') kind: string) {
-    return this.photos.remove(id, kind, this.actor(req));
+  removeVehiclePhoto(@Req() req, @Param('id') id: string, @Param('photoId') photoId: string) {
+    return this.photos.remove(id, photoId, this.actor(req));
   }
 
   @Get('drivers')
