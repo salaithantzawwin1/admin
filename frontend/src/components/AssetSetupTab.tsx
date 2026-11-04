@@ -360,7 +360,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
         )}
 
         {/* toolbar: what this list is, how to search it, and one clear action */}
-        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="min-w-0">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-900">
               {section.plural}
@@ -371,14 +371,14 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             <p className="mt-0.5 max-w-2xl text-xs text-gray-400">{section.hint}</p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-            <div className="relative min-w-0 flex-1 sm:flex-none">
+          <div className="flex items-center gap-2">
+            <div className="relative min-w-0 flex-1 xl:flex-none">
               <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-gray-400">⌕</span>
               <Input
                 id="asset-setup-search"
                 aria-label={`Search ${section.plural.toLowerCase()}`}
                 placeholder={`Search ${section.plural.toLowerCase()}…`}
-                className="!h-9 !w-full !pl-8 sm:!w-56"
+                className="!h-9 !w-full !pl-8 xl:!w-56"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 disabled={loading}
