@@ -169,6 +169,20 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
 
   useEffect(() => { setQ(''); }, [active]);
 
+  // The modal's focus trap focuses its first focusable child (the close button),
+  // so nudge focus into the name field once the dialog is on screen. A timeout
+  // keeps this after the trap's own effect.
+  useEffect(() => {
+    if (!creating && !editing) return;
+    const id = creating ? 'asset-setup-new' : 'asset-setup-rename';
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(id) as HTMLInputElement | null;
+      el?.focus();
+      el?.select();
+    }, 40);
+    return () => window.clearTimeout(t);
+  }, [creating, editing]);
+
   const load = useCallback(async () => {
     setError(null);
     setLoading(true);
@@ -372,7 +386,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="relative min-w-0 flex-1 xl:flex-none">
+            <div className="relative w-full min-w-0 flex-1 sm:max-w-sm xl:flex-none">
               <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-gray-400">⌕</span>
               <Input
                 id="asset-setup-search"
