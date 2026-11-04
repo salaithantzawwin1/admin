@@ -86,6 +86,18 @@ export default function AuditLogs() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<AuditDetail | null>(null);
   const [detailError, setDetailError] = useState('');
+  // The app header is sticky and its height changes between breakpoints, so the
+  // filter bar anchors to the measured height instead of a magic number.
+  const [stickyTop, setStickyTop] = useState(57);
+  useEffect(() => {
+    const header = document.querySelector('header');
+    if (!header) return;
+    const update = () => setStickyTop(Math.round(header.getBoundingClientRect().height));
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(header);
+    return () => ro.disconnect();
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -168,7 +180,7 @@ export default function AuditLogs() {
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
       {/* ---------- filters ---------- */}
-      <Card className="sticky top-[57px] z-20 mb-4 p-4 bg-white/95 backdrop-blur-sm">
+      <Card className="sticky z-20 mb-4 p-4 bg-white/95 backdrop-blur-sm" style={{ top: stickyTop }}>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <div>
             <label htmlFor="audit-from" className="block text-xs text-gray-500 mb-1">From date</label>

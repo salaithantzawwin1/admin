@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { ReactNode, useEffect, useId, useRef, useState } from 'react';
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
@@ -12,9 +13,9 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
   );
 }
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
+export function Card({ children, className = '', style }: { children: ReactNode; className?: string; style?: CSSProperties }) {
   // overflow-x-auto: wide tables scroll inside the card on small screens
-  return <div className={`bg-white rounded-xl border border-gray-200/80 shadow-card overflow-x-auto ${className}`}>{children}</div>;
+  return <div style={style} className={`bg-white rounded-xl border border-gray-200/80 shadow-card overflow-x-auto ${className}`}>{children}</div>;
 }
 
 export function Button({
