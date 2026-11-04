@@ -844,6 +844,9 @@ export class AssetsService {
     }
     const out: SpecField[] = [];
     const seen = new Set<string>();
+    // Two fields with the same label would show up as two identical questions
+    // in the asset form (and read the same in the CSV), so labels stay unique.
+    const seenLabels = new Set<string>();
     for (const raw of input) {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         throw new BadRequestException('Each specification field must be an object');
@@ -852,6 +855,11 @@ export class AssetsService {
       const label = String(src.label ?? '').trim();
       if (!label) throw new BadRequestException('Every specification field needs a label');
       if (label.length > 60) throw new BadRequestException(`Field label "${label}" is too long (max 60)`);
+      const labelId = label.toLowerCase();
+      if (seenLabels.has(labelId)) {
+        throw new BadRequestException(`Duplicate field label "${label}" — every field needs its own name`);
+      }
+      seenLabels.add(labelId);
       const type = String(src.type ?? 'text') as SpecField['type'];
       if (!(SPEC_TYPES as readonly string[]).includes(type)) {
         throw new BadRequestException(`Unknown field type "${type}"`);
@@ -862,8 +870,21 @@ export class AssetsService {
       seen.add(key);
       const field: SpecField = { key, label, type };
       if (type === 'select') {
-        const options = (Array.isArray(src.options) ? src.options : [])
-          .map((o) => String(o ?? '').trim()).filter(Boolean);
+        // De-dupe case-insensitively — typing "USB, usb" must not create two
+        // identical <option>s — and keep the order the admin typed.
+        const options: string[] = [];
+        const seenOptions = new Set<string>();
+        for (const rawOption of Array.isArray(src.options) ? src.options : []) {
+          const option = String(rawOption ?? '').trim();
+          if (!option) continue;
+          if (option.length > MAX_SPEC_VALUE) {
+            throw new BadRequestException(`Option "${option.slice(0, 30)}…" is too long (max ${MAX_SPEC_VALUE})`);
+          }
+          const optionId = option.toLowerCase();
+          if (seenOptions.has(optionId)) continue;
+          seenOptions.add(optionId);
+          options.push(option);
+        }
         if (!options.length) throw new BadRequestException(`Field "${label}" needs at least one option`);
         if (options.length > MAX_SPEC_FIELDS) {
           throw new BadRequestException(`Field "${label}" has too many options (max ${MAX_SPEC_FIELDS})`);
@@ -885,8 +906,33 @@ export class AssetsService {
       if (!f?.key) continue;
       const raw = (input as Record<string, unknown>)[f.key];
       if (raw === undefined || raw === null) continue;
-      const value = String(raw).trim().slice(0, MAX_SPEC_VALUE);
-      if (value) out[f.key] = value;
+      // A nested object/array is not a specification answer — String() would
+      // have stored "[object Object]" in the register.
+      if (typeof raw === 'object') {
+        throw new BadRequestException(`"${f.label}" must be a single value`);
+      }
+      const value = String(raw).trim();
+      if (!value) continue;
+      if (value.length > MAX_SPEC_VALUE) {
+        throw new BadRequestException(`"${f.label}" is too long (max ${MAX_SPEC_VALUE} characters)`);
+      }
+      if (f.type === 'number') {
+        // "1,200" is how this office types amounts — accept it, store the number
+        const n = Number(value.replace(/,/g, ''));
+        if (!Number.isFinite(n)) throw new BadRequestException(`"${f.label}" must be a number`);
+        out[f.key] = String(n);
+        continue;
+      }
+      if (f.type === 'select') {
+        const allowed = f.options ?? [];
+        const match = allowed.find((o) => o.toLowerCase() === value.toLowerCase());
+        if (!match) {
+          throw new BadRequestException(`"${f.label}" must be one of: ${allowed.join(', ')}`);
+        }
+        out[f.key] = match;
+        continue;
+      }
+      out[f.key] = value;
     }
     return Object.keys(out).length ? out : null;
   }

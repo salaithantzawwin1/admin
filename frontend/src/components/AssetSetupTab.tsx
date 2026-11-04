@@ -126,6 +126,26 @@ const TONES = [
 ];
 const toneOf = (name: string) => TONES[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % TONES.length];
 
+/**
+ * What is wrong with one specification-field row (null = fine). Mirrors the API
+ * rules so a save never bounces off the server with a page-level error that
+ * does not say which row to fix.
+ */
+function specFieldIssue(f: SpecField, fields: SpecField[]): string | null {
+  const label = f.label.trim();
+  if (!label) return 'A label is required';
+  if (label.length > 60) return 'Label is too long (max 60 characters)';
+  if (fields.filter((o) => o.label.trim().toLowerCase() === label.toLowerCase()).length > 1) {
+    return 'Another field already uses this label';
+  }
+  if (f.type === 'select') {
+    const options = (f.options ?? []).map((o) => o.trim()).filter(Boolean);
+    if (!options.length) return 'A select field needs at least one option';
+    if (new Set(options.map((o) => o.toLowerCase())).size !== options.length) return 'Remove the duplicate options';
+  }
+  return null;
+}
+
 const ACTION_BTN =
   'inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:border-gray-300 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 disabled:opacity-50';
 const DANGER_BTN =
@@ -717,6 +737,8 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           <p className="mb-3 text-xs text-gray-500">
             What the asset form asks for assets of this category — e.g. a printer’s
             “Connection” with USB / Network options. Leave it empty and only the common fields are used.
+            Removing a field here stops the form asking for it; values already recorded stay on the asset
+            until that asset is saved again.
           </p>
           <div className="space-y-2">
             {specEdit.fields.length === 0 && (
@@ -724,8 +746,10 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                 No specification fields yet.
               </p>
             )}
-            {specEdit.fields.map((f, i) => (
-              <div key={i} className="space-y-2 rounded-lg border border-gray-100 bg-gray-50/60 p-2">
+            {specEdit.fields.map((f, i) => {
+              const issue = specFieldIssue(f, specEdit.fields);
+              return (
+              <div key={i} className={`space-y-2 rounded-lg border p-2 ${issue ? 'border-red-200 bg-red-50/40' : 'border-gray-100 bg-gray-50/60'}`}>
                 <div className="flex flex-wrap items-end gap-2">
                   <div className="min-w-0 flex-1">
                     <label className="mb-1 block text-[11px] font-medium text-gray-500">Label</label>
@@ -766,8 +790,10 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                     />
                   </div>
                 )}
+                {issue && <p className="text-xs font-medium text-red-600">{issue}</p>}
               </div>
-            ))}
+              );
+            })}
           </div>
           <div className="mt-3">
             <button
@@ -788,7 +814,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             </button>
             <button
               type="button"
-              disabled={specBusy || specEdit.fields.some((f) => !f.label.trim())}
+              disabled={specBusy || specEdit.fields.some((f) => specFieldIssue(f, specEdit.fields) !== null)}
               onClick={() => void saveSpecs()}
               className="rounded-lg bg-gold px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gold-light disabled:opacity-50"
             >

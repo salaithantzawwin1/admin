@@ -27,6 +27,28 @@ interface AssetRow {
   photo?: { mimeType?: string | null; size?: number | null; updatedAt?: string | null } | null;
 }
 
+/**
+ * The answers the given field list still asks for.
+ *
+ * A field removed in Asset Setup (or a select option that changed) must not ride
+ * along as a stale value: the API rejects a select value it does not offer and
+ * silently drops keys the category no longer defines, so the form starts from
+ * what is actually answerable.
+ */
+export const pruneSpecs = (
+  fields: SpecField[] | null | undefined,
+  values: Record<string, string> | null | undefined,
+): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const f of fields ?? []) {
+    const v = values?.[f.key];
+    if (typeof v !== 'string' || !v.trim()) continue;
+    if (f.type === 'select' && !(f.options ?? []).some((o) => o.toLowerCase() === v.trim().toLowerCase())) continue;
+    out[f.key] = v;
+  }
+  return out;
+};
+
 /** A specification field a category asks for (a printer's Connection: USB /
  *  Network). Defined per category in the Asset Setup tab. */
 interface SpecField {
@@ -756,7 +778,7 @@ export default function Assets() {
                       locationId: a.location?.id ?? '', status: a.status,
                       purchaseDate: a.purchaseDate ? a.purchaseDate.slice(0, 10) : '',
                       purchaseCost: a.purchaseCost ?? '', description: a.description ?? '',
-                      specs: { ...(a.specs ?? {}) },
+                      specs: pruneSpecs(a.category?.specFields, a.specs),
                     })}><IconEdit /></IconButton>
                     <IconButton label="Delete asset" danger onClick={() => setToDelete(a)}><IconTrash /></IconButton>
                   </>
@@ -809,7 +831,18 @@ export default function Assets() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Category</label>
-              <Select value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}>
+              <Select
+                value={form.categoryId}
+                onChange={(e) => {
+                  const nextId = e.target.value;
+                  // carry over only the answers the newly picked category asks for
+                  setForm({
+                    ...form,
+                    categoryId: nextId,
+                    specs: pruneSpecs(categories.find((c) => c.id === nextId)?.specFields, form.specs),
+                  });
+                }}
+              >
                 <option value="">— none —</option>
                 {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Select>
@@ -1016,7 +1049,7 @@ export default function Assets() {
                 {detail.category.specFields.map((f) => (
                   <div key={f.key}>
                     <span className="text-gray-400 text-xs block">{f.label}</span>
-                    {detail.specs?.[f.key] ?? <span className="text-gray-300">—</span>}
+                    {detail.specs?.[f.key] || <span className="text-gray-300">—</span>}
                   </div>
                 ))}
               </div>
