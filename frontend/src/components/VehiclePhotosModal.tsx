@@ -140,7 +140,12 @@ export function VehiclePhotosModal({
   const [photos, setPhotos] = useState<VehiclePhotoMeta[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busyKind, setBusyKind] = useState<VehiclePhotoKind | null>(null);
-  const [preview, setPreview] = useState<number | null>(null); // index into `photos`
+  // The lightbox is scoped to ONE section: viewing a vehicle photo only steps
+  // through vehicle photos — registration pictures are opened from their own
+  // gallery (close this one first), so a mixed stream never surprises anyone.
+  const [preview, setPreview] = useState<{ kind: VehiclePhotoKind; index: number } | null>(null);
+  const previewItems = preview ? photos.filter((p) => p.kind === preview.kind) : [];
+  const current = preview ? previewItems[preview.index] : undefined;
   const inputRefs = useRef<Partial<Record<VehiclePhotoKind, HTMLInputElement | null>>>({});
 
   const reload = useCallback(async () => {
@@ -191,14 +196,35 @@ export function VehiclePhotosModal({
   };
 
   const openPreview = (photo: VehiclePhotoMeta) => {
-    const i = photos.findIndex((p) => p.id === photo.id);
-    if (i >= 0) setPreview(i);
+    const list = photos.filter((p) => p.kind === photo.kind);
+    const i = list.findIndex((p) => p.id === photo.id);
+    if (i >= 0) setPreview({ kind: photo.kind, index: i });
   };
   const previewUrl = useVehiclePhotoBlob(
-    preview !== null ? vehicle.id : undefined,
-    preview !== null ? photos[preview]?.id : undefined,
-    preview !== null ? photos[preview]?.updatedAt ?? null : null,
+    preview ? vehicle.id : undefined,
+    current?.id,
+    current?.updatedAt ?? null,
   );
+
+  // ←/→ step inside the open section; Esc closes the picture, not the dialog
+  useEffect(() => {
+    if (!preview) return;
+    const max = previewItems.length - 1;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation();
+        setPreview(null);
+      } else if (e.key === 'ArrowLeft') {
+        e.stopImmediatePropagation();
+        setPreview((p) => (p ? { ...p, index: Math.max(0, p.index - 1) } : p));
+      } else if (e.key === 'ArrowRight') {
+        e.stopImmediatePropagation();
+        setPreview((p) => (p ? { ...p, index: Math.min(max, p.index + 1) } : p));
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [preview, previewItems.length]);
 
   return (
     <Modal title={`Photos — ${vehicle.vehicleNo} ${vehicle.brandModel}`} onClose={onClose} error={error} wide>
@@ -270,46 +296,56 @@ export function VehiclePhotosModal({
         to {VEHICLE_PHOTO_MAX_PER_KIND} pictures per section.
       </p>
 
-      {preview !== null && photos[preview] && (
+      {preview && current && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4"
           onMouseDown={() => setPreview(null)}
         >
           <div className="w-full max-w-4xl" onMouseDown={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-1 pb-2 text-xs text-white/80">
-              <span>
-                {SECTIONS.find((s) => s.kind === photos[preview].kind)?.label} · {preview + 1} / {photos.length}
+            <div className="flex items-center justify-between gap-3 px-1 pb-2 text-xs text-white/80">
+              <span className="truncate">
+                {SECTIONS.find((s) => s.kind === preview.kind)?.icon}{' '}
+                {SECTIONS.find((s) => s.kind === preview.kind)?.label}
+                {previewItems.length > 1 && <> · {preview.index + 1} / {previewItems.length}</>}
+                <span className="ml-2 text-white/50">(this section only)</span>
               </span>
               <button className="text-white/80 hover:text-white text-lg leading-none" onClick={() => setPreview(null)} aria-label="Close preview">
                 ×
               </button>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                className="h-9 w-9 shrink-0 rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-30"
-                onClick={() => setPreview((i) => (i === null ? null : Math.max(0, i - 1)))}
-                disabled={preview === 0}
-                aria-label="Previous photo"
-              >
-                ‹
-              </button>
+              {previewItems.length > 1 && (
+                <button
+                  type="button"
+                  className="h-9 w-9 shrink-0 rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-30"
+                  onClick={() => setPreview((p) => (p ? { ...p, index: Math.max(0, p.index - 1) } : p))}
+                  disabled={preview.index === 0}
+                  aria-label="Previous photo in this section"
+                >
+                  ‹
+                </button>
+              )}
               <div className="flex-1 rounded-lg bg-white p-2">
                 {previewUrl ? (
-                  <img src={previewUrl} alt="Vehicle photo" className="mx-auto max-h-[75vh] w-auto rounded" />
+                  <img src={previewUrl} alt={SECTIONS.find((s) => s.kind === preview.kind)?.label} className="mx-auto max-h-[75vh] w-auto rounded" />
                 ) : (
                   <Empty label="Loading photo…" />
                 )}
               </div>
-              <button
-                type="button"
-                className="h-9 w-9 shrink-0 rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-30"
-                onClick={() => setPreview((i) => (i === null ? null : Math.min(photos.length - 1, i + 1)))}
-                disabled={preview >= photos.length - 1}
-                aria-label="Next photo"
-              >
-                ›
-              </button>
+              {previewItems.length > 1 && (
+                <button
+                  type="button"
+                  className="h-9 w-9 shrink-0 rounded-full bg-white/10 text-white hover:bg-white/20 disabled:opacity-30"
+                  onClick={() => setPreview((p) => (p ? { ...p, index: Math.min(previewItems.length - 1, p.index + 1) } : p))}
+                  disabled={preview.index >= previewItems.length - 1}
+                  aria-label="Next photo in this section"
+                >
+                  ›
+                </button>
+              )}
+            </div>
+            <div className="pt-2 text-center text-[11px] text-white/50">
+              Close this view to open another section’s gallery (Esc / ×)
             </div>
           </div>
         </div>
