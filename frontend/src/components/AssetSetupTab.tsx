@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
-import { Button, Card, Empty, Input, Select, Table } from './ui';
+import { Empty, Input, Select, Table } from './ui';
 import { Modal } from './Modal';
 import { ConfirmDialog } from './ConfirmDialog';
 import { toast } from './Toast';
@@ -18,8 +18,12 @@ import { categorySegment } from '../util/assetCode';
  * without a reload. All three lists load together so the sub-tab counts stay
  * true while you work in one of them.
  *
- * UI/UX decisions (kept deliberately small):
+ * UI/UX decisions:
  *  - active sub-tab lives in the URL → refresh / back / shared links keep it
+ *  - creating an entry happens in a modal: the list stays the page's subject
+ *    and the form gets room for the hint + the live asset-code preview
+ *  - "Add & new" keeps the batch workflow the old inline field had (one Enter
+ *    per row) without leaving a form permanently parked on the page
  *  - rows sorted A→Z and searchable, because these lists only ever grow
  *  - a duplicate name is caught locally before the round-trip (409 still wins
  *    as the source of truth when two admins race)
@@ -52,8 +56,12 @@ interface Section {
   label: string;
   /** heading plural — "Category" + "s" would read CATEGORYS */
   plural: string;
+  /** short glyph for the sub-tab — no icon font in this app */
+  icon: string;
   hint: string;
   placeholder: string;
+  /** one line under the create form explaining what the name unlocks */
+  createNote: string;
   empty: string;
   /** shown in the rename dialog — what a rename does and does not touch */
   renameNote: string;
@@ -65,9 +73,11 @@ const SECTIONS: Section[] = [
     param: 'category',
     label: 'Category',
     plural: 'Categories',
+    icon: '🏷',
     hint: 'Drives the register filter and the auto asset code — "IT Equipment" becomes AST-ITE-2610-0001.',
     placeholder: 'e.g. Office Equipment',
-    empty: 'No categories yet — add the first one above.',
+    createNote: 'Assets pick this category in their form; its name also seeds the auto asset code.',
+    empty: 'No categories yet',
     renameNote: 'Assets already registered keep their current code; the new name seeds codes from now on.',
   },
   {
@@ -75,9 +85,11 @@ const SECTIONS: Section[] = [
     param: 'location',
     label: 'Location',
     plural: 'Locations',
+    icon: '⌖',
     hint: 'Where assets are kept. Used by the register filter, the asset form and every transfer.',
     placeholder: 'e.g. Head Office — Yangon',
-    empty: 'No locations yet — add the first one above.',
+    createNote: 'Offered by the asset form, every transfer and the register’s location filter.',
+    empty: 'No locations yet',
     renameNote: 'Assets, transfers and receipts keep pointing at it — only the label changes.',
   },
   {
@@ -85,9 +97,11 @@ const SECTIONS: Section[] = [
     param: 'custodian',
     label: 'Custodian',
     plural: 'Custodians',
+    icon: '☺',
     hint: 'People / departments taking custody — offered by the asset form and the transfer dialog.',
     placeholder: 'e.g. U Aung — Finance',
-    empty: 'No custodians yet — add the first one above.',
+    createNote: 'Offered when assigning custody in the asset form and the transfer dialog.',
+    empty: 'No custodians yet',
     renameNote: 'Assets already showing this custodian keep it; new picks use the new name.',
   },
 ];
@@ -98,6 +112,22 @@ const errText = (e: unknown, fallback: string) => (e instanceof Error ? e.messag
 /** The code segment a category mints (Printer / Copier -> PRI) — shared with
  *  the register page and mirroring assets.service.ts. */
 const codeSeg = categorySegment;
+
+/** Deterministic tint per name, so a row is recognisable at a glance without
+ *  inventing an arbitrary colour mapping to maintain. */
+const TONES = [
+  'bg-amber-100 text-amber-700',
+  'bg-sky-100 text-sky-700',
+  'bg-emerald-100 text-emerald-700',
+  'bg-violet-100 text-violet-700',
+  'bg-rose-100 text-rose-700',
+];
+const toneOf = (name: string) => TONES[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % TONES.length];
+
+const ACTION_BTN =
+  'inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:border-gray-300 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 disabled:opacity-50';
+const DANGER_BTN =
+  'inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 disabled:opacity-50';
 
 export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
   const canManage = hasPermission('assets.manage');
@@ -119,13 +149,15 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
   });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<SetupKind | null>(null);
-  const [drafts, setDrafts] = useState<Record<SetupKind, string>>({
-    categories: '', locations: '', custodians: '',
-  });
+  const [error, setError] = useState<string | null>(null);
   // search box — scoped to the active sub-tab, cleared when switching so a
   // forgotten filter never looks like missing data on the next list
   const [q, setQ] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  // create dialog
+  const [creating, setCreating] = useState<SetupKind | null>(null);
+  const [newName, setNewName] = useState('');
+  const [createError, setCreateError] = useState<string | null>(null);
+
   const [editing, setEditing] = useState<{ kind: SetupKind; row: SetupRow } | null>(null);
   const [editName, setEditName] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
@@ -165,26 +197,41 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
     return [...list].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }, [rows, active, q]);
 
-  const add = async () => {
-    const name = drafts[active].trim();
-    if (!name || busy) return;
-    setError(null);
+  const openCreate = (kind: SetupKind) => {
+    setCreating(kind);
+    setNewName('');
+    setCreateError(null);
+  };
+
+  /** `again` = keep the dialog open for the next entry (batch entry). */
+  const create = async (again: boolean) => {
+    const kind = creating;
+    if (!kind) return;
+    const name = newName.trim();
+    if (!name) return;
+    const sec = sectionOf(kind);
+    setCreateError(null);
     // instant feedback for the common typo-duplicate; the API 409 still wins
-    if (rows[active].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
-      setError(`${section.label} "${name}" already exists in this list.`);
+    if (rows[kind].some((r) => r.name.toLowerCase() === name.toLowerCase())) {
+      setCreateError(`${sec.label} “${name}” already exists in this list.`);
       return;
     }
-    setBusy(active);
+    setBusy(kind);
     try {
-      await api(`/assets/${active}`, { method: 'POST', body: { name } });
-      setDrafts((d) => ({ ...d, [active]: '' }));
+      await api(`/assets/${kind}`, { method: 'POST', body: { name } });
       await load();
       onChanged?.();
-      toast(`${section.label} "${name}" added`);
-      // focus stays in the field — adding a batch is one Enter per row
+      toast(`${sec.label} “${name}” added`);
+      if (again) {
+        setNewName('');
+        // focus the fresh empty field so the next name can be typed straight away
+        requestAnimationFrame(() => document.getElementById('asset-setup-new')?.focus());
+      } else {
+        setCreating(null);
+      }
     } catch (e) {
       // duplicate name → 409; the typed value survives so it can be edited
-      setError(errText(e, 'Failed to add entry'));
+      setCreateError(errText(e, 'Failed to add entry'));
     } finally {
       setBusy(null);
     }
@@ -201,7 +248,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
       setEditing(null);
       await load();
       onChanged?.();
-      toast(`${sectionOf(editing.kind).label} renamed to "${name}"`);
+      toast(`${sectionOf(editing.kind).label} renamed to “${name}”`);
     } catch (e) {
       // keep the dialog open — a 409 must never look like a silent no-op save
       setEditError(errText(e, 'Failed to save'));
@@ -231,7 +278,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
       setSpecEdit(null);
       await load();
       onChanged?.();
-      toast(`Specification fields saved for "${specEdit.row.name}"`);
+      toast(`Specification fields saved for “${specEdit.row.name}”`);
     } catch (e) {
       setSpecError(errText(e, 'Failed to save specification fields'));
     } finally {
@@ -252,15 +299,27 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
     requestAnimationFrame(() => document.getElementById(`asset-setup-tab-${next.param}`)?.focus());
   };
 
+  const createSection = creating ? sectionOf(creating) : null;
+  const createSeg = createSection && creating === 'categories' ? codeSeg(newName) : '';
+
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-4">
-        Dropdown data behind the register’s filters and forms — add a name once here and it is offered
-        everywhere. Entries still in use cannot be deleted; reassign them first.
-      </p>
+      {/* what this tab is for — one quiet strip instead of a paragraph block */}
+      <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-100 bg-amber-50/60 px-4 py-3">
+        <span aria-hidden className="mt-px text-amber-500">ⓘ</span>
+        <p className="text-xs leading-relaxed text-gray-600">
+          Master lists shared by the register, its filters and the asset form — add a name once here and it is
+          offered everywhere. Entries still in use cannot be deleted; reassign them first.
+        </p>
+      </div>
 
-      {/* sub-tabs — pill style matches Inventory's management sub-tabs */}
-      <div className="flex flex-wrap gap-2 mb-4" role="tablist" aria-label="Asset setup lists" onKeyDown={onTabKey}>
+      {/* sub-tabs — segmented control so the counts read as one set of lists */}
+      <div
+        role="tablist"
+        aria-label="Asset setup lists"
+        onKeyDown={onTabKey}
+        className="mb-4 inline-flex max-w-full flex-wrap gap-1 rounded-xl bg-gray-100/90 p-1"
+      >
         {SECTIONS.map((s) => {
           const on = s.kind === active;
           return (
@@ -270,17 +329,19 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
               role="tab"
               aria-selected={on}
               aria-controls="asset-setup-panel"
-              className={`inline-flex items-center gap-2 px-3.5 py-1.5 text-sm rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 focus-visible:ring-offset-1 ${
+              tabIndex={on ? 0 : -1}
+              className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70 ${
                 on
-                  ? 'bg-yellow-600 border-yellow-600 text-white shadow-sm'
-                  : 'bg-white border-gray-200 text-gray-600 hover:border-yellow-400 hover:text-yellow-800'
+                  ? 'bg-white font-semibold text-gray-900 shadow-sm'
+                  : 'font-medium text-gray-500 hover:bg-white/60 hover:text-gray-800'
               }`}
               onClick={() => setActive(s.kind)}
             >
+              <span aria-hidden className={on ? 'text-yellow-700' : 'text-gray-400'}>{s.icon}</span>
               {s.label}
               <span
-                className={`min-w-[1.5rem] text-center text-xs font-semibold px-1.5 py-px rounded-full ${
-                  on ? 'bg-white/25 text-white' : 'bg-gray-100 text-gray-500'
+                className={`min-w-[1.35rem] rounded-full px-1.5 text-center text-[11px] font-semibold tabular-nums ${
+                  on ? 'bg-gold/25 text-yellow-900' : 'bg-white/80 text-gray-500'
                 }`}
               >
                 {loading ? '…' : rows[s.kind].length}
@@ -292,85 +353,52 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
 
       <div id="asset-setup-panel" role="tabpanel" aria-labelledby={`asset-setup-tab-${section.param}`}>
         {error && (
-          <div role="alert" className="mb-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-            {error}
+          <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <span aria-hidden>⚠</span>
+            <span>{error}</span>
           </div>
         )}
 
-        <Card className="p-5 mb-3">
-          <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
-            <div className="min-w-0">
-              <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">{section.plural}</h2>
-              <p className="text-xs text-gray-400 mt-1 max-w-2xl">{section.hint}</p>
+        {/* toolbar: what this list is, how to search it, and one clear action */}
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+              {section.plural}
+              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-gray-500">
+                {loading ? '…' : rows[active].length}
+              </span>
+            </h2>
+            <p className="mt-0.5 max-w-2xl text-xs text-gray-400">{section.hint}</p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+            <div className="relative min-w-0 flex-1 sm:flex-none">
+              <span aria-hidden className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-gray-400">⌕</span>
+              <Input
+                id="asset-setup-search"
+                aria-label={`Search ${section.plural.toLowerCase()}`}
+                placeholder={`Search ${section.plural.toLowerCase()}…`}
+                className="!h-9 !w-full !pl-8 sm:!w-56"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                disabled={loading}
+              />
             </div>
             {canManage && (
-              <form
-                className="flex flex-wrap items-end gap-2 w-full lg:w-auto"
-                onSubmit={(e) => { e.preventDefault(); void add(); }}
-              >
-                {/* flex-1 + w-full: on a phone the field takes the row and the
-                    Add button sits beside it instead of pushing off-screen */}
-                <div className="flex-1 min-w-0 lg:flex-none">
-                  <label htmlFor="asset-setup-new" className="block text-xs font-medium text-gray-500 mb-1">
-                    New {section.label.toLowerCase()}
-                  </label>
-                  <Input
-                    id="asset-setup-new"
-                    className="!w-full sm:!w-64"
-                    placeholder={section.placeholder}
-                    value={drafts[active]}
-                    onChange={(e) => setDrafts((d) => ({ ...d, [active]: e.target.value }))}
-                    disabled={busy !== null}
-                    autoComplete="off"
-                  />
-                  {/* live preview of the code segment this name will mint */}
-                  {active === 'categories' && drafts.categories.trim() !== '' && (
-                    <p className="text-xs text-gray-400 mt-1">
-                      new assets get codes like{' '}
-                      <span className="font-mono text-gray-500">
-                        AST-{codeSeg(drafts.categories) || ''}{codeSeg(drafts.categories) ? '-' : ''}2610-0001
-                      </span>
-                    </p>
-                  )}
-                </div>
-                <Button type="submit" disabled={!drafts[active].trim() || busy !== null}>
-                  {busy === active ? 'Saving…' : '+ Add'}
-                </Button>
-              </form>
-            )}
-          </div>
-        </Card>
-
-        {/* toolbar: filter on the left, honest "showing x of y" on the right */}
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <div className="relative">
-            <Input
-              id="asset-setup-search"
-              aria-label={`Search ${section.plural.toLowerCase()}`}
-              placeholder={`Search ${section.plural.toLowerCase()}…`}
-              className="!w-full sm:!w-64"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              disabled={loading}
-            />
-            {q && (
               <button
                 type="button"
-                aria-label="Clear search"
-                onClick={() => setQ('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm leading-none px-1"
+                onClick={() => openCreate(active)}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-gold px-3.5 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:bg-gold-light focus:outline-none focus-visible:ring-2 focus-visible:ring-gold/70"
               >
-                ✕
+                <span aria-hidden className="text-base leading-none">+</span>
+                New {section.label.toLowerCase()}
               </button>
             )}
           </div>
-          <p className="text-xs text-gray-400 tabular-nums sm:ml-auto">
-            {loading ? 'Loading…' : `${visible.length} of ${rows[active].length} ${section.plural.toLowerCase()}`}
-          </p>
         </div>
 
         {/* !min-w-0 opts this short 3-column table out of the global mobile
-            min-width:640px rule, so Rename/Delete stay on screen instead of
+            min-width:640px rule, so the actions stay on screen instead of
             hiding behind a sideways scroll */}
         <Table
           head={active === 'categories' ? ['NAME', 'SPEC FIELDS', 'USED BY', 'ACTIONS'] : ['NAME', 'USED BY', 'ACTIONS']}
@@ -379,40 +407,92 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           {loading ? (
             <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label="Loading…" /></td></tr>
           ) : rows[active].length === 0 ? (
-            <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label={canManage ? section.empty : `No ${section.label.toLowerCase()} entries yet`} /></td></tr>
+            <tr>
+              <td colSpan={active === 'categories' ? 4 : 3}>
+                <div className="py-12 text-center">
+                  <div aria-hidden className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-gray-50 text-lg text-gray-300">
+                    {section.icon}
+                  </div>
+                  <p className="mt-2.5 text-sm font-medium text-gray-600">{section.empty}</p>
+                  <p className="mt-0.5 text-xs text-gray-400">
+                    {canManage
+                      ? `Use “New ${section.label.toLowerCase()}” to add the first entry — it appears in the register straight away.`
+                      : `Nothing here yet.`}
+                  </p>
+                </div>
+              </td>
+            </tr>
           ) : visible.length === 0 ? (
-            <tr><td colSpan={active === 'categories' ? 4 : 3}><Empty label={`No ${section.label.toLowerCase()} matches “${q.trim()}”`} /></td></tr>
+            <tr>
+              <td colSpan={active === 'categories' ? 4 : 3}>
+                <div className="py-10 text-center">
+                  <p className="text-sm text-gray-500">No {section.label.toLowerCase()} matches “{q.trim()}”</p>
+                  <button
+                    type="button"
+                    onClick={() => setQ('')}
+                    className="mt-1.5 text-xs font-medium text-yellow-800 underline-offset-2 hover:underline"
+                  >
+                    Clear search
+                  </button>
+                </div>
+              </td>
+            </tr>
           ) : visible.map((row) => (
-            <tr key={row.id} className="hover:bg-gray-50/60">
-              <td className="px-3 sm:px-4 py-2.5 font-medium text-gray-900 break-words">
-                {row.name}
-                {active === 'categories' && (
-                  <span className="block text-[11px] font-mono text-gray-400 mt-0.5">
-                    AST-{codeSeg(row.name)}{codeSeg(row.name) ? '-' : ''}…
+            <tr key={row.id} className="hover:bg-gray-50/70">
+              <td className="px-3 py-2.5 sm:px-4">
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span
+                    aria-hidden
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-bold ${toneOf(row.name)}`}
+                  >
+                    {row.name.trim().charAt(0).toUpperCase()}
                   </span>
-                )}
+                  <div className="min-w-0">
+                    <div className="break-words font-medium text-gray-900">{row.name}</div>
+                    {active === 'categories' && (
+                      <div className="mt-0.5 font-mono text-[11px] text-gray-400">
+                        AST-{codeSeg(row.name)}{codeSeg(row.name) ? '-' : ''}…
+                      </div>
+                    )}
+                  </div>
+                </div>
               </td>
               {active === 'categories' && (
-                <td className="px-3 sm:px-4 py-2.5 text-center tabular-nums text-gray-500 whitespace-nowrap">
+                <td className="px-3 py-2.5 text-center sm:px-4">
                   {row.specFields?.length ? (
-                    <span title={row.specFields.map((f) => f.label).join(', ')}>{row.specFields.length}</span>
+                    <span
+                      title={row.specFields.map((f) => f.label).join(', ')}
+                      className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium tabular-nums text-sky-700 ring-1 ring-inset ring-sky-200"
+                    >
+                      {row.specFields.length} field{row.specFields.length === 1 ? '' : 's'}
+                    </span>
                   ) : (
-                    <span className="text-gray-300">—</span>
+                    <span className="text-xs text-gray-300">—</span>
                   )}
                 </td>
               )}
-              <td className="px-3 sm:px-4 py-2.5 text-right tabular-nums text-gray-500 whitespace-nowrap" title={row.usage ? `Used by ${row.usage} record(s)` : 'Not used by anything yet'}>
-                {row.usage ? row.usage : <span className="text-gray-300">—</span>}
+              <td className="px-3 py-2.5 text-right sm:px-4">
+                {row.usage ? (
+                  <span
+                    title={`Referenced by ${row.usage} record(s) — cannot be deleted until they are reassigned`}
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium tabular-nums text-amber-700 ring-1 ring-inset ring-amber-200"
+                  >
+                    {row.usage} in use
+                  </span>
+                ) : (
+                  <span className="text-xs text-gray-400">unused</span>
+                )}
               </td>
-              {/* ACTIONS stacks vertically below sm so the buttons stay reachable
-                  without scrolling the table sideways on a phone */}
-              <td className="px-3 sm:px-4 py-2.5 text-center">
-                <div className="flex flex-col sm:flex-row flex-wrap justify-center gap-1.5">
+              {/* actions wrap below sm so the buttons stay reachable without
+                  scrolling the table sideways on a phone */}
+              <td className="px-3 py-2.5 sm:px-4">
+                <div className="flex flex-wrap items-center justify-center gap-1.5">
                   {canManage ? (
                     <>
                       {active === 'categories' && (
-                        <Button
-                          variant="ghost"
+                        <button
+                          type="button"
+                          className={ACTION_BTN}
                           title="Which specification fields do assets of this category ask for?"
                           onClick={() => {
                             setSpecEdit({ row, fields: (row.specFields ?? []).map((f) => ({ ...f, options: [...(f.options ?? [])] })) });
@@ -420,31 +500,105 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                           }}
                         >
                           Spec fields
-                        </Button>
+                        </button>
                       )}
-                      <Button
-                        variant="ghost"
+                      <button
+                        type="button"
+                        className={ACTION_BTN}
                         onClick={() => { setEditing({ kind: active, row }); setEditName(row.name); setEditError(null); }}
                       >
                         Rename
-                      </Button>
-                      <Button
-                        variant="danger"
+                      </button>
+                      <button
+                        type="button"
+                        className={DANGER_BTN}
                         title={row.usage ? `Used by ${row.usage} record(s) — reassign them first` : undefined}
                         onClick={() => setDeleting({ kind: active, row })}
                       >
                         Delete
-                      </Button>
+                      </button>
                     </>
                   ) : (
-                    <span className="text-gray-400">—</span>
+                    <span className="text-xs text-gray-300">—</span>
                   )}
                 </div>
               </td>
             </tr>
           ))}
         </Table>
+
+        {!loading && rows[active].length > 0 && (
+          <p className="mt-2 text-right text-[11px] tabular-nums text-gray-400">
+            showing {visible.length} of {rows[active].length} {section.plural.toLowerCase()}
+          </p>
+        )}
       </div>
+
+      {/* create — the one place a new entry is typed */}
+      {createSection && (
+        <Modal
+          title={`New ${createSection.label.toLowerCase()}`}
+          onClose={() => setCreating(null)}
+          error={createError}
+        >
+          <form
+            onSubmit={(e) => { e.preventDefault(); void create(false); }}
+          >
+            <label htmlFor="asset-setup-new" className="mb-1 block text-xs font-medium text-gray-500">
+              {createSection.label} name *
+            </label>
+            <Input
+              id="asset-setup-new"
+              autoFocus
+              autoComplete="off"
+              className="!w-full"
+              placeholder={createSection.placeholder}
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              disabled={busy !== null}
+            />
+
+            {creating === 'categories' && (
+              <div className="mt-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+                New assets get codes like{' '}
+                <span className="font-mono text-gray-700">
+                  AST-{createSeg || 'XXX'}-2610-0001
+                </span>
+              </div>
+            )}
+
+            <p className="mt-2.5 text-xs text-gray-400">{createSection.createNote}</p>
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCreating(null)}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              {canManage && (
+                <button
+                  type="button"
+                  disabled={!newName.trim() || busy !== null}
+                  onClick={() => void create(true)}
+                  className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                  title="Add this one and keep the dialog open for the next"
+                >
+                  Add &amp; new
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={!newName.trim() || busy !== null}
+                className="rounded-lg bg-gold px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm transition-colors hover:bg-gold-light disabled:opacity-50"
+              >
+                {busy === creating ? 'Saving…' : `Add ${createSection.label.toLowerCase()}`}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {editing && (
         <Modal
@@ -452,7 +606,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           onClose={() => setEditing(null)}
           error={editError ?? undefined}
         >
-          <label htmlFor="asset-setup-rename" className="block text-xs font-medium text-gray-500 mb-1">Name *</label>
+          <label htmlFor="asset-setup-rename" className="mb-1 block text-xs font-medium text-gray-500">Name *</label>
           <Input
             id="asset-setup-rename"
             autoFocus
@@ -460,12 +614,23 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             onChange={(e) => setEditName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void saveEdit(); }}
           />
-          <p className="text-xs text-gray-400 mt-2">{sectionOf(editing.kind).renameNote}</p>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
-            <Button disabled={!editName.trim() || busy !== null} onClick={() => void saveEdit()}>
+          <p className="mt-2 text-xs text-gray-400">{sectionOf(editing.kind).renameNote}</p>
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setEditing(null)}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!editName.trim() || busy !== null}
+              onClick={() => void saveEdit()}
+              className="rounded-lg bg-gold px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gold-light disabled:opacity-50"
+            >
               {busy === editing.kind ? 'Saving…' : 'Save'}
-            </Button>
+            </button>
           </div>
         </Modal>
       )}
@@ -478,21 +643,21 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
           error={specError ?? undefined}
           wide
         >
-          <p className="text-xs text-gray-500 mb-3">
+          <p className="mb-3 text-xs text-gray-500">
             What the asset form asks for assets of this category — e.g. a printer’s
             “Connection” with USB / Network options. Leave it empty and only the common fields are used.
           </p>
           <div className="space-y-2">
             {specEdit.fields.length === 0 && (
-              <p className="text-sm text-gray-400 border border-dashed border-gray-200 rounded-lg px-3 py-4 text-center">
+              <p className="rounded-lg border border-dashed border-gray-200 px-3 py-4 text-center text-sm text-gray-400">
                 No specification fields yet.
               </p>
             )}
             {specEdit.fields.map((f, i) => (
-              <div key={i} className="rounded-lg border border-gray-100 bg-gray-50/60 p-2 space-y-2">
+              <div key={i} className="space-y-2 rounded-lg border border-gray-100 bg-gray-50/60 p-2">
                 <div className="flex flex-wrap items-end gap-2">
-                  <div className="flex-1 min-w-0">
-                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Label</label>
+                  <div className="min-w-0 flex-1">
+                    <label className="mb-1 block text-[11px] font-medium text-gray-500">Label</label>
                     <Input
                       className="!w-full"
                       placeholder="e.g. Connection"
@@ -501,7 +666,7 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                     />
                   </div>
                   <div>
-                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Type</label>
+                    <label className="mb-1 block text-[11px] font-medium text-gray-500">Type</label>
                     <Select
                       value={f.type}
                       onChange={(e) => setSpecField(i, { type: e.target.value as SpecField['type'] })}
@@ -511,13 +676,17 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
                       <option value="select">Select</option>
                     </Select>
                   </div>
-                  <Button variant="ghost" onClick={() => setSpecEdit((s) => (s ? { ...s, fields: s.fields.filter((_, j) => j !== i) } : s))}>
+                  <button
+                    type="button"
+                    className={ACTION_BTN}
+                    onClick={() => setSpecEdit((s) => (s ? { ...s, fields: s.fields.filter((_, j) => j !== i) } : s))}
+                  >
                     Remove
-                  </Button>
+                  </button>
                 </div>
                 {f.type === 'select' && (
                   <div>
-                    <label className="block text-[11px] font-medium text-gray-500 mb-1">Options (comma separated)</label>
+                    <label className="mb-1 block text-[11px] font-medium text-gray-500">Options (comma separated)</label>
                     <Input
                       className="!w-full"
                       placeholder="USB, Network (LAN), Wi-Fi"
@@ -530,21 +699,30 @@ export function AssetSetupTab({ onChanged }: { onChanged?: () => void }) {
             ))}
           </div>
           <div className="mt-3">
-            <Button
-              variant="ghost"
+            <button
+              type="button"
+              className={ACTION_BTN}
               onClick={() => setSpecEdit((s) => (s ? { ...s, fields: [...s.fields, { label: '', type: 'text' }] } : s))}
             >
               + Add field
-            </Button>
+            </button>
           </div>
-          <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={() => setSpecEdit(null)}>Cancel</Button>
-            <Button
+          <div className="mt-4 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setSpecEdit(null)}
+              className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
               disabled={specBusy || specEdit.fields.some((f) => !f.label.trim())}
               onClick={() => void saveSpecs()}
+              className="rounded-lg bg-gold px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gold-light disabled:opacity-50"
             >
               {specBusy ? 'Saving…' : 'Save fields'}
-            </Button>
+            </button>
           </div>
         </Modal>
       )}
