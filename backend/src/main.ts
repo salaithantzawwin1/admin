@@ -7,6 +7,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { LoginThrottleService } from './auth/login-throttle.service';
 import { assertJwtSecret } from './util/jwt-secret';
+import { auditContextMiddleware } from './audit/request-context';
 
 async function bootstrap() {
   // Fail before the port opens rather than sign tokens with a known key.
@@ -35,6 +36,10 @@ async function bootstrap() {
     allowedHeaders: ['Authorization', 'Content-Type', 'Accept'],
     maxAge: 600,
   });
+
+  // Audit entries carry the caller's IP and device: the context has to wrap
+  // every request, and it must come after `trust proxy` is set.
+  app.use(auditContextMiddleware);
 
   // Response headers for every API answer, including streamed files: a
   // browser must never re-interpret a stored file as HTML or script.

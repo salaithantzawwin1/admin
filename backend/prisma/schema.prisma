@@ -269,6 +269,8 @@ model AuditLog {
 
   @@index([module, createdAt])
   @@index([username])
+  @@index([createdAt])
+  @@index([action])
   @@map("audit_logs")
 }
 

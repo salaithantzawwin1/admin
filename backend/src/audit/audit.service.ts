@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.module';
+import { auditContext } from './request-context';
 
 export interface AuditEntry {
   userId?: string;
@@ -23,6 +24,9 @@ export class AuditService {
   /** Append-only: creates an audit record. Never updates or deletes. */
   async log(entry: AuditEntry) {
     try {
+      // Entries written from services have no request object; the context
+      // middleware carries the caller's address so the trail is complete.
+      const meta = auditContext.getStore();
       await this.prisma.auditLog.create({
         data: {
           userId: entry.userId,
@@ -32,8 +36,8 @@ export class AuditService {
           recordId: entry.recordId,
           oldValue: entry.oldValue === undefined ? undefined : (entry.oldValue as object),
           newValue: entry.newValue === undefined ? undefined : (entry.newValue as object),
-          ipAddress: entry.ipAddress,
-          userAgent: entry.userAgent,
+          ipAddress: entry.ipAddress ?? meta?.ip,
+          userAgent: entry.userAgent ?? meta?.userAgent,
           severity: entry.severity || 'INFO',
         },
       });
