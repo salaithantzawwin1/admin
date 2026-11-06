@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { fmtDate } from '../util/yangonTime';
 import { toast } from '../components/Toast';
 
@@ -132,6 +133,7 @@ export default function Invoices() {
   const [createOpen, setCreateOpen] = useState(false);
   const [detail, setDetail] = useState<Invoice | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const PAGE_SIZE = 20;
 
@@ -280,6 +282,23 @@ export default function Invoices() {
         />
       )}
 
+      {detail && confirmDelete && (
+        <ConfirmDialog
+          title={`Delete ${detail.invoiceNumber}?`}
+          description={`Removes the cancelled bill from ${detail.supplier.name} (${money(detail.total)}) and its lines. Payments and asset costs booked from it block the delete. This cannot be undone.`}
+          confirmLabel="Delete invoice"
+          variant="danger"
+          onClose={() => setConfirmDelete(false)}
+          onConfirm={async () => {
+            await api(`/invoices/${detail.id}`, { method: 'DELETE' });
+            toast(`Invoice ${detail.invoiceNumber} deleted`);
+            setConfirmDelete(false);
+            setDetail(null);
+            load();
+          }}
+        />
+      )}
+
       {detail && (
         <Modal onClose={() => setDetail(null)} title={`${detail.invoiceNumber} — ${detail.supplier.name}`} wide xl>
           <div className="space-y-3">
@@ -362,6 +381,13 @@ export default function Invoices() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {canManage && detail.status === 'CANCELLED' && (
+              <div className="flex gap-2 sticky bottom-0 -mx-5 px-5 py-3 bg-white border-t border-gray-100 rounded-b-xl">
+                <Button variant="danger" onClick={() => setConfirmDelete(true)}>Delete invoice</Button>
+                <span className="text-xs text-gray-400 self-center">A cancelled bill can be removed from the register</span>
               </div>
             )}
 

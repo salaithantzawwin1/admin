@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { fmtDate } from '../util/yangonTime';
 import { toast } from '../components/Toast';
 
@@ -360,6 +361,7 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showQuoteForm, setShowQuoteForm] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = useCallback(() => {
     api<RfqRow & { rfq?: { comparison?: RfqDecision | null } }>(`/procurement/rfqs/${rfqId}`).then((d) => {
@@ -417,7 +419,28 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
               Close RFQ
             </Button>
           )}
+          {canManage && status === 'DRAFT' && (
+            <Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>
+              Delete draft
+            </Button>
+          )}
         </div>
+
+        {confirmDelete && (
+          <ConfirmDialog
+            title={`Delete ${doc.docNumber}?`}
+            description={`Removes the RFQ with its ${vendors.length} invited vendor(s) and ${quotes.length} quotation(s). Only a DRAFT can be deleted — an RFQ that entered approval is closed instead. This cannot be undone.`}
+            confirmLabel="Delete draft"
+            variant="danger"
+            onClose={() => setConfirmDelete(false)}
+            onConfirm={async () => {
+              await api(`/procurement/rfqs/${doc.id}`, { method: 'DELETE' });
+              toast('RFQ deleted');
+              setConfirmDelete(false);
+              onClose();
+            }}
+          />
+        )}
 
         {/* vendors §11 */}
         <section>

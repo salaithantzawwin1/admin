@@ -305,10 +305,18 @@ export class MaintenanceService {
     if (!prev) throw new NotFoundException('Schedule not found');
     const doneAt = parseDate(data.doneAt, 'done date') ?? new Date();
     const nextDueAt = addMonths(doneAt as Date, prev.intervalMonths);
-    const row = await this.prisma.maintenanceSchedule.update({
-      where: { id },
+    // Compare-and-set on the due date this caller saw. A second click, a retry or
+    // a stale second tab used to pass the read above as well and produce two
+    // records plus two interval skips; only the first request can move this
+    // schedule off the due date it was read with.
+    const claim = await this.prisma.maintenanceSchedule.updateMany({
+      where: { id, nextDueAt: prev.nextDueAt },
       data: { lastDoneAt: doneAt as Date, nextDueAt },
     });
+    if (claim.count === 0) {
+      throw new ConflictException('This schedule was already marked done — reload to see the new due date');
+    }
+    const row = await this.prisma.maintenanceSchedule.findUnique({ where: { id } });
     // "Mark done" IS a service that happened — without a record the history
     // silently stops matching reality and the visit's cost/downtime is lost.
     const record = await this.prisma.maintenanceRecord.create({
@@ -329,7 +337,7 @@ export class MaintenanceService {
       action: 'MAINTENANCE_SCHEDULE_COMPLETED', module: 'MAINTENANCE', recordId: id,
       oldValue: { nextDueAt: prev.nextDueAt }, newValue: { doneAt, nextDueAt, record: record.code },
     });
-    return { ...row, record };
+    return { ...(row ?? prev), record };
   }
 
   async removeSchedule(id: string, actor: Actor) {

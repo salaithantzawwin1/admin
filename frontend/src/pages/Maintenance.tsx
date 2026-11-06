@@ -238,14 +238,12 @@ export default function Maintenance() {
     }
   };
 
+  // errors propagate to the ConfirmDialog that called this, which keeps itself
+  // open and prints the reason (a page banner would be hidden behind it)
   const markDone = async (row: ScheduleRow) => {
-    try {
-      const r = await api<{ record?: { code: string } }>(`/maintenance/schedules/${row.id}/done`, { method: 'POST', body: { doneAt: today() } });
-      toast(r.record?.code ? `Service recorded (${r.record.code}) — schedule rolled forward` : 'Schedule rolled forward');
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update the schedule');
-    }
+    const r = await api<{ record?: { code: string } }>(`/maintenance/schedules/${row.id}/done`, { method: 'POST', body: { doneAt: today() } });
+    toast(r.record?.code ? `Service recorded (${r.record.code}) — schedule rolled forward` : 'Schedule rolled forward');
+    await load();
   };
 
   const confirmDelete = async () => {
@@ -595,9 +593,11 @@ export default function Maintenance() {
           confirmLabel="Mark done"
           onClose={() => setToDone(null)}
           onConfirm={async () => {
-            const row = toDone;
+            // keep the dialog open while the write runs: it owns the busy state
+            // and shows the server's refusal ("already marked done") if a second
+            // tab completed the schedule first
+            await markDone(toDone);
             setToDone(null);
-            await markDone(row);
           }}
         />
       )}

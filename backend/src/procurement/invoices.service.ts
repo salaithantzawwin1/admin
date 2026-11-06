@@ -380,6 +380,51 @@ export class InvoicesService {
     await this.prisma.assetCost.createMany({ data: rows, skipDuplicates: true });
   }
 
+  /**
+   * Remove a CANCELLED invoice and its lines — the audited cleanup for a bill
+   * recorded by mistake. Cancelling is the gate: money already recorded against
+   * the bill, or asset cost rows booked from it, is history the ledger depends
+   * on, so those invoices stay.
+   */
+  async remove(id: string, actor: Actor) {
+    const inv = await this.prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        supplier: { select: { name: true } },
+        items: { select: { id: true } },
+        payments: { select: { id: true } },
+      },
+    });
+    if (!inv) throw new NotFoundException('Invoice not found');
+    if (inv.status !== 'CANCELLED') {
+      throw new ConflictException(`Invoice ${inv.invoiceNumber} is ${inv.status} — cancel it first, then delete`);
+    }
+    if (inv.payments.length) {
+      throw new ConflictException(`Invoice has ${inv.payments.length} recorded payment(s) — delete them first (Payments page)`);
+    }
+    const itemIds = inv.items.map((i) => i.id);
+    if (itemIds.length) {
+      const costs = await this.prisma.assetCost.count({
+        where: { sourceType: 'INVOICE', sourceId: { in: itemIds } },
+      });
+      if (costs) {
+        throw new ConflictException('Asset cost rows were booked from this invoice — it cannot be deleted');
+      }
+    }
+    await this.prisma.invoice.delete({ where: { id } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'INVOICE_DELETED', module: 'PROCUREMENT', recordId: id,
+      oldValue: {
+        invoiceNumber: inv.invoiceNumber, supplier: inv.supplier.name,
+        supplierInvoiceNumber: inv.supplierInvoiceNumber, total: Number(inv.total),
+        status: inv.status, invoiceDate: inv.invoiceDate,
+      },
+      severity: 'WARNING',
+    });
+    return { success: true, invoiceNumber: inv.invoiceNumber };
+  }
+
   private normalizeItem(it: InvoiceItemInput, idx: number) {
     const description = (it.description ?? '').trim();
     if (!description) throw new BadRequestException(`Line ${idx + 1}: description is required`);

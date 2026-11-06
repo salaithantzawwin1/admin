@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
@@ -114,5 +114,13 @@ export class InvoicesController {
   redraft(@Param('id') id: string, @Req() req: Request) {
     const user = req.user as { id: string; username: string };
     return this.invoices.transition(id, 'redraft', { userId: user.id, username: user.username });
+  }
+
+  /** Audited removal of a CANCELLED invoice — see InvoicesService.remove. */
+  @Delete(':id')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  remove(@Param('id') id: string, @Req() req: Request) {
+    const user = req.user as { id: string; username: string };
+    return this.invoices.remove(id, { userId: user.id, username: user.username });
   }
 }

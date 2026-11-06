@@ -4,6 +4,8 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
 import { normalizePurchaseType } from './purchase-types';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface PrItemInput {
   description: string;
@@ -579,6 +581,64 @@ export class ProcurementService {
       oldValue: { status: request.status }, newValue: { status: 'CLOSED' },
     });
     return updated;
+  }
+
+  /**
+   * Remove a DRAFT RFQ together with its vendors, quotations, comparison and the
+   * workflow document that carries it. A document that entered the approval flow
+   * is a record, not a draft — close it instead — so an RFQ raised by mistake can
+   * be cleaned up without leaving a phantom row in every list.
+   */
+  async deleteRfq(rfqId: string, actor: Actor) {
+    const request = await this.prisma.requestDocument.findUnique({
+      where: { id: rfqId },
+      include: {
+        attachments: { select: { storedName: true } },
+        rfq: {
+          include: {
+            quotations: { select: { quoteNumber: true } },
+            rfqVendors: { select: { supplierId: true } },
+            comparison: { select: { id: true } },
+          },
+        },
+      },
+    });
+    if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
+    if (request.status !== 'DRAFT') {
+      throw new ConflictException(`RFQ ${request.docNumber} is ${request.status} — only a DRAFT can be deleted (close the document instead)`);
+    }
+    const rfq = request.rfq;
+    // children first: the decision row restricts its quotation, so it has to go
+    // before the quotations the rest of the tree cascades from
+    await this.prisma.$transaction([
+      this.prisma.quotationComparison.deleteMany({ where: { rfqId: rfq.id } }),
+      this.prisma.quotation.deleteMany({ where: { rfqId: rfq.id } }),
+      this.prisma.rfqVendor.deleteMany({ where: { rfqId: rfq.id } }),
+      this.prisma.rfq.delete({ where: { id: rfq.id } }),
+      this.prisma.requestDocument.delete({ where: { id: request.id } }),
+    ]);
+    // the rows are gone, so a leftover file would be unreachable
+    const uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
+    for (const a of request.attachments) {
+      try {
+        const file = path.join(uploadRoot, a.storedName);
+        if (fs.existsSync(file)) fs.unlinkSync(file);
+      } catch {
+        // a missing file must not turn a completed delete into an error
+      }
+    }
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'RFQ_DELETED', module: 'PROCUREMENT', recordId: request.id,
+      oldValue: {
+        docNumber: request.docNumber, title: request.title, status: request.status,
+        vendors: rfq.rfqVendors.length,
+        quotations: rfq.quotations.map((q) => q.quoteNumber),
+        hadDecision: !!rfq.comparison,
+      },
+      severity: 'WARNING',
+    });
+    return { success: true, docNumber: request.docNumber };
   }
 
   async closeRfq(rfqId: string, actor: Actor) {
