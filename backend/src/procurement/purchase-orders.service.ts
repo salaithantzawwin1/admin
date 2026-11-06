@@ -56,7 +56,10 @@ const PO_TRANSITIONS: Record<string, string[]> = {
   SENT_TO_VENDOR: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
   // CANCELLED: a part-delivered PO whose remainder the vendor will never ship
   // used to be stuck forever (no legal transition out of PARTIALLY_RECEIVED)
-  PARTIALLY_RECEIVED: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
+  // CLOSED: everything ordered arrived but a unit was rejected and never
+  // replaced — accepted alone can never reach the ordered qty, so without this
+  // the PO stayed PARTIALLY_RECEIVED with no way out.
+  PARTIALLY_RECEIVED: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CLOSED', 'CANCELLED'],
   FULLY_RECEIVED: ['CLOSED'],
   CLOSED: [],
   CANCELLED: [],

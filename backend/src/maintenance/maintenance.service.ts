@@ -127,10 +127,8 @@ export class MaintenanceService {
         costLabor: costs.labor,
         costOther: costs.other,
         downtimeHours: data.downtimeHours ?? undefined,
-        // explicit null / '' clears the date (parseDate returns null); the old
-        // `?? undefined` swallowed that, so the field could never be cleared
-        warrantyEndDate: data.warrantyEndDate !== undefined ? parseDate(data.warrantyEndDate, 'warranty end date') : undefined,
-        nextDueDate: data.nextDueDate !== undefined ? parseDate(data.nextDueDate, 'next due date') : undefined,
+        warrantyEndDate: parseDate(data.warrantyEndDate, 'warranty end date') ?? undefined,
+        nextDueDate: parseDate(data.nextDueDate, 'next due date') ?? undefined,
         note: data.note?.trim() || undefined,
         createdById: actor.userId,
       },
@@ -173,8 +171,10 @@ export class MaintenanceService {
         costLabor: costs.labor,
         costOther: costs.other,
         downtimeHours: data.downtimeHours !== undefined ? data.downtimeHours : undefined,
-        warrantyEndDate: parseDate(data.warrantyEndDate, 'warranty end date') ?? undefined,
-        nextDueDate: parseDate(data.nextDueDate, 'next due date') ?? undefined,
+        // explicit null / '' clears the date (parseDate returns null); the old
+        // `?? undefined` swallowed that, so the field could never be cleared
+        warrantyEndDate: data.warrantyEndDate !== undefined ? parseDate(data.warrantyEndDate, 'warranty end date') : undefined,
+        nextDueDate: data.nextDueDate !== undefined ? parseDate(data.nextDueDate, 'next due date') : undefined,
         note: data.note !== undefined ? (data.note?.trim() || null) : undefined,
       },
     });
