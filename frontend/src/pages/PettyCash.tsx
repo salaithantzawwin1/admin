@@ -27,6 +27,8 @@ export default function PettyCash() {
   const canManage = hasPermission('pettycash.manage');
   const [items, setItems] = useState<Txn[]>([]);
   const [totals, setTotals] = useState<Totals>({ topup: 0, expense: 0, balance: 0 });
+  // unfiltered balance — "cash on hand" must not follow the list filters
+  const [cashBalance, setCashBalance] = useState(0);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -49,6 +51,8 @@ export default function PettyCash() {
       const data = await api<{ items: Txn[]; totals: Totals }>(`/petty-cash?${params.toString()}`);
       setItems(data.items);
       setTotals(data.totals);
+      // only an unfiltered read knows the whole float (mount, or filters cleared)
+      if (!from && !to && !type) setCashBalance(data.totals.balance);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load petty cash');
     } finally {
@@ -66,6 +70,13 @@ export default function PettyCash() {
         // account picker optional — the row still records without one
       }
     })();
+  }, []);
+
+  // keeps "cash on hand" honest after a write even while the list is filtered
+  const refreshCash = useCallback(() => {
+    api<{ totals: Totals }>('/petty-cash')
+      .then((d) => setCashBalance(d.totals.balance))
+      .catch(() => undefined);
   }, []);
 
   const submitForm = async () => {
@@ -87,6 +98,7 @@ export default function PettyCash() {
       toast(`Petty cash ${form.type === 'TOPUP' ? 'top-up' : 'expense'} recorded`);
       setForm(null);
       await load();
+      refreshCash();
     } catch (e) {
       // a rejected entry (bad date, unknown account, server rule) must be visible
       // in the form the user is still looking at
@@ -220,9 +232,9 @@ export default function PettyCash() {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Amount (MMK) *</label>
               <Input type="number" min={0.01} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="e.g. 50000" />
-              {form.type === 'EXPENSE' && Number(form.amount) > totals.balance && (
+              {form.type === 'EXPENSE' && Number(form.amount) > cashBalance && (
                 <p className="text-xs text-orange-600 mt-1">
-                  More than the cash on hand (MMK {totals.balance.toLocaleString()}) — the float would go negative.
+                  More than the cash on hand (MMK {cashBalance.toLocaleString()}) — the float would go negative.
                 </p>
               )}
             </div>
@@ -267,6 +279,7 @@ export default function PettyCash() {
             await api(`/petty-cash/${toDelete.id}`, { method: 'DELETE' });
             setToDelete(null);
             await load();
+            refreshCash();
           }}
         />
       )}
