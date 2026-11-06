@@ -178,22 +178,25 @@ export default function Maintenance() {
   const saveRecord = async () => {
     if (!recordForm) return;
     setError(null);
+    // On an existing record an emptied field must be cleared (null), not
+    // skipped — `undefined` means "leave unchanged" to the API.
+    const blankable = (v: string) => (recordForm.id ? (v.trim() || null) : (v.trim() || undefined));
     const body: Record<string, unknown> = {
       assetId: recordForm.assetId,
       type: recordForm.type,
       status: recordForm.status,
       date: recordForm.date || undefined,
-      problem: recordForm.problem.trim() || undefined,
-      workDone: recordForm.workDone.trim() || undefined,
-      vendorId: recordForm.vendorId || undefined,
-      technician: recordForm.technician.trim() || undefined,
+      problem: blankable(recordForm.problem),
+      workDone: blankable(recordForm.workDone),
+      vendorId: recordForm.id ? (recordForm.vendorId || null) : (recordForm.vendorId || undefined),
+      technician: blankable(recordForm.technician),
       costParts: recordForm.costParts === '' ? 0 : Number(recordForm.costParts),
       costLabor: recordForm.costLabor === '' ? 0 : Number(recordForm.costLabor),
       costOther: recordForm.costOther === '' ? 0 : Number(recordForm.costOther),
       downtimeHours: recordForm.downtimeHours === '' ? undefined : Number(recordForm.downtimeHours),
-      warrantyEndDate: recordForm.warrantyEndDate || undefined,
-      nextDueDate: recordForm.nextDueDate || undefined,
-      note: recordForm.note.trim() || undefined,
+      warrantyEndDate: recordForm.id ? (recordForm.warrantyEndDate || null) : (recordForm.warrantyEndDate || undefined),
+      nextDueDate: recordForm.id ? (recordForm.nextDueDate || null) : (recordForm.nextDueDate || undefined),
+      note: blankable(recordForm.note),
     };
     try {
       if (recordForm.id) await api(`/maintenance/records/${recordForm.id}`, { method: 'PATCH', body });
@@ -230,8 +233,8 @@ export default function Maintenance() {
 
   const markDone = async (row: ScheduleRow) => {
     try {
-      await api(`/maintenance/schedules/${row.id}/done`, { method: 'POST', body: { doneAt: today() } });
-      toast('Schedule rolled forward');
+      const r = await api<{ record?: { code: string } }>(`/maintenance/schedules/${row.id}/done`, { method: 'POST', body: { doneAt: today() } });
+      toast(r.record?.code ? `Service recorded (${r.record.code}) — schedule rolled forward` : 'Schedule rolled forward');
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update the schedule');
@@ -243,10 +246,15 @@ export default function Maintenance() {
     const path = toDelete.kind === 'record'
       ? `/maintenance/records/${toDelete.id}`
       : `/maintenance/schedules/${toDelete.id}`;
-    await api(path, { method: 'DELETE' });
-    setToDelete(null);
-    toast('Deleted');
-    await load();
+    try {
+      await api(path, { method: 'DELETE' });
+      setToDelete(null);
+      toast('Deleted');
+      await load();
+    } catch (e) {
+      setToDelete(null);
+      setError(e instanceof Error ? e.message : 'Could not delete');
+    }
   };
 
   const openRecord = (row?: RecordRow) => {
@@ -355,11 +363,11 @@ export default function Maintenance() {
 
       {tab === 'records' ? (
         <Card>
-          <Table head={['CODE', 'ASSET', 'TYPE', 'DATE', 'VENDOR', 'COST (KS)', 'NEXT DUE', '']}>
+          <Table head={['CODE', 'ASSET', 'TYPE', 'STATUS', 'DATE', 'VENDOR', 'COST (KS)', 'NEXT DUE', '']}>
             {loading ? (
-              <tr><td colSpan={8}><Empty label="Loading…" /></td></tr>
+              <tr><td colSpan={9}><Empty label="Loading…" /></td></tr>
             ) : records.length === 0 ? (
-              <tr><td colSpan={8}><Empty label={canManage ? 'No service records yet — add the first one' : 'No service records yet'} /></td></tr>
+              <tr><td colSpan={9}><Empty label={canManage ? 'No service records yet — add the first one' : 'No service records yet'} /></td></tr>
             ) : records.map((r) => (
               <tr key={r.id} className="hover:bg-gray-50/60">
                 <td className="px-4 py-2.5 font-mono text-xs text-gray-500">{r.code}</td>
@@ -368,6 +376,11 @@ export default function Maintenance() {
                   <div className="text-xs text-gray-400 font-mono">{r.asset?.assetCode ?? ''}</div>
                 </td>
                 <td className="px-4 py-2.5 text-xs">{r.type.replace('_', ' ')}</td>
+                <td className="px-4 py-2.5">
+                  <Badge color={r.status === 'OPEN' ? 'yellow' : r.status === 'IN_PROGRESS' ? 'blue' : r.status === 'CANCELLED' ? 'red' : 'green'}>
+                    {r.status.replace('_', ' ')}
+                  </Badge>
+                </td>
                 <td className="px-4 py-2.5 text-gray-600">{day(r.date)}</td>
                 <td className="px-4 py-2.5 text-gray-600">{r.vendor?.name ?? r.technician ?? '—'}</td>
                 <td className="px-4 py-2.5 text-right tabular-nums">{money(r.costTotal ?? (Number(r.costParts) + Number(r.costLabor) + Number(r.costOther)))}</td>

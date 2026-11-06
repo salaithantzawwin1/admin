@@ -105,8 +105,16 @@ export class AssetsController {
     @Query('categoryId') categoryId?: string,
     @Query('locationId') locationId?: string,
     @Query('status') status?: string,
+    @Query() query: Record<string, string> = {},
   ) {
-    return this.assets.list({ q, categoryId, locationId, status });
+    // sf_<fieldKey>=<answer> — one filter per specification field the category
+    // defines, so "Connection = USB" works from the register filter bar.
+    const specs = Object.fromEntries(
+      Object.entries(query)
+        .filter(([key, value]) => /^sf_[a-z0-9_]{1,40}$/.test(key) && typeof value === 'string' && value.trim() !== '')
+        .map(([key, value]) => [key.slice(3), value]),
+    );
+    return this.assets.list({ q, categoryId, locationId, status, specs });
   }
 
   /** §41 asset register export. */

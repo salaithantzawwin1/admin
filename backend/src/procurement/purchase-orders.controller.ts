@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ArrayMinSize, IsArray, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
@@ -37,6 +37,8 @@ class GrnLineDto {
   @IsInt() @Min(0) acceptedQty!: number;
   @IsOptional() @IsInt() @Min(0) rejectedQty?: number;
   @IsOptional() @IsString() @MaxLength(300) condition?: string;
+  /** Accepted non-stock units are registered as assets unless this is false. */
+  @IsOptional() @IsBoolean() registerAsset?: boolean;
 }
 
 class CreateGrnDto {

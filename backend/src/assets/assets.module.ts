@@ -10,5 +10,7 @@ import { AssetsService } from './assets.service';
   imports: [MulterModule.register({ storage: memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } })],
   controllers: [AssetsController],
   providers: [AssetsService],
+  // receiving (GRN) auto-registers the fixed assets it delivers
+  exports: [AssetsService],
 })
 export class AssetsModule {}

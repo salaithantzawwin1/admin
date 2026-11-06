@@ -4,6 +4,7 @@ import { PurchaseOrdersService } from './purchase-orders.service';
 import { ProcurementModule } from './procurement.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { BudgetModule } from '../budget/budget.module';
+import { AssetsModule } from '../assets/assets.module';
 
 /**
  * Procurement Phase 3 (design §15–20): Purchase Orders + GRN.
@@ -12,7 +13,7 @@ import { BudgetModule } from '../budget/budget.module';
  * runs when a PO line charges an account (the purchasing stage owns Account).
  */
 @Module({
-  imports: [ProcurementModule, InventoryModule, BudgetModule],
+  imports: [ProcurementModule, InventoryModule, BudgetModule, AssetsModule],
   controllers: [PurchaseOrdersController],
   providers: [PurchaseOrdersService],
   exports: [PurchaseOrdersService],

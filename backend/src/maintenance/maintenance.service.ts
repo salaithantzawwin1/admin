@@ -127,8 +127,10 @@ export class MaintenanceService {
         costLabor: costs.labor,
         costOther: costs.other,
         downtimeHours: data.downtimeHours ?? undefined,
-        warrantyEndDate: parseDate(data.warrantyEndDate, 'warranty end date') ?? undefined,
-        nextDueDate: parseDate(data.nextDueDate, 'next due date') ?? undefined,
+        // explicit null / '' clears the date (parseDate returns null); the old
+        // `?? undefined` swallowed that, so the field could never be cleared
+        warrantyEndDate: data.warrantyEndDate !== undefined ? parseDate(data.warrantyEndDate, 'warranty end date') : undefined,
+        nextDueDate: data.nextDueDate !== undefined ? parseDate(data.nextDueDate, 'next due date') : undefined,
         note: data.note?.trim() || undefined,
         createdById: actor.userId,
       },
@@ -206,7 +208,8 @@ export class MaintenanceService {
 
   /** Schedules with the due state the dashboard sorts on. */
   async listSchedules(params: { assetId?: string; dueOnly?: boolean } = {}) {
-    const where: any = { active: true };
+    // a disposed unit cannot fall due: it is not serviced any more
+    const where: any = { active: true, asset: { status: { not: 'DISPOSED' } } };
     if (params.assetId) where.assetId = params.assetId;
     const rows = await this.prisma.maintenanceSchedule.findMany({
       where,
@@ -306,12 +309,27 @@ export class MaintenanceService {
       where: { id },
       data: { lastDoneAt: doneAt as Date, nextDueAt },
     });
+    // "Mark done" IS a service that happened — without a record the history
+    // silently stops matching reality and the visit's cost/downtime is lost.
+    const record = await this.prisma.maintenanceRecord.create({
+      data: {
+        code: await this.numbering.next('MRC', doneAt as Date, 2),
+        assetId: prev.assetId,
+        type: 'PREVENTIVE',
+        status: 'COMPLETED',
+        date: doneAt as Date,
+        workDone: `${prev.title} (preventive schedule)`,
+        nextDueDate: nextDueAt,
+        note: prev.note ?? undefined,
+        createdById: actor.userId,
+      },
+    });
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'MAINTENANCE_SCHEDULE_COMPLETED', module: 'MAINTENANCE', recordId: id,
-      oldValue: { nextDueAt: prev.nextDueAt }, newValue: { doneAt, nextDueAt },
+      oldValue: { nextDueAt: prev.nextDueAt }, newValue: { doneAt, nextDueAt, record: record.code },
     });
-    return row;
+    return { ...row, record };
   }
 
   async removeSchedule(id: string, actor: Actor) {

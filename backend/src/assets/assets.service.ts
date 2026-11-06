@@ -100,7 +100,7 @@ export class AssetsService {
   ) {}
 
   /** Assets register — filters + text search; `category`/`location` included. */
-  async list(filters: { q?: string; categoryId?: string; locationId?: string; status?: string }) {
+  async list(filters: { q?: string; categoryId?: string; locationId?: string; status?: string; specs?: Record<string, string> }) {
     const where: any = {};
     if (filters.categoryId) where.categoryId = filters.categoryId;
     if (filters.locationId) where.locationId = filters.locationId;
@@ -115,6 +115,15 @@ export class AssetsService {
         { serialNumber: { contains: filters.q, mode: 'insensitive' } },
         { custodian: { contains: filters.q, mode: 'insensitive' } },
       ];
+    }
+    // Specification filters ("Connection = USB"): the answers are JSONB, so each
+    // one is an exact page on the field key the category defines. Combined with
+    // q/status through AND, never by overwriting them.
+    const specFilters = Object.entries(filters.specs ?? {})
+      .filter(([, value]) => typeof value === 'string' && value.trim() !== '')
+      .map(([key, value]) => ({ specs: { path: [key], equals: value.trim() } }));
+    if (specFilters.length) {
+      where.AND = [...(where.AND ?? []), ...specFilters];
     }
     const rows = await this.prisma.asset.findMany({
       where,
@@ -748,6 +757,64 @@ export class AssetsService {
       newValue: { assetCode: asset.assetCode, poNumber: item.purchaseOrder.poNumber, poItemId, cost },
     });
     return asset;
+  }
+
+  /**
+   * §39 — receiving registers the asset: one row per accepted unit of a
+   * non-stock PO line, provenance in the description, cost = that line's unit
+   * price, purchase date = the GRN date. Returns what it created so the
+   * receiving screen can name the new codes.
+   */
+  async registerFromGrnLine(data: {
+    poItemId: string;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+    receivedAt: Date;
+    locationId?: string;
+    poNumber: string;
+    grnNumber: string;
+  }, actor: Actor) {
+    const quantity = Math.max(1, Math.floor(Number(data.quantity) || 1));
+    const category = await this.assertRefs(undefined, data.locationId);
+    const unitCost = round2(Math.max(0, Number(data.unitPrice) || 0));
+    const created: { id: string; assetCode: string; name: string }[] = [];
+    for (let i = 0; i < quantity; i++) {
+      const asset = await this.prisma.asset.create({
+        data: {
+          assetCode: await this.nextAutoCode(category?.name),
+          name: (data.name || 'Received asset').trim().slice(0, 160),
+          locationId: data.locationId || undefined,
+          purchaseDate: data.receivedAt,
+          purchaseCost: unitCost,
+          description: `Received on ${data.grnNumber} from ${data.poNumber}${quantity > 1 ? ` (unit ${i + 1}/${quantity})` : ''}`,
+        },
+      });
+      await this.prisma.assetMovement.create({
+        data: {
+          assetId: asset.id,
+          type: 'REGISTER',
+          toLocationId: asset.locationId,
+          note: `Registered on receipt ${data.grnNumber}`,
+          createdById: actor.userId,
+        },
+      });
+      created.push({ id: asset.id, assetCode: asset.assetCode, name: asset.name });
+    }
+    // the PO line keeps a back-reference to the first unit registered from it
+    const item = await this.prisma.purchaseOrderItem.findUnique({
+      where: { id: data.poItemId },
+      select: { assetId: true },
+    });
+    if (!item?.assetId && created[0]) {
+      await this.prisma.purchaseOrderItem.update({ where: { id: data.poItemId }, data: { assetId: created[0].id } });
+    }
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ASSET_REGISTERED_ON_RECEIPT', module: 'ASSETS', recordId: created[0]?.id ?? data.poItemId,
+      newValue: { poNumber: data.poNumber, grnNumber: data.grnNumber, codes: created.map((c) => c.assetCode), unitCost },
+    });
+    return created;
   }
 
   /** §41 asset register CSV — one row per asset incl. acquisition provenance. */

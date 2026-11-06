@@ -35,7 +35,7 @@ interface PoDetail extends PoRow {
   closedAt?: string | null;
   cancelledAt?: string | null;
   note?: string | null;
-  grnRows?: {
+  goodsReceipts?: {
     id: string;
     grnNumber: string;
     receivedAt: string;
@@ -131,8 +131,10 @@ export default function PurchaseOrders() {
 
   const [detail, setDetail] = useState<PoDetail | null>(null);
   const [grnOpen, setGrnOpen] = useState(false);
-  const [grnLines, setGrnLines] = useState<Record<string, { received: string; accepted: string; rejected: string; condition: string }>>({});
+  const [grnLines, setGrnLines] = useState<Record<string, { received: string; accepted: string; rejected: string; condition: string; registerAsset: boolean }>>({});
   const [grnRemarks, setGrnRemarks] = useState('');
+  // received goods land in the asset register at this location
+  const [grnLocationId, setGrnLocationId] = useState('');
   const [busy, setBusy] = useState(false);
 
   // §39 — register a fixed asset from a non-stock PO line
@@ -214,7 +216,8 @@ export default function PurchaseOrders() {
         accountId: l.accountId,
       }));
     if (items.length === 0) { toast('At least one item is required', 'error'); return; }
-    if (items.some((i) => !i.quantity || i.unitPrice < 0)) { toast('Check quantities and prices', 'error'); return; }
+    if (items.some((i) => !Number.isInteger(i.quantity) || i.quantity < 1)) { toast('Quantity must be a whole number (1 or more)', 'error'); return; }
+    if (items.some((i) => i.unitPrice < 0)) { toast('Check the unit prices', 'error'); return; }
     if (items.some((i) => !i.accountId)) { toast('Pick an account for every line — it drives the budget check', 'error'); return; }
     const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
     if (reasonNeeded && !purchaseReason.trim()) { toast(`A reason is required for a ${purchaseType} purchase (§36)`, 'error'); return; }
@@ -268,12 +271,18 @@ export default function PurchaseOrders() {
     }
   };
 
-  const openRegisterAsset = async (it: PoItem) => {
-    setRegAsset({ poItemId: it.id, description: it.description, name: it.description, categoryId: '', locationId: '', serialNumber: '', custodian: '' });
+  const ensureRegisterPickers = () => {
     if (assetCats.length === 0) {
       api<{ id: string; name: string }[]>('/procurement/asset-categories').then(setAssetCats).catch(() => undefined);
+    }
+    if (assetLocs.length === 0) {
       api<{ id: string; name: string }[]>('/procurement/asset-locations').then(setAssetLocs).catch(() => undefined);
     }
+  };
+
+  const openRegisterAsset = async (it: PoItem) => {
+    setRegAsset({ poItemId: it.id, description: it.description, name: it.description, categoryId: '', locationId: '', serialNumber: '', custodian: '' });
+    ensureRegisterPickers();
   };
 
   const submitRegisterAsset = async () => {
@@ -305,10 +314,12 @@ export default function PurchaseOrders() {
   const receivedFor = (it: PoItem) => (it.grnItems ?? []).reduce((s, g) => s + g.acceptedQty, 0);
 
   const grnDefaults = (d: PoDetail) => {
-    const state: Record<string, { received: string; accepted: string; rejected: string; condition: string }> = {};
+    const state: Record<string, { received: string; accepted: string; rejected: string; condition: string; registerAsset: boolean }> = {};
     for (const it of d.items) {
       const remaining = Math.max(0, it.quantity - receivedFor(it));
-      state[it.id] = { received: String(remaining), accepted: String(remaining), rejected: '0', condition: '' };
+      // a non-stock line is a fixed asset by default; the receiver unticks a
+      // service/installation line so no junk asset is created for it
+      state[it.id] = { received: String(remaining), accepted: String(remaining), rejected: '0', condition: '', registerAsset: !it.inventoryItem };
     }
     return state;
   };
@@ -317,6 +328,8 @@ export default function PurchaseOrders() {
     if (!detail) return;
     setGrnLines(grnDefaults(detail));
     setGrnRemarks('');
+    setGrnLocationId('');
+    ensureRegisterPickers();
     setGrnOpen(true);
   };
 
@@ -326,6 +339,8 @@ export default function PurchaseOrders() {
       setDetail(r);
       setGrnLines(grnDefaults(r));
       setGrnRemarks('');
+      setGrnLocationId('');
+      ensureRegisterPickers();
       setGrnOpen(true);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not load the PO', 'error');
@@ -341,6 +356,7 @@ export default function PurchaseOrders() {
         acceptedQty: Number(grnLines[it.id]?.accepted ?? 0),
         rejectedQty: Number(grnLines[it.id]?.rejected ?? 0),
         condition: grnLines[it.id]?.condition.trim() || undefined,
+        registerAsset: grnLines[it.id]?.registerAsset ?? !it.inventoryItem,
       }))
       .filter((g) => g.receivedQty > 0 || g.acceptedQty > 0 || g.rejectedQty > 0);
     if (items.length === 0) { toast('Nothing received', 'error'); return; }
@@ -352,11 +368,17 @@ export default function PurchaseOrders() {
     }
     setBusy(true);
     try {
-      const r = await api<{ poStatus: string; grnNumber: string }>(`/purchase-orders/${detail.id}/grn`, {
+      const r = await api<{ poStatus: string; grnNumber: string; assetsCreated?: { assetCode: string }[]; assetErrors?: string[] }>(`/purchase-orders/${detail.id}/grn`, {
         method: 'POST',
-        body: { remarks: grnRemarks.trim() || undefined, items },
+        body: { remarks: grnRemarks.trim() || undefined, locationId: grnLocationId || undefined, items },
       });
       toast(`GRN ${r.grnNumber} recorded — PO is now ${r.poStatus.replace(/_/g, ' ').toLowerCase()}`);
+      if (r.assetsCreated?.length) {
+        toast(`${r.assetsCreated.map((a) => a.assetCode).join(', ')} added to the asset register`);
+      }
+      if (r.assetErrors?.length) {
+        toast(`Asset registration failed — register by hand: ${r.assetErrors.join('; ')}`, 'error');
+      }
       setGrnOpen(false);
       setDetail(null);
       load();
@@ -591,7 +613,7 @@ export default function PurchaseOrders() {
                       <td className="py-1 pr-2">
                         {it.asset ? (
                           <span className="text-green-700 font-medium" title={it.asset.name}>🏷 {it.asset.assetCode}</span>
-                        ) : !it.inventoryItem && canRegisterAssets ? (
+                        ) : !it.inventoryItem && canRegisterAssets && rec > 0 ? (
                           <Button variant="ghost" onClick={() => void openRegisterAsset(it)}>🏷 Register asset</Button>
                         ) : (
                           '—'
@@ -603,10 +625,10 @@ export default function PurchaseOrders() {
               </tbody>
             </table>
 
-            {(detail.grnRows?.length ?? 0) > 0 && (
+            {(detail.goodsReceipts?.length ?? 0) > 0 && (
               <div className="text-sm text-gray-600 space-y-1">
                 <div className="font-medium">Goods received notes</div>
-                {detail.grnRows!.map((g) => (
+                {detail.goodsReceipts!.map((g) => (
                   <div key={g.id}>
                     • {g.grnNumber} — {fmtDate(g.receivedAt)} —{' '}
                     {g.items.reduce((s, i) => s + i.acceptedQty, 0)} accepted / {g.items.reduce((s, i) => s + i.rejectedQty, 0)} rejected
@@ -636,6 +658,14 @@ export default function PurchaseOrders() {
           <div className="space-y-3">
             <div className="text-sm text-gray-600">
               Accepted stock quantities post straight into the inventory ledger. 📦 lines are stock items; plain lines are assets/services (no stock).
+              Accepted units of a plain line are registered as assets automatically — untick a line that is a service, not a thing.
+            </div>
+            <div className="max-w-sm">
+              <label htmlFor="grn-location" className="text-xs text-gray-500 block mb-1">Delivered to (asset location)</label>
+              <Select id="grn-location" value={grnLocationId} onChange={(e) => setGrnLocationId(e.target.value)}>
+                <option value="">— none —</option>
+                {assetLocs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </Select>
             </div>
             <div className="hidden md:grid grid-cols-4 gap-2 text-xs text-gray-500 px-3">
               <div>Received *</div>
@@ -644,7 +674,7 @@ export default function PurchaseOrders() {
               <div>Condition notes</div>
             </div>
             {detail.items.map((it) => {
-              const g = grnLines[it.id] ?? { received: '0', accepted: '0', rejected: '0', condition: '' };
+              const g = grnLines[it.id] ?? { received: '0', accepted: '0', rejected: '0', condition: '', registerAsset: !it.inventoryItem };
               return (
                 <div key={it.id} className="border border-gray-200 rounded-lg p-2">
                   <div className="flex justify-between text-sm mb-2">
@@ -669,6 +699,16 @@ export default function PurchaseOrders() {
                       <Input value={g.condition} onChange={(e) => setGrnLines((s) => ({ ...s, [it.id]: { ...g, condition: e.target.value } }))} />
                     </label>
                   </div>
+                  {!it.inventoryItem && (
+                    <label className="mt-2 flex items-center gap-2 text-xs text-gray-600">
+                      <input
+                        type="checkbox"
+                        checked={g.registerAsset}
+                        onChange={(e) => setGrnLines((s) => ({ ...s, [it.id]: { ...g, registerAsset: e.target.checked } }))}
+                      />
+                      Register the accepted units as fixed assets (untick for a service)
+                    </label>
+                  )}
                 </div>
               );
             })}

@@ -313,6 +313,8 @@ export default function Assets() {
   const setTab = (t: 'register' | 'setup') => setSearchParams(t === 'register' ? {} : { tab: t }, { replace: false });
   const [q, setQ] = useState('');
   const [categoryId, setCategoryId] = useState('');
+  // one value per specification field of the filtered category (sf_<key>=…)
+  const [specFilters, setSpecFilters] = useState<Record<string, string>>({});
   const [locationId, setLocationId] = useState('');
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(true);
@@ -480,6 +482,9 @@ export default function Assets() {
       if (categoryId) params.set('categoryId', categoryId);
       if (locationId) params.set('locationId', locationId);
       if (status) params.set('status', status);
+      for (const [key, value] of Object.entries(specFilters)) {
+        if (value) params.set(`sf_${key}`, value);
+      }
       const data = await api<AssetRow[]>(`/assets?${params.toString()}`);
       setRows(data);
     } catch (e) {
@@ -487,7 +492,7 @@ export default function Assets() {
     } finally {
       setLoading(false);
     }
-  }, [q, categoryId, locationId, status]);
+  }, [q, categoryId, locationId, status, specFilters]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -666,6 +671,8 @@ export default function Assets() {
   const autoSeg = categorySegment(categories.find((c) => c.id === form?.categoryId)?.name);
   // fields the chosen category defines — the questions this asset must answer
   const formSpecFields: SpecField[] = categories.find((c) => c.id === form?.categoryId)?.specFields ?? [];
+  // …and the ones the register shows as filterable columns for the chosen filter
+  const registerSpecFields: SpecField[] = categories.find((c) => c.id === categoryId)?.specFields ?? [];
   const setSpec = (key: string, value: string) =>
     setForm((f) => (f ? { ...f, specs: { ...f.specs, [key]: value } } : f));
 
@@ -711,7 +718,13 @@ export default function Assets() {
       <Card className="p-4 mb-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           <Input placeholder="Search code / name / serial / custodian" value={q} onChange={(e) => setQ(e.target.value)} />
-          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
+          <Select
+            value={categoryId}
+            onChange={(e) => {
+              setCategoryId(e.target.value);
+              setSpecFilters({}); // the questions change with the category
+            }}
+          >
             <option value="">All categories</option>
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </Select>
@@ -726,18 +739,43 @@ export default function Assets() {
             <option value="MAINTENANCE">MAINTENANCE</option>
             <option value="DISPOSED">DISPOSED</option>
           </Select>
+          {registerSpecFields.map((f) =>
+            f.type === 'select' ? (
+              <Select
+                key={f.key}
+                value={specFilters[f.key] ?? ''}
+                aria-label={`Filter by ${f.label}`}
+                onChange={(e) => setSpecFilters((s) => ({ ...s, [f.key]: e.target.value }))}
+              >
+                <option value="">All {f.label.toLowerCase()}</option>
+                {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+              </Select>
+            ) : (
+              <Input
+                key={f.key}
+                value={specFilters[f.key] ?? ''}
+                placeholder={`Filter by ${f.label.toLowerCase()}`}
+                onChange={(e) => setSpecFilters((s) => ({ ...s, [f.key]: e.target.value }))}
+              />
+            ),
+          )}
         </div>
+        {registerSpecFields.length > 0 && (
+          <p className="mt-2 text-xs text-gray-400">
+            Specifications come from Asset Setup → {categories.find((c) => c.id === categoryId)?.name}.
+          </p>
+        )}
       </Card>
 
       {error && !form && !detail && !transfer && (
         <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>
       )}
 
-      <Table head={['PHOTO', 'CODE', 'NAME', 'CATEGORY', 'SERIAL', 'CUSTODIAN', 'LOCATION', 'STATUS', 'COST (MMK)', 'ACTIONS']}>
+      <Table head={['PHOTO', 'CODE', 'NAME', 'CATEGORY', ...registerSpecFields.map((f) => f.label.toUpperCase()), 'SERIAL', 'CUSTODIAN', 'LOCATION', 'STATUS', 'COST (MMK)', 'ACTIONS']}>
         {loading ? (
-          <tr><td colSpan={10}><Empty label="Loading…" /></td></tr>
+          <tr><td colSpan={10 + registerSpecFields.length}><Empty label="Loading…" /></td></tr>
         ) : rows.length === 0 ? (
-          <tr><td colSpan={10}><Empty label="No assets match the filters" /></td></tr>
+          <tr><td colSpan={10 + registerSpecFields.length}><Empty label="No assets match the filters" /></td></tr>
         ) : pageRows.map((a) => (
           <tr key={a.id} className="hover:bg-gray-50/60">
             <td className="px-4 py-2.5">
@@ -749,6 +787,11 @@ export default function Assets() {
             <td className="px-4 py-2.5 font-medium text-gray-900">{a.assetCode}</td>
             <td className="px-4 py-2.5">{a.name}</td>
             <td className="px-4 py-2.5">{a.category?.name ?? '—'}</td>
+            {registerSpecFields.map((f) => (
+              <td key={f.key} className="px-4 py-2.5 text-xs text-gray-600">
+                {a.specs?.[f.key] || <span className="text-gray-300">—</span>}
+              </td>
+            ))}
             <td className="px-4 py-2.5 font-mono text-xs">{a.serialNumber ?? '—'}</td>
             <td className="px-4 py-2.5">{a.custodian ?? '—'}</td>
             <td className="px-4 py-2.5">{a.location?.name ?? '—'}</td>

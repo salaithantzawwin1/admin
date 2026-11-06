@@ -4,6 +4,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { BudgetService } from '../budget/budget.service';
+import { AssetsService } from '../assets/assets.service';
 import { Actor } from '../org/org.service';
 import { normalizePurchaseType } from './purchase-types';
 
@@ -37,6 +38,8 @@ export interface GrnItemInput {
   acceptedQty: number;
   rejectedQty?: number;
   condition?: string;
+  /** false = this accepted line is a service, do not create a fixed asset. */
+  registerAsset?: boolean;
 }
 
 export interface CreateGrnInput {
@@ -51,7 +54,9 @@ const PO_TRANSITIONS: Record<string, string[]> = {
   DRAFT: ['APPROVED', 'CANCELLED'],
   APPROVED: ['SENT_TO_VENDOR', 'CANCELLED'],
   SENT_TO_VENDOR: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
-  PARTIALLY_RECEIVED: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED'],
+  // CANCELLED: a part-delivered PO whose remainder the vendor will never ship
+  // used to be stuck forever (no legal transition out of PARTIALLY_RECEIVED)
+  PARTIALLY_RECEIVED: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
   FULLY_RECEIVED: ['CLOSED'],
   CLOSED: [],
   CANCELLED: [],
@@ -81,6 +86,7 @@ export class PurchaseOrdersService {
     private numbering: NumberingService,
     private inventory: InventoryService,
     private budget: BudgetService,
+    private assets: AssetsService,
   ) {}
 
   // ---------- PO lifecycle ----------
@@ -233,7 +239,14 @@ export class PurchaseOrdersService {
         where: { purchaseOrderId: id },
         _sum: { quantity: true },
       });
-      if ((agg._sum.acceptedQty ?? 0) < (ordered._sum.quantity ?? 0)) {
+      const rejected = await this.prisma.goodsReceiptItem.aggregate({
+        where: { poItem: { purchaseOrderId: id } },
+        _sum: { rejectedQty: true },
+      });
+      // Accepted + rejected is what actually arrived: a unit the supplier never
+      // replaces is written off, and checking accepted alone left that PO open
+      // (PARTIALLY_RECEIVED) for good.
+      if ((agg._sum.acceptedQty ?? 0) + (rejected._sum.rejectedQty ?? 0) < (ordered._sum.quantity ?? 0)) {
         throw new ConflictException('Cannot close before every line is fully received');
       }
     }
@@ -297,6 +310,9 @@ export class PurchaseOrdersService {
         rejectedQty,
         condition: it.condition?.trim() || undefined,
         inventoryItemId: poItem.inventoryItemId, // for stock posting
+        // received goods belong in the fixed-asset register by default;
+        // service lines opt out per GRN line
+        registerAsset: it.registerAsset !== false,
         unitPrice: Number(poItem.unitPrice), // ledger spending data (Decimal → number)
         description: poItem.description,
       };
@@ -357,6 +373,38 @@ export class PurchaseOrdersService {
       });
     }
 
+    // §39 — "we bought it, so it belongs in the register": every accepted unit
+    // of a NON-stock line becomes an asset right here, with the PO/GRN as its
+    // provenance (cost = line unit price, purchase date = this receipt).
+    // Stock lines keep posting to the consumable ledger instead.
+    const assetsCreated: { id: string; assetCode: string; name: string }[] = [];
+    const assetErrors: string[] = [];
+    const assetCandidates = lines.filter((l) => !l.inventoryItemId && l.acceptedQty > 0 && l.registerAsset);
+    for (const l of assetCandidates) {
+      const poItem = po.items.find((p) => p.id === l.poItemId);
+      if (!poItem || poItem.assetId) continue; // already registered by hand
+      try {
+        const created = await this.assets.registerFromGrnLine(
+          {
+            poItemId: l.poItemId,
+            name: l.description,
+            quantity: l.acceptedQty,
+            unitPrice: l.unitPrice,
+            receivedAt: grn.receivedAt,
+            locationId: data.locationId || undefined,
+            poNumber: po.poNumber,
+            grnNumber,
+          },
+          actor,
+        );
+        assetsCreated.push(...created);
+      } catch (e) {
+        // The receipt already happened and stays; the warning tells the office
+        // to register that particular line by hand.
+        assetErrors.push(l.description + ': ' + (e instanceof Error ? e.message : 'asset registration failed'));
+      }
+    }
+
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'GRN_CREATED', module: 'PROCUREMENT', recordId: grn.id,
@@ -367,9 +415,11 @@ export class PurchaseOrdersService {
         rejected: lines.reduce((s, l) => s + l.rejectedQty, 0),
         stockPosted: stockLines.reduce((s, l) => s + l.acceptedQty, 0),
         poStatus: newStatus,
+        assetsCreated: assetsCreated.map((a) => a.assetCode),
+        assetErrors,
       },
     });
-    return { ...grn, poStatus: newStatus };
+    return { ...grn, poStatus: newStatus, assetsCreated, assetErrors };
   }
 
   private normalizePoItem(it: PoItemInput, idx: number) {
