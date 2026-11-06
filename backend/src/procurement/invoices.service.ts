@@ -149,14 +149,24 @@ export class InvoicesService {
       }
     }
 
+    // dates are client input: an unparsable one must not surface as a Prisma 500,
+    // and a bill cannot be due before it was issued
+    const invoiceDate = new Date(data.invoiceDate);
+    if (Number.isNaN(invoiceDate.getTime())) throw new BadRequestException('Invoice date is required (YYYY-MM-DD)');
+    const dueDate = data.dueDate ? new Date(data.dueDate) : null;
+    if (dueDate && Number.isNaN(dueDate.getTime())) throw new BadRequestException('Due date is not a valid date');
+    if (dueDate && dueDate.getTime() < invoiceDate.getTime()) {
+      throw new BadRequestException('Due date cannot be before the invoice date');
+    }
+
     const inv = await this.prisma.invoice.create({
       data: {
         invoiceNumber: await this.numbering.next('INV'),
         supplierInvoiceNumber,
         supplierId: data.supplierId,
         status,
-        invoiceDate: new Date(data.invoiceDate),
-        dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
+        invoiceDate,
+        dueDate: dueDate ?? undefined,
         purchaseOrderId: data.purchaseOrderId || undefined,
         goodsReceiptId: data.goodsReceiptId || undefined,
         subtotal,
@@ -311,8 +321,13 @@ export class InvoicesService {
     // §25 approval gate: only MATCHED / PARTIAL_MATCH invoices may be approved.
     // MISMATCH routes to review (Reject → resolve → redraft → resubmit).
     if (action === 'approve') {
-      if (!['MATCHED', 'PARTIAL_MATCH'].includes(inv.matchStatus ?? '')) {
-        throw new ConflictException(`Approval blocked — 3-way match is ${inv.matchStatus ?? 'NOT RUN'} (§25). Resolve the mismatch, then resubmit`);
+      // the verdict is computed at submission time; deliveries and receipts may
+      // have moved since, so approval reads a freshly computed match instead of
+      // the stale snapshot stored on the row
+      const fresh = await this.recomputeMatch(id);
+      const matchStatus = fresh.matchStatus ?? 'NOT RUN';
+      if (!['MATCHED', 'PARTIAL_MATCH'].includes(matchStatus)) {
+        throw new ConflictException(`Approval blocked — 3-way match is ${matchStatus} (§25). Resolve the mismatch, then resubmit`);
       }
     }
 

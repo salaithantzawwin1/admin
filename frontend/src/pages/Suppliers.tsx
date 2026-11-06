@@ -88,6 +88,7 @@ export default function Suppliers() {
       })
       .catch((e) => {
         if (e instanceof ApiError && e.status === 403) setListDenied(true);
+        else setError(e instanceof Error ? e.message : 'Could not load suppliers');
         setSuppliers([]);
       });
   }, [showInactive]);
@@ -112,17 +113,13 @@ export default function Suppliers() {
     }
   };
 
+  // a refused delete (supplier with purchase history / active POs) is thrown back
+  // to ConfirmDialog, which keeps itself open and prints the reason there
   const doDelete = async (s: Supplier) => {
-    setError('');
-    try {
-      await api(`/suppliers/${s.id}`, { method: 'DELETE' });
-      toast('Supplier deleted');
-      setDeleting(null);
-      load();
-    } catch (e) {
-      setModalError(e instanceof Error ? e.message : 'Delete failed');
-      setDeleting(null);
-    }
+    await api(`/suppliers/${s.id}`, { method: 'DELETE' });
+    toast('Supplier deleted');
+    setDeleting(null);
+    load();
   };
 
   const openHistory = async (s: Supplier, from = histFrom, to = histTo) => {
@@ -174,11 +171,14 @@ export default function Suppliers() {
 
   const removeContact = async (logId: string) => {
     if (!vendorFor) return;
+    setModalError('');
     try {
       await api(`/suppliers/${vendorFor.id}/contact-logs/${logId}`, { method: 'DELETE' });
       setContacts(await api<ContactLog[]>(`/suppliers/${vendorFor.id}/contact-logs`));
+      toast('Contact entry deleted');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      // the page banner sits behind the modal — report inside the modal
+      setModalError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -207,23 +207,25 @@ export default function Suppliers() {
 
   const submitDraft = async (d: PoDraft) => {
     if (!vendorFor) return;
-    setError('');
+    setModalError('');
     try {
       const r = await api<{ docNumber: string }>(`/suppliers/${vendorFor.id}/po-drafts/${d.id}/submit`, { method: 'POST' });
       setDrafts(await api<PoDraft[]>(`/suppliers/${vendorFor.id}/po-drafts`));
       toast(`Submitted as ${r.docNumber} — pending approval`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setModalError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
   const deleteDraft = async (d: PoDraft) => {
     if (!vendorFor) return;
+    setModalError('');
     try {
       await api(`/suppliers/${vendorFor.id}/po-drafts/${d.id}`, { method: 'DELETE' });
       setDrafts(await api<PoDraft[]>(`/suppliers/${vendorFor.id}/po-drafts`));
+      toast('PO draft deleted');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed');
+      setModalError(e instanceof Error ? e.message : 'Failed');
     }
   };
 
@@ -294,7 +296,12 @@ export default function Suppliers() {
                     <Badge color={s.isActive ? 'green' : 'gray'}>{s.isActive ? 'ACTIVE' : 'INACTIVE'}</Badge>
                   </td>
                   <td className="px-4 py-3 text-center whitespace-nowrap">
-                    <button className="text-blue-600 hover:underline mr-3" onClick={() => openHistory(s)}>History</button>
+                    <button
+                      className="text-blue-600 hover:underline mr-3"
+                      onClick={() => { setHistFrom(''); setHistTo(''); openHistory(s, '', ''); }}
+                    >
+                      History
+                    </button>
                     {canManage && (
                       <>
                         <button className="text-blue-600 hover:underline mr-3" title="Contacts + PO drafts" onClick={() => openVendor(s)}>Manage</button>

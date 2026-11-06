@@ -87,9 +87,11 @@ export class SpendingService {
       const account = await this.prisma.account.findUnique({ where: { id: data.accountId } });
       if (!account) throw new BadRequestException('Unknown account');
     }
+    let supplierName: string | null = null;
     if (data.supplierId) {
       const supplier = await this.prisma.supplier.findUnique({ where: { id: data.supplierId } });
       if (!supplier) throw new BadRequestException('Unknown supplier');
+      supplierName = supplier.name;
     }
     for (const line of stockLines) {
       if (!line?.itemId) throw new BadRequestException('Every stock line needs an item');
@@ -119,6 +121,10 @@ export class SpendingService {
     if (data.maintenance && !asset) {
       throw new BadRequestException('A service log needs the asset it was done on');
     }
+    const nextDueDate = data.maintenance?.nextDueDate ? new Date(data.maintenance.nextDueDate) : null;
+    if (nextDueDate && Number.isNaN(nextDueDate.getTime())) {
+      throw new BadRequestException('Next service date is not a valid date');
+    }
 
     // Codes are allocated BEFORE the transaction: NumberingService opens its own
     // transaction, and nesting one inside another would hold two connections for
@@ -143,7 +149,8 @@ export class SpendingService {
             date,
             type: 'EXPENSE',
             amount: money,
-            payee: data.payee?.trim() || data.supplierId || undefined,
+            // never the raw supplier id — the ledger prints this column
+            payee: data.payee?.trim() || supplierName || undefined,
             accountId: data.accountId || undefined,
             description: data.description?.trim() || undefined,
             createdById: actor.userId,
@@ -184,7 +191,7 @@ export class SpendingService {
             costParts: 0,
             costLabor: 0,
             costOther: 0,
-            nextDueDate: data.maintenance?.nextDueDate ? new Date(data.maintenance.nextDueDate) : undefined,
+            nextDueDate: nextDueDate ?? undefined,
             createdById: actor.userId,
           },
         });

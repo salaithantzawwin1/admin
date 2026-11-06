@@ -76,13 +76,16 @@ export default function Procurement() {
   const [searchParams, setSearchParams] = useSearchParams();
   const canReadAll = hasPermission('procurement.read');
   const [rows, setRows] = useState<PrRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(searchParams.get('new') === '1');
 
   const load = useCallback(() => {
+    setLoading(true);
     api<{ items: PrRow[] }>('/procurement/requests?pageSize=100')
       .then((r) => setRows(r.items))
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(load, [load]);
@@ -119,7 +122,7 @@ export default function Procurement() {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={canReadAll ? 7 : 6}>
-                  <Empty label="No purchase requests yet" />
+                  <Empty label={loading ? 'Loading…' : 'No purchase requests yet'} />
                 </td>
               </tr>
             )}

@@ -314,7 +314,7 @@ export default function Reports() {
 
       {/* ---------- purchase by asset (§34/W3) ---------- */}
       <section>
-        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Purchase by asset — acquisition cost (PO lines that registered the asset) + related invoice spend</div>
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Purchase by asset — acquisition cost from the asset register + related spend</div>
         <Card>
           <table className="w-full text-sm">
             <thead>
@@ -390,7 +390,7 @@ export default function Reports() {
               {budget.length === 0 && (
                 <tr>
                   <td colSpan={5}>
-                    <Empty label={`No budgets set for ${MONTHS[Number(budgetMonth) - 1]} ${budgetYear} — set one under /budgets (API)`} />
+                    <Empty label={`No budgets set for ${MONTHS[Number(budgetMonth) - 1]} ${budgetYear} — set one in Settings → Budgets`} />
                   </td>
                 </tr>
               )}

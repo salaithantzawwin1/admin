@@ -57,10 +57,14 @@ export class PettyCashService {
       const acc = await this.prisma.account.findUnique({ where: { id: data.accountId } });
       if (!acc) throw new BadRequestException('Unknown account');
     }
+    // a bad date used to reach Prisma as an Invalid Date and come back as a 500;
+    // it is a client input error, so answer 400 with a usable message
+    const date = data.date ? new Date(data.date) : new Date();
+    if (Number.isNaN(date.getTime())) throw new BadRequestException('Invalid date');
     const txn = await this.prisma.pettyCashTransaction.create({
       data: {
         code: await this.numbering.next('PC'),
-        date: data.date ? new Date(data.date) : new Date(),
+        date,
         type: data.type,
         amount,
         payee: data.payee?.trim() || undefined,

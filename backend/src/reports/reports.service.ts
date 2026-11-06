@@ -160,19 +160,20 @@ export class ReportsService {
       row.recordedCost = round2(row.recordedCost + Number(c.amount));
       row.total = round2(row.purchaseCost + row.recordedCost);
     }
-    // acquisition side: PO lines that registered the asset (§39 provenance)
-    const poItems = await this.prisma.purchaseOrderItem.findMany({
-      where: {
-        assetId: { not: null },
-        purchaseOrder: { orderDate: this.poPeriod(from, to) },
-      },
-      include: { asset: { select: { id: true, assetCode: true, name: true } } },
+    // acquisition side: the asset register itself (§39). Every asset carries its
+    // own purchase cost and purchase date — registered by hand, from a PO line or
+    // automatically from a GRN line (where one PO line produces several units).
+    // Reading PO lines instead multiplied the line amount by its quantity onto
+    // the single asset the PO item pointed at, while its sibling units from the
+    // same receipt showed no acquisition cost at all.
+    const assets = await this.prisma.asset.findMany({
+      where: { purchaseCost: { gt: 0 }, purchaseDate: this.datePeriod(from, to) },
+      include: { poItems: { select: { id: true } } },
     });
-    for (const it of poItems) {
-      if (!it.asset || !it.assetId) continue;
-      const row = rowFor(it.assetId, it.asset.assetCode, it.asset.name);
-      row.poLineCount += 1;
-      row.purchaseCost = round2(row.purchaseCost + Number(it.unitPrice) * it.quantity);
+    for (const a of assets) {
+      const row = rowFor(a.id, a.assetCode, a.name);
+      row.poLineCount = a.poItems.length;
+      row.purchaseCost = round2(row.purchaseCost + Number(a.purchaseCost));
       row.total = round2(row.purchaseCost + row.recordedCost);
     }
     return [...byAsset.values()].sort((a, b) => b.total - a.total);

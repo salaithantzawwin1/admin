@@ -3,6 +3,7 @@ import { api, hasPermission, getToken } from '../api';
 import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { toast } from '../components/Toast';
 
 interface Txn {
   id: string;
@@ -33,6 +34,8 @@ export default function PettyCash() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<typeof emptyForm | null>(null);
+  const [formError, setFormError] = useState('');
+  const [formBusy, setFormBusy] = useState(false);
   const [toDelete, setToDelete] = useState<Txn | null>(null);
 
   const load = useCallback(async () => {
@@ -67,19 +70,30 @@ export default function PettyCash() {
 
   const submitForm = async () => {
     if (!form) return;
-    await api('/petty-cash', {
-      method: 'POST',
-      body: {
-        type: form.type,
-        amount: Number(form.amount),
-        date: form.date || undefined,
-        payee: form.payee || undefined,
-        accountId: form.accountId || undefined,
-        description: form.description || undefined,
-      },
-    });
-    setForm(null);
-    await load();
+    setFormError('');
+    setFormBusy(true);
+    try {
+      await api('/petty-cash', {
+        method: 'POST',
+        body: {
+          type: form.type,
+          amount: Number(form.amount),
+          date: form.date || undefined,
+          payee: form.payee || undefined,
+          accountId: form.accountId || undefined,
+          description: form.description || undefined,
+        },
+      });
+      toast(`Petty cash ${form.type === 'TOPUP' ? 'top-up' : 'expense'} recorded`);
+      setForm(null);
+      await load();
+    } catch (e) {
+      // a rejected entry (bad date, unknown account, server rule) must be visible
+      // in the form the user is still looking at
+      setFormError(e instanceof Error ? e.message : 'Could not record the entry');
+    } finally {
+      setFormBusy(false);
+    }
   };
 
   const downloadCsv = async () => {
@@ -102,6 +116,8 @@ export default function PettyCash() {
   };
 
   const amountColor = (t: string) => (t === 'TOPUP' ? 'text-green-700' : 'text-red-700');
+  // the tiles read the filtered rows, so they are not the lifetime ledger totals
+  const usingFilters = Boolean(from || to || type);
 
   return (
     <div>
@@ -119,15 +135,15 @@ export default function PettyCash() {
       {/* totals */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
         <Card className="p-4">
-          <div className="text-xs text-gray-500 uppercase tracking-wide">Top-ups</div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide">Top-ups{usingFilters ? ' (in range)' : ''}</div>
           <div className="text-xl font-bold text-green-700 mt-1 tabular-nums">{totals.topup.toLocaleString()}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-xs text-gray-500 uppercase tracking-wide">Expenses</div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide">Expenses{usingFilters ? ' (in range)' : ''}</div>
           <div className="text-xl font-bold text-red-700 mt-1 tabular-nums">{totals.expense.toLocaleString()}</div>
         </Card>
         <Card className="p-4">
-          <div className="text-xs text-gray-500 uppercase tracking-wide">Balance</div>
+          <div className="text-xs text-gray-500 uppercase tracking-wide">Balance{usingFilters ? ' (in range)' : ''}</div>
           <div className="text-xl font-bold text-gray-900 mt-1 tabular-nums">{totals.balance.toLocaleString()}</div>
         </Card>
       </div>
@@ -188,7 +204,11 @@ export default function PettyCash() {
 
       {/* record entry */}
       {form && (
-        <Modal title="Record petty cash entry" onClose={() => setForm(null)} error={error}>
+        <Modal
+          title="Record petty cash entry"
+          onClose={() => { setForm(null); setFormError(''); }}
+          error={formError}
+        >
           <div className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
@@ -200,6 +220,11 @@ export default function PettyCash() {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Amount (MMK) *</label>
               <Input type="number" min={0.01} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="e.g. 50000" />
+              {form.type === 'EXPENSE' && Number(form.amount) > totals.balance && (
+                <p className="text-xs text-orange-600 mt-1">
+                  More than the cash on hand (MMK {totals.balance.toLocaleString()}) — the float would go negative.
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
@@ -222,8 +247,10 @@ export default function PettyCash() {
             </div>
           </div>
           <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
-            <Button disabled={!form.amount || Number(form.amount) <= 0} onClick={() => void submitForm()}>Record</Button>
+            <Button variant="ghost" onClick={() => { setForm(null); setFormError(''); }}>Cancel</Button>
+            <Button disabled={!form.amount || Number(form.amount) <= 0 || formBusy} onClick={() => void submitForm()}>
+              {formBusy ? 'Recording…' : 'Record'}
+            </Button>
           </div>
         </Modal>
       )}

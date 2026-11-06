@@ -3,6 +3,7 @@ import { api, getToken, hasPermission } from '../api';
 import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { toast } from '../components/Toast';
 
 interface PaymentRow {
   id: string;
@@ -59,6 +60,8 @@ export default function Payments() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<typeof emptyForm | null>(null);
+  const [formError, setFormError] = useState('');
+  const [formBusy, setFormBusy] = useState(false);
   const [toDelete, setToDelete] = useState<PaymentRow | null>(null);
 
   const load = useCallback(async () => {
@@ -86,19 +89,30 @@ export default function Payments() {
 
   const submitForm = async () => {
     if (!form) return;
-    await api('/payments', {
-      method: 'POST',
-      body: {
-        invoiceId: form.invoiceId,
-        amount: Number(form.amount),
-        date: form.date || undefined,
-        method: form.method,
-        reference: form.reference || undefined,
-        note: form.note || undefined,
-      },
-    });
-    setForm(null);
-    await load();
+    setFormError('');
+    setFormBusy(true);
+    try {
+      await api('/payments', {
+        method: 'POST',
+        body: {
+          invoiceId: form.invoiceId,
+          amount: Number(form.amount),
+          date: form.date || undefined,
+          method: form.method,
+          reference: form.reference || undefined,
+          note: form.note || undefined,
+        },
+      });
+      toast('Payment recorded');
+      setForm(null);
+      await load();
+    } catch (e) {
+      // over-payment and invoice-status rejections belong in this dialog, not in
+      // a silent console error behind a closed modal
+      setFormError(e instanceof Error ? e.message : 'Could not record the payment');
+    } finally {
+      setFormBusy(false);
+    }
   };
 
   const overdueCount = payables.filter((p) => p.daysOverdue > 0).length;
@@ -131,7 +145,7 @@ export default function Payments() {
           <>
             <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
             {canManage && (
-              <Button onClick={() => setForm({ ...emptyForm })} disabled={payables.length === 0}>
+              <Button onClick={() => { setForm({ ...emptyForm }); setFormError(''); }} disabled={payables.length === 0} title={payables.length === 0 ? 'Nothing outstanding to pay' : undefined}>
                 + Record payment
               </Button>
             )}
@@ -235,7 +249,7 @@ export default function Payments() {
 
       {/* record payment */}
       {form && (
-        <Modal title="Record payment" onClose={() => setForm(null)} error={error}>
+        <Modal title="Record payment" onClose={() => { setForm(null); setFormError(''); }} error={formError}>
           <div className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Invoice *</label>
@@ -262,6 +276,14 @@ export default function Payments() {
                 onChange={(e) => setForm({ ...form, amount: e.target.value })}
                 placeholder="Outstanding balance of the selected invoice"
               />
+              {(() => {
+                const p = payables.find((x) => x.id === form.invoiceId);
+                return p && Number(form.amount) > p.balance ? (
+                  <p className="text-xs text-orange-600 mt-1">
+                    More than the balance due ({p.balance.toLocaleString()} Ks) — the server rejects an over-payment.
+                  </p>
+                ) : null;
+              })()}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -285,12 +307,12 @@ export default function Payments() {
             </div>
           </div>
           <div className="flex justify-end gap-2 mt-4">
-            <Button variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
+            <Button variant="ghost" onClick={() => { setForm(null); setFormError(''); }}>Cancel</Button>
             <Button
-              disabled={!form.invoiceId || !form.amount || Number(form.amount) <= 0}
+              disabled={!form.invoiceId || !form.amount || Number(form.amount) <= 0 || formBusy}
               onClick={() => void submitForm()}
             >
-              Record payment
+              {formBusy ? 'Recording…' : 'Record payment'}
             </Button>
           </div>
         </Modal>

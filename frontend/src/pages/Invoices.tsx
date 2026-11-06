@@ -294,7 +294,8 @@ export default function Invoices() {
               <span className="text-sm text-gray-500">Bill #{detail.supplierInvoiceNumber}</span>
               {detail.purchaseOrder && <span className="text-sm text-gray-500">PO: {detail.purchaseOrder.poNumber}</span>}
               {detail.goodsReceipt && <span className="text-sm text-gray-500">GRN: {detail.goodsReceipt.grnNumber}</span>}
-              <span className="text-sm text-gray-500">{fmtDate(detail.invoiceDate)}</span>
+              <span className="text-sm text-gray-500">Dated {fmtDate(detail.invoiceDate)}</span>
+              {detail.dueDate && <span className="text-sm text-gray-500">Due {fmtDate(detail.dueDate)}</span>}
             </div>
 
             <table className="w-full text-sm">

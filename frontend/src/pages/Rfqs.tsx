@@ -105,14 +105,17 @@ export default function Rfqs() {
   const [searchParams, setSearchParams] = useSearchParams();
   const canManage = hasPermission('procurement.manage');
   const [rows, setRows] = useState<RfqRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(searchParams.get('new') === '1');
   const [detail, setDetail] = useState<string | null>(null); // rfqId
 
   const load = useCallback(() => {
+    setLoading(true);
     api<{ items: RfqRow[] }>('/procurement/rfqs?pageSize=100')
       .then((r) => setRows(r.items))
-      .catch((e) => setError(e.message));
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(load, [load]);
@@ -153,7 +156,7 @@ export default function Rfqs() {
             {rows.length === 0 && (
               <tr>
                 <td colSpan={7}>
-                  <Empty label="No RFQs yet" />
+                  <Empty label={loading ? 'Loading…' : 'No RFQs yet — create one from an approved request'} />
                 </td>
               </tr>
             )}
@@ -544,36 +547,45 @@ function VendorPicker({ rfqId, existing, onDone }: { rfqId: string; existing: st
   const [suppliers, setSuppliers] = useState<SupplierRef[]>([]);
   const [picked, setPicked] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     api<SupplierRef[]>('/suppliers?all=1').then((s) => setSuppliers(s.filter((x) => x.isActive && !existing.includes(x.id)))).catch(() => setSuppliers([]));
   }, [existing.join(',')]);
 
   return (
-    <div className="mt-2 flex gap-2 items-end">
-      <div className="flex-1">
-        <Select value={picked} onChange={(e) => setPicked(e.target.value)} invalid={!picked}>
-          <option value="">Invite a vendor…</option>
-          {suppliers.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </Select>
+    <div className="mt-2">
+      <div className="flex gap-2 items-end">
+        <div className="flex-1">
+          <Select value={picked} onChange={(e) => { setPicked(e.target.value); setError(''); }}>
+            <option value="">Invite a vendor…</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </Select>
+        </div>
+        <Button
+          disabled={!picked || busy}
+          onClick={async () => {
+            setBusy(true);
+            setError('');
+            try {
+              await api(`/procurement/rfqs/${rfqId}/vendors`, { method: 'POST', body: { supplierId: picked } });
+              toast('Vendor invited');
+              setPicked('');
+              onDone();
+            } catch (e) {
+              // already-invited / closed-RFQ refusals were silently swallowed
+              setError(e instanceof Error ? e.message : 'Could not invite the vendor');
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? 'Inviting…' : 'Invite'}
+        </Button>
       </div>
-      <Button
-        disabled={!picked || busy}
-        onClick={async () => {
-          setBusy(true);
-          try {
-            await api(`/procurement/rfqs/${rfqId}/vendors`, { method: 'POST', body: { supplierId: picked } });
-            setPicked('');
-            onDone();
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        {busy ? 'Inviting…' : 'Invite'}
-      </Button>
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
     </div>
   );
 }
@@ -583,6 +595,7 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
   const [quoteNumber, setQuoteNumber] = useState('');
   const [paymentTerms, setPaymentTerms] = useState('');
   const [validUntil, setValidUntil] = useState('');
+  const [quoteDate, setQuoteDate] = useState('');
   const [items, setItems] = useState<DraftQuoteItem[]>([emptyQuoteItem()]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -601,6 +614,7 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
         body: {
           supplierId,
           quoteNumber: quoteNumber.trim(),
+          quoteDate: quoteDate || undefined,
           paymentTerms: paymentTerms.trim() || undefined,
           validUntil: validUntil || undefined,
           items: items.map((it) => ({
@@ -626,7 +640,7 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
   return (
     <div className="border border-gray-200 rounded-lg p-3 space-y-2 mb-3">
       {error && <div className="text-sm text-red-600 bg-red-50 rounded px-3 py-2">{error}</div>}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <div>
           <label className="text-xs text-gray-500 block mb-1">Vendor (invited) *</label>
           <Select value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
@@ -640,6 +654,14 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
           <Input placeholder="e.g. Q-2026-014" value={quoteNumber} onChange={(e) => setQuoteNumber(e.target.value)} />
         </div>
         <div>
+          <label className="text-xs text-gray-500 block mb-1">Quote date</label>
+          <Input type="date" value={quoteDate} onChange={(e) => setQuoteDate(e.target.value)} />
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 block mb-1">Valid until</label>
+          <Input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} />
+        </div>
+        <div className="sm:col-span-2 lg:col-span-4">
           <label className="text-xs text-gray-500 block mb-1">Payment terms</label>
           <Input placeholder="e.g. 30 Days / COD" value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} />
         </div>
@@ -693,6 +715,7 @@ function DecisionForm({
 }) {
   const [quoteId, setQuoteId] = useState(quotes[0]?.id ?? '');
   const [reason, setReason] = useState('');
+  const [supportingDoc, setSupportingDoc] = useState('');
   const [error, setError] = useState('');
   const quote = quotes.find((q) => q.id === quoteId);
 
@@ -707,6 +730,7 @@ function DecisionForm({
           recommendedSupplierId: quote.supplier.id,
           recommendedQuoteId: quote.id,
           selectionReason: reason.trim(),
+          supportingDocument: supportingDoc.trim() || undefined,
         },
       });
       toast('Vendor selected');
@@ -731,7 +755,11 @@ function DecisionForm({
         </div>
         <div>
           <label className="text-xs text-gray-500 block mb-1">Supporting document (optional)</label>
-          <Input placeholder="file/brief reference" disabled />
+          <Input
+            placeholder="file / brief reference"
+            value={supportingDoc}
+            onChange={(e) => setSupportingDoc(e.target.value)}
+          />
         </div>
       </div>
       <div>

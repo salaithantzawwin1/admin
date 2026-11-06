@@ -95,11 +95,10 @@ export class PaymentsService {
   async payables(params: { from?: string; to?: string; supplierId?: string }) {
     const where: any = { status: { in: PAYABLE_STATUSES } };
     if (params.supplierId) where.supplierId = params.supplierId;
-    if (params.from || params.to) {
-      where.invoiceDate = {};
-      if (params.from) where.invoiceDate.gte = new Date(params.from);
-      if (params.to) where.invoiceDate.lte = new Date(`${params.to}T23:59:59.999Z`);
-    }
+    // `from`/`to` filter the payment register only. Outstanding money is not a
+    // range question: a bill dated last month that is still unpaid must stay on
+    // the list (and in the outstanding total) whatever period is shown above,
+    // otherwise the page hides the very invoices the office still owes.
     const rows = await this.prisma.invoice.findMany({
       where,
       include: {
