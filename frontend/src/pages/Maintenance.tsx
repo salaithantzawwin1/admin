@@ -182,7 +182,10 @@ export default function Maintenance() {
     // skipped — `undefined` means "leave unchanged" to the API.
     const blankable = (v: string) => (recordForm.id ? (v.trim() || null) : (v.trim() || undefined));
     const body: Record<string, unknown> = {
-      assetId: recordForm.assetId,
+      // the asset a service belongs to never changes: the update DTO rejects the
+      // property, and sending it made every edit fail with
+      // "property assetId should not exist" (400)
+      ...(recordForm.id ? {} : { assetId: recordForm.assetId }),
       type: recordForm.type,
       status: recordForm.status,
       date: recordForm.date || undefined,
@@ -213,7 +216,8 @@ export default function Maintenance() {
     if (!scheduleForm) return;
     setError(null);
     const body: Record<string, unknown> = {
-      assetId: scheduleForm.assetId,
+      // same rule as a service record: a schedule cannot be moved to another asset
+      ...(scheduleForm.id ? {} : { assetId: scheduleForm.assetId }),
       title: scheduleForm.title.trim(),
       intervalMonths: Number(scheduleForm.intervalMonths),
       lastDoneAt: scheduleForm.lastDoneAt || undefined,
