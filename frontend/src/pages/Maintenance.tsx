@@ -133,6 +133,9 @@ export default function Maintenance() {
   const [recordForm, setRecordForm] = useState<typeof emptyRecord | null>(null);
   const [scheduleForm, setScheduleForm] = useState<typeof emptySchedule | null>(null);
   const [toDelete, setToDelete] = useState<{ kind: 'record' | 'schedule'; id: string; label: string } | null>(null);
+  // "Mark done" writes a service record and rolls the due date forward, so it
+  // asks first — a double click used to add two visits and skip two intervals.
+  const [toDone, setToDone] = useState<ScheduleRow | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -426,7 +429,7 @@ export default function Maintenance() {
                 <td className="px-4 py-2.5 text-right whitespace-nowrap">
                   {canManage && (
                     <>
-                      <button type="button" className="text-xs text-gray-600 hover:underline mr-3" onClick={() => void markDone(s)}>Mark done</button>
+                      <button type="button" className="text-xs text-gray-600 hover:underline mr-3" onClick={() => setToDone(s)}>Mark done</button>
                       <button type="button" className="text-xs text-gray-600 hover:underline mr-3" onClick={() => openSchedule(s)}>Edit</button>
                       <button type="button" className="text-xs text-red-600 hover:underline" onClick={() => setToDelete({ kind: 'schedule', id: s.id, label: s.title })}>Delete</button>
                     </>
@@ -583,6 +586,20 @@ export default function Maintenance() {
             <Button disabled={!scheduleForm.assetId || !scheduleForm.title.trim()} onClick={() => void saveSchedule()}>Save</Button>
           </div>
         </Modal>
+      )}
+
+      {toDone && (
+        <ConfirmDialog
+          title={`Mark "${toDone.title}" done today?`}
+          description={`A PREVENTIVE service record is added to ${toDone.asset?.assetCode ?? 'the asset'}'s history and the next due date moves ${toDone.intervalMonths} month(s) forward.`}
+          confirmLabel="Mark done"
+          onClose={() => setToDone(null)}
+          onConfirm={async () => {
+            const row = toDone;
+            setToDone(null);
+            await markDone(row);
+          }}
+        />
       )}
 
       {toDelete && (
