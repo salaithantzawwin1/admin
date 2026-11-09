@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
-import { Badge, Card, Empty, PageHeader } from '../components/ui';
+import { Badge, Card, Empty, Input, PageHeader } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { CarRequestForm } from '../components/CarRequestForm';
 import { DriverAckStages } from '../components/CarPanel';
@@ -214,7 +214,7 @@ function ReleasedTripNote({ a }: { a: RowAssignment }) {
   );
 }
 
-type CarTab = 'availability' | 'requests' | 'handover';
+type CarTab = 'availability' | 'requests' | 'handover' | 'usage';
 /** Rows per page in the Requests tab — the list used to fetch the newest 100 and
  *  render them all, so the page grew without limit as requests accumulated. */
 const CAR_PAGE_SIZE = 10;
@@ -240,7 +240,8 @@ export default function CarRequests() {
   // active tab lives in the URL (?tab=requests) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as CarTab | null;
-  const tab: CarTab = tabParam === 'requests' || tabParam === 'handover' ? tabParam : 'availability';
+  const tab: CarTab =
+    tabParam === 'requests' || tabParam === 'handover' || tabParam === 'usage' ? tabParam : 'availability';
   const setTab = (t: CarTab) => setSearchParams(t === 'availability' ? {} : { tab: t }, { replace: false });
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [page, setPage] = useState(1);
@@ -402,6 +403,18 @@ export default function CarRequests() {
           onClick={() => setTab('handover')}
         >
           🔄 Handover{handover && handover.delayedCount > 0 ? ` (⏰ ${handover.delayedCount})` : ''}
+        </button>
+        )}
+        {canAssign && (
+        <button
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+            tab === 'usage'
+              ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+          }`}
+          onClick={() => setTab('usage')}
+        >
+          🛣️ Usage
         </button>
         )}
       </div>
@@ -642,6 +655,9 @@ export default function CarRequests() {
       </Card>
       )}
 
+      {/* ============ Tab: Vehicle usage (kilometres per month) ============ */}
+      {tab === 'usage' && canAssign && <VehicleUsageTab />}
+
       {/* ============ Tab: Shift Handover (Administration) ============ */}
       {tab === 'handover' && canAssign && (
       <>
@@ -750,5 +766,175 @@ export default function CarRequests() {
       </>
       )}
     </div>
+  );
+}
+
+/**
+ * Monthly distance per vehicle, built from the odometer readings taken at the
+ * driver's Ready (departure) and Back-at-office (return) taps. One trip = return
+ * − departure; a vehicle's month = the sum of its completed trips. Trips that
+ * opened but have no return reading are listed as pending, so a gap is visible
+ * instead of silently shrinking the total.
+ */
+interface UsageTrip {
+  assignmentId: string;
+  docNumber: string;
+  destination: string | null;
+  startDate: string | null;
+  driverName: string | null;
+  startOdoKm: number | null;
+  endOdoKm: number | null;
+  startOdoAt: string | null;
+  endOdoAt: string | null;
+  usageKm: number | null;
+  hasPhoto: boolean;
+  complete: boolean;
+}
+interface UsageVehicle {
+  vehicleId: string;
+  vehicleNo: string;
+  brandModel: string | null;
+  totalKm: number;
+  tripCount: number;
+  trips: UsageTrip[];
+}
+interface UsageReport {
+  month: string;
+  grandTotalKm: number;
+  tripCount: number;
+  pendingCount: number;
+  vehicles: UsageVehicle[];
+}
+
+function thisMonth(): string {
+  // the office books in Asia/Yangon
+  const y = new Date(Date.now() + 6.5 * 3600 * 1000);
+  return `${y.getUTCFullYear()}-${String(y.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function VehicleUsageTab() {
+  const [month, setMonth] = useState(thisMonth);
+  const [report, setReport] = useState<UsageReport | null>(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setError('');
+    api<UsageReport>(`/cars/usage?month=${encodeURIComponent(month)}`)
+      .then((r) => !cancelled && setReport(r))
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : 'Could not load usage'));
+    return () => {
+      cancelled = true;
+    };
+  }, [month]);
+
+  const km = (n: number | null | undefined) => (n == null ? '—' : `${n.toLocaleString()} km`);
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+        <div>
+          <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">🛣️ Vehicle usage</h2>
+          <p className="text-xs text-gray-400 mt-1">
+            Distance per trip from the odometer at Ready and Back at office — summed per vehicle for the month.
+          </p>
+        </div>
+        <div className="w-44">
+          <label htmlFor="usage-month" className="block text-xs text-gray-500 mb-1">Month</label>
+          <Input id="usage-month" type="month" value={month} onChange={(e) => setMonth(e.target.value || thisMonth())} />
+        </div>
+      </div>
+
+      {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
+      {!report ? (
+        <Empty label="Loading usage…" />
+      ) : report.vehicles.length === 0 ? (
+        <Empty label="No odometer readings for this month yet" />
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-3 mb-4 text-sm">
+            <span className="px-3 py-1 rounded-full bg-yellow-50 border border-yellow-200 text-yellow-800 font-medium">
+              {report.grandTotalKm.toLocaleString()} km total · {report.tripCount} trip{report.tripCount === 1 ? '' : 's'}
+            </span>
+            {report.pendingCount > 0 && (
+              <span className="px-3 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800">
+                ⏳ {report.pendingCount} trip{report.pendingCount === 1 ? '' : 's'} waiting for a return reading
+              </span>
+            )}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                  <th className="px-3 py-2 font-medium">Vehicle</th>
+                  <th className="px-3 py-2 font-medium">Trips</th>
+                  <th className="px-3 py-2 font-medium">Distance</th>
+                  <th className="px-3 py-2 font-medium" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {report.vehicles.map((v) => {
+                  const isOpen = open === v.vehicleId;
+                  return (
+                    <Fragment key={v.vehicleId}>
+                      <tr className="hover:bg-gray-50 cursor-pointer" onClick={() => setOpen(isOpen ? null : v.vehicleId)}>
+                        <td className="px-3 py-2">
+                          <span className="font-medium text-gray-800">🚗 {v.vehicleNo}</span>
+                          {v.brandModel && <span className="text-xs text-gray-500"> {v.brandModel}</span>}
+                        </td>
+                        <td className="px-3 py-2 text-gray-600">{v.tripCount}</td>
+                        <td className="px-3 py-2 font-medium text-gray-800">{km(v.totalKm)}</td>
+                        <td className="px-3 py-2 text-right text-xs text-blue-600">{isOpen ? '▾ hide trips' : '▸ trips'}</td>
+                      </tr>
+                      {isOpen && (
+                        <tr key={`${v.vehicleId}-detail`}>
+                          <td colSpan={4} className="px-3 pb-3 bg-gray-50/60">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr className="text-left text-gray-400 uppercase tracking-wide">
+                                  <th className="px-2 py-1 font-medium">Doc No.</th>
+                                  <th className="px-2 py-1 font-medium">Destination</th>
+                                  <th className="px-2 py-1 font-medium">Driver</th>
+                                  <th className="px-2 py-1 font-medium">Ready → Back</th>
+                                  <th className="px-2 py-1 font-medium text-right">Distance</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-100">
+                                {v.trips.map((t) => (
+                                  <tr key={t.assignmentId}>
+                                    <td className="px-2 py-1">
+                                      <span className="font-medium text-gray-700">{t.docNumber}</span>
+                                      {t.hasPhoto && <span title="Odometer photo on file"> 📷</span>}
+                                    </td>
+                                    <td className="px-2 py-1 text-gray-600">{t.destination ?? '—'}</td>
+                                    <td className="px-2 py-1 text-gray-600">{t.driverName ?? '—'}</td>
+                                    <td className="px-2 py-1 text-gray-600">
+                                      {km(t.startOdoKm)} → {km(t.endOdoKm)}
+                                      {t.endOdoAt && <span className="text-gray-400"> · {fmtShort(t.endOdoAt)}</span>}
+                                    </td>
+                                    <td className="px-2 py-1 text-right font-medium text-gray-800">
+                                      {t.complete ? km(t.usageKm) : <span className="text-amber-700">⏳ pending</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-3">
+            A trip counts once both readings exist. Missing readings are entered in the request's Car panel (🛣️ Odometer),
+            or by the driver right after the Telegram tap.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }

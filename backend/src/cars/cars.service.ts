@@ -1,6 +1,10 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, TripStatus, VehicleStatus, WorkflowStatus } from '@prisma/client';
 import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import { sniffImageType } from '../util/image-sniff';
+import { stripPhotoMetadata } from '../assets/photo-metadata';
 import { PrismaService } from '../prisma/prisma.module';
 import { PermissionsService } from '../auth/permissions.service';
 import { NumberingService } from '../numbering/numbering.service';
@@ -889,6 +893,255 @@ export class CarsService {
     // the requester's panel is already open in another tab — show the car now
     this.push(requestId);
     return assignment;
+  }
+
+  // ------------------------------------------------------------------
+  // Odometer (car kilo) at the driver's Ready / Back at Office taps
+  // ------------------------------------------------------------------
+  private odoRoot = process.env.UPLOAD_PATH || '/app/uploads';
+  /** Only a name this service wrote may be opened — a tampered row cannot escape the folder. */
+  private static readonly ODO_NAME = /^[0-9a-f-]{36}\.(jpg|png|webp)$/;
+  private static readonly ODO_MAX_BYTES = 5 * 1024 * 1024;
+
+  private odoDir(): string {
+    const dir = path.join(this.odoRoot, 'odometer');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o750 });
+    return dir;
+  }
+
+  /**
+   * Record the car's kilo at departure (READY) or return (BACK), with the
+   * dashboard photo as evidence. The stage itself is stamped through the same
+   * driver-ack path the Telegram buttons use (telegram.manualAck), so a reading
+   * entered by Administration when the driver phoned it in frees the car and
+   * closes the request exactly like a driver tap — and a reading added AFTER the
+   * driver already tapped only fills the numbers in.
+   *
+   * Guards, because a typo here becomes a wrong monthly distance forever:
+   *  • whole kilometres, non-negative;
+   *  • the return reading cannot be below the departure reading;
+   *  • a departure reading cannot be below the last return this vehicle already
+   *    recorded (odometers only ever go up) — correct the earlier entry instead;
+   *  • a NEW reading needs a photo; correcting a reading that already has one
+   *    may reuse it.
+   */
+  async captureOdometer(
+    assignmentId: string,
+    data: { stage?: string; km?: number | string },
+    photo: { buffer: Buffer; size?: number } | undefined,
+    actor: { userId?: string; username: string },
+  ) {
+    const stage = data.stage === 'READY' ? 'READY' : data.stage === 'BACK' ? 'BACK' : null;
+    if (!stage) throw new BadRequestException('stage must be READY (departure) or BACK (return)');
+    const km = Number(data.km);
+    if (!Number.isInteger(km) || km < 0 || km > 9_999_999) {
+      throw new BadRequestException('Enter the odometer reading as whole kilometres');
+    }
+    const a = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      include: {
+        vehicle: { select: { id: true, vehicleNo: true, currentMileage: true } },
+        request: { select: { id: true, docNumber: true } },
+      },
+    });
+    if (!a) throw new NotFoundException('Assignment not found');
+
+    if (stage === 'BACK' && a.startOdoKm != null && km < a.startOdoKm) {
+      throw new BadRequestException(
+        `Return reading (${km.toLocaleString()} km) cannot be less than the departure reading (${a.startOdoKm.toLocaleString()} km)`,
+      );
+    }
+    if (stage === 'READY') {
+      const lastReturn = await this.prisma.carAssignment.findFirst({
+        where: { vehicleId: a.vehicleId, id: { not: assignmentId }, endOdoKm: { not: null } },
+        orderBy: { endOdoAt: 'desc' },
+        select: { endOdoKm: true, endOdoAt: true },
+      });
+      if (lastReturn?.endOdoKm != null && km < lastReturn.endOdoKm) {
+        const on = lastReturn.endOdoAt ? lastReturn.endOdoAt.toISOString().slice(0, 10) : 'an earlier trip';
+        throw new BadRequestException(
+          `Departure reading (${km.toLocaleString()} km) is below the last recorded return of ${a.vehicle.vehicleNo} (${lastReturn.endOdoKm.toLocaleString()} km on ${on}) — check the number, or correct that earlier entry first`,
+        );
+      }
+    }
+
+    const existing = stage === 'READY' ? a.startOdoPhoto : a.endOdoPhoto;
+    let stored = existing;
+    if (photo?.buffer?.length) {
+      if (photo.buffer.length > CarsService.ODO_MAX_BYTES) throw new BadRequestException('Photo too large (max 5 MB)');
+      const type = sniffImageType(photo.buffer);
+      if (!type) throw new BadRequestException('The odometer photo must be a JPEG, PNG or WebP image');
+      stored = `${crypto.randomUUID()}.${type.ext}`;
+      fs.writeFileSync(path.join(this.odoDir(), stored), stripPhotoMetadata(photo.buffer, type.mime), { mode: 0o600 });
+    }
+    if (!stored) throw new BadRequestException('Attach a photo of the odometer');
+
+    const now = new Date();
+    const fields =
+      stage === 'READY'
+        ? { startOdoKm: km, startOdoPhoto: stored, startOdoAt: now }
+        : { endOdoKm: km, endOdoPhoto: stored, endOdoAt: now };
+    await this.prisma.carAssignment.update({ where: { id: assignmentId }, data: fields });
+
+    // stamp the stage only when it is still missing — a reading added later must
+    // not move a tap that already happened
+    let stamped: 'READY' | 'BACK' | null = null;
+    if (actor.userId) {
+      const who = { userId: actor.userId, username: actor.username };
+      if (stage === 'READY' && !a.driverArrivedAt) {
+        await this.telegram.manualAck(assignmentId, 'arrived', who);
+        stamped = 'READY';
+      } else if (stage === 'BACK' && !a.driverBackAtOfficeAt) {
+        await this.telegram.manualAck(assignmentId, 'returned', who);
+        stamped = 'BACK';
+      }
+    }
+
+    const who = actor.userId ? { userId: actor.userId, username: actor.username } : { username: actor.username };
+    await this.audit.log({
+      ...who,
+      action: 'CAR_ODOMETER_RECORDED',
+      module: 'CARS',
+      recordId: a.requestId,
+      newValue: { stage, km, photo: !!stored, replaced: existing === stored ? undefined : existing ?? undefined, stamped, docNumber: a.request.docNumber },
+    });
+    this.push(a.requestId);
+
+    const usageKm =
+      stage === 'BACK' && a.startOdoKm != null ? km - a.startOdoKm : a.endOdoKm != null && a.startOdoKm != null ? a.endOdoKm - a.startOdoKm : null;
+    return {
+      assignmentId,
+      stage,
+      km,
+      stamped,
+      usageKm,
+      startOdoKm: stage === 'READY' ? km : a.startOdoKm,
+      endOdoKm: stage === 'BACK' ? km : a.endOdoKm,
+    };
+  }
+
+  /** The odometer photo of one stage — same access rule as the request panel. */
+  async odometerPhoto(assignmentId: string, stage: string, actor: Actor) {
+    const a = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      select: { requestId: true, startOdoPhoto: true, endOdoPhoto: true },
+    });
+    if (!a) throw new NotFoundException('Assignment not found');
+    // Anyone allowed to open the request may see its evidence photos.
+    await this.findByRequest(a.requestId, actor);
+    const name = stage === 'READY' ? a.startOdoPhoto : stage === 'BACK' ? a.endOdoPhoto : null;
+    if (!name || !CarsService.ODO_NAME.test(name)) throw new NotFoundException('No photo for that stage');
+    const filePath = path.join(this.odoRoot, 'odometer', name);
+    if (!fs.existsSync(filePath)) throw new NotFoundException('The photo file is missing');
+    const mime = name.endsWith('.png') ? 'image/png' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+    return { filePath, mime };
+  }
+
+  /** Yangon calendar month → UTC window (the office books in Asia/Yangon). */
+  private monthWindow(month?: string) {
+    const m = /^(\d{4})-(\d{2})$/.exec((month ?? '').trim());
+    const nowY = new Date(Date.now() + 6.5 * 3600 * 1000);
+    const y = m ? Number(m[1]) : nowY.getUTCFullYear();
+    const mo = m ? Number(m[2]) : nowY.getUTCMonth() + 1;
+    if (mo < 1 || mo > 12) throw new BadRequestException('month must look like 2026-11');
+    const start = new Date(Date.UTC(y, mo - 1, 1) - 6.5 * 3600 * 1000);
+    const end = new Date(Date.UTC(mo === 12 ? y + 1 : y, mo === 12 ? 0 : mo, 1) - 6.5 * 3600 * 1000);
+    return { start, end, label: `${y}-${String(mo).padStart(2, '0')}` };
+  }
+
+  /**
+   * Monthly distance per vehicle, built from the odometer readings alone:
+   * one trip = BACK reading − READY reading, a vehicle's month = the sum of its
+   * completed trips in that month. Trips that opened but never closed in the
+   * month are listed separately as "waiting for the return reading" so a gap is
+   * visible instead of silently shrinking the total.
+   */
+  async vehicleUsage(month?: string) {
+    const { start, end, label } = this.monthWindow(month);
+    const rows = await this.prisma.carAssignment.findMany({
+      where: {
+        OR: [
+          { endOdoAt: { gte: start, lt: end } },
+          { startOdoAt: { gte: start, lt: end } },
+        ],
+      },
+      select: {
+        id: true,
+        vehicleId: true,
+        startOdoKm: true,
+        endOdoKm: true,
+        startOdoAt: true,
+        endOdoAt: true,
+        startOdoPhoto: true,
+        endOdoPhoto: true,
+        driver: { select: { name: true } },
+        vehicle: { select: { vehicleNo: true, brandModel: true } },
+        request: { select: { docNumber: true } },
+        carRequest: { select: { destination: true, startDate: true } },
+      },
+      orderBy: [{ endOdoAt: 'asc' }, { startOdoAt: 'asc' }],
+    });
+
+    type Trip = {
+      assignmentId: string;
+      docNumber: string;
+      destination: string | null;
+      startDate: Date | null;
+      driverName: string | null;
+      startOdoKm: number | null;
+      endOdoKm: number | null;
+      startOdoAt: Date | null;
+      endOdoAt: Date | null;
+      usageKm: number | null;
+      hasPhoto: boolean;
+      complete: boolean;
+    };
+    const byVehicle = new Map<string, { vehicleNo: string; brandModel: string | null; totalKm: number; tripCount: number; trips: Trip[] }>();
+    for (const r of rows) {
+      if (!r.vehicleId) continue;
+      const complete = r.startOdoKm != null && r.endOdoKm != null;
+      const usageKm = complete ? (r.endOdoKm as number) - (r.startOdoKm as number) : null;
+      const g = byVehicle.get(r.vehicleId) ?? {
+        vehicleNo: r.vehicle?.vehicleNo ?? '—',
+        brandModel: r.vehicle?.brandModel ?? null,
+        totalKm: 0,
+        tripCount: 0,
+        trips: [],
+      };
+      g.trips.push({
+        assignmentId: r.id,
+        docNumber: r.request.docNumber,
+        destination: r.carRequest?.destination ?? null,
+        startDate: r.carRequest?.startDate ?? null,
+        driverName: r.driver?.name ?? null,
+        startOdoKm: r.startOdoKm,
+        endOdoKm: r.endOdoKm,
+        startOdoAt: r.startOdoAt,
+        endOdoAt: r.endOdoAt,
+        usageKm,
+        hasPhoto: !!(r.startOdoPhoto || r.endOdoPhoto),
+        complete,
+      });
+      if (usageKm != null) {
+        g.totalKm += usageKm;
+        g.tripCount += 1;
+      }
+      byVehicle.set(r.vehicleId, g);
+    }
+
+    const vehicles = [...byVehicle.entries()]
+      .map(([vehicleId, g]) => ({ vehicleId, ...g }))
+      .sort((a, b) => a.vehicleNo.localeCompare(b.vehicleNo));
+    const pendingCount = vehicles.reduce((n, v) => n + v.trips.filter((t) => !t.complete).length, 0);
+    return {
+      month: label,
+      from: start,
+      to: end,
+      grandTotalKm: vehicles.reduce((n, v) => n + v.totalKm, 0),
+      tripCount: vehicles.reduce((n, v) => n + v.tripCount, 0),
+      pendingCount,
+      vehicles,
+    };
   }
 
   /** Combined "Back at Office — BOTH trips" for a shared pair (Administration override; mirrors manualAck). */

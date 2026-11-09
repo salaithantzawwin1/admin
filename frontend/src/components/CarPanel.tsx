@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
+import { OdometerBox } from './OdometerBox';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
 import { toast } from './Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
@@ -46,6 +47,14 @@ interface CarRequest {
     driverArrivedAt?: string | null;
     driverBackAtOfficeAt?: string | null;
     estimatedReturnAt?: string | null;
+    /** car kilo at the "Ready" tap (departure) — with its dashboard photo */
+    startOdoKm?: number | null;
+    startOdoAt?: string | null;
+    startOdoPhoto?: string | null;
+    /** car kilo at "Back at office" (return) — usage = endOdoKm - startOdoKm */
+    endOdoKm?: number | null;
+    endOdoAt?: string | null;
+    endOdoPhoto?: string | null;
     /** set on a released booking: who was sent, even after the links were cleared */
     vehicle?: { vehicleNo?: string; brandModel?: string | null } | null;
     driver?: { name?: string } | null;
@@ -433,6 +442,11 @@ export function CarPanel({
               </Button>
               </span>
             </div>
+          )}
+          {/* 🛣️ car kilo at Ready / Back at office — the trip's distance and the
+              evidence photo; Administration records it here when the driver phoned */}
+          {liveAssignment && (
+            <OdometerBox assignment={liveAssignment} canManage={canAssign} onSaved={() => load()} />
           )}
           {car.sharedTripId && car.sharedRiders && car.sharedRiders.length > 0 && (
             <div className="mt-1 text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">

@@ -1323,6 +1323,18 @@ model CarAssignment {
   /// and extends the booking's effective end = max(endDate, estimatedReturnAt)
   /// for the fleet card, conflict pre-warning and availability checks.
   estimatedReturnAt    DateTime?
+  /// Odometer captured at the driver's "Ready" tap (car leaving the office):
+  /// the photo of the dashboard is the evidence, the number is what the
+  /// per-trip usage (endOdoKm - startOdoKm) and the monthly vehicle total are
+  /// computed from. Stored on the assignment, not the trip, because Ready and
+  /// Back at Office are assignment-level events.
+  startOdoKm           Int?
+  startOdoPhoto        String?
+  startOdoAt           DateTime?
+  /// Odometer captured at "Back at Office" — same shape as the departure pair.
+  endOdoKm             Int?
+  endOdoPhoto          String?
+  endOdoAt             DateTime?
   telegramMessageId    String? // Telegram message carrying the ack buttons (for stage edits)
 
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)

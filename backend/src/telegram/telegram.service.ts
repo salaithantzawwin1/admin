@@ -39,7 +39,13 @@ const CONFIG_REFRESH_MS = 60_000;
 
 interface TgUpdate {
   update_id: number;
-  message?: { chat: { id: number }; text?: string; from?: { id: number; username?: string; first_name?: string } };
+  message?: {
+    chat: { id: number };
+    text?: string;
+    from?: { id: number; username?: string; first_name?: string };
+    /** the driver's dashboard photo for an armed odometer capture (sizes, largest last) */
+    photo?: { file_id: string; file_size?: number; width?: number; height?: number }[];
+  };
   callback_query?: { id: string; data?: string; from?: { id: number }; message?: { chat: { id: number }; message_id: number } };
 }
 
@@ -65,6 +71,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   /** ⏰ Delay (driver-reported ETA) executor (wired by CarsModule → CarsService). */
   etaRef?: {
     reportEta(assignmentId: string, minutesOrText: number | string, chatId: string, callbackId?: string): Promise<void>;
+  };
+  /** 🛣️ Odometer capture executor (wired by CarsModule → CarsService.captureOdometer). */
+  odoRef?: {
+    capture(
+      assignmentId: string,
+      data: { stage: 'READY' | 'BACK'; km: number; photo?: { buffer: Buffer; size: number } },
+      actor: { username: string },
+    ): Promise<unknown>;
   };
   /** AnnouncementsService (wired by AnnouncementsModule) — audience checks for ack buttons. */
   announcementsRef?: { listMine(actor: { userId: string; username: string }): Promise<Array<{ id: string }>> };
@@ -230,10 +244,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.handleCallback(u.callback_query.data, String(u.callback_query.from.id), u.callback_query.id);
       return;
     }
-    const text = u.message?.text?.trim();
     const chatId = u.message?.chat?.id != null ? String(u.message.chat.id) : null;
+    // 🛣️ dashboard photo for an armed Ready / Back-at-office capture
+    if (chatId && u.message?.photo?.length && this.pendingOdo.has(chatId)) {
+      await this.handleOdoPhoto(chatId, u.message.photo).catch((err) =>
+        this.logger.warn(`odometer photo failed: ${(err as Error).message}`),
+      );
+      return;
+    }
+    const text = u.message?.text?.trim();
     if (!text || !chatId) return;
     this.logger.log(`TG text update from ${chatId}: "${text}"`);
+    // 🛣️ an armed odometer capture — the next number IS the reading (photo first)
+    if (this.pendingOdo.has(chatId)) {
+      const handled = await this.handleOdoText(chatId, text).catch(() => false);
+      if (handled) return;
+    }
     // an in-progress reject conversation — the next text IS the reason (or /cancel aborts).
     // Any OTHER slash command aborts the conversation first, then runs normally
     // (so /assign etc. are never swallowed as a "reason").
@@ -990,6 +1016,129 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       username: updated.driver?.name ?? 'driver',
       newValue: { driverNotedAt: updated.driverNotedAt, driverArrivedAt: updated.driverArrivedAt, driverBackAtOfficeAt: updated.driverBackAtOfficeAt },
     });
+    // 🛣️ straight after the tap: ask for the dashboard photo, then the kilo
+    if (action === 'arrived' || action === 'returned') {
+      await this.askOdometer(updated.id, action === 'arrived' ? 'READY' : 'BACK').catch(() => undefined);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Odometer capture over Telegram (photo → kilo → recorded)
+  // ------------------------------------------------------------------
+
+  /**
+   * Arm the capture for one assignment and ask the driver for the photo. The
+   * stage itself was already stamped (the vehicle is free, the request closes);
+   * this only fills in the distance so a forgotten photo can never stall a trip.
+   */
+  private async askOdometer(assignmentId: string, stage: 'READY' | 'BACK') {
+    const a = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      select: {
+        startOdoKm: true,
+        endOdoKm: true,
+        driver: { select: { telegramChatId: true } },
+        request: { select: { docNumber: true } },
+      },
+    });
+    const chatId = a?.driver?.telegramChatId;
+    if (!a || !chatId) return;
+    if (stage === 'READY' ? a.startOdoKm != null : a.endOdoKm != null) return; // already captured
+    const at = Date.now();
+    this.pendingOdo.set(chatId, { assignmentId, stage, at });
+    setTimeout(() => {
+      const p = this.pendingOdo.get(chatId);
+      if (p && p.assignmentId === assignmentId && p.at === at) this.pendingOdo.delete(chatId);
+    }, 30 * 60_000).unref?.();
+    const head =
+      stage === 'READY'
+        ? `🚦 Ready ✓ — ${a.request.docNumber}\nကားမထွက်ခွာမီ odometer (ကီလိုမီတာ) ဓာတ်ပုံကို ဒီ chat ထဲ ပို့ပါ 📷`
+        : `🏁 ရုံးပြန်ရောက် ✓ — ${a.request.docNumber}\nပြန်ရောက်ချိန် odometer ဓာတ်ပုံကို ဒီ chat ထဲ ပို့ပါ 📷`;
+    await this.call('sendMessage', {
+      chat_id: chatId,
+      text: `${head}\nပြီးရင် ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)။ /cancel ဖြင့် ပယ်ဖျက်နိုင်သည်။`,
+    });
+  }
+
+  /** Driver sent the dashboard photo: keep it until the number arrives. */
+  private async handleOdoPhoto(chatId: string, photos: { file_id: string; file_size?: number }[]) {
+    const pending = this.pendingOdo.get(chatId);
+    if (!pending) return;
+    const best = [...photos].sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0))[0];
+    if (!best) return;
+    if ((best.file_size ?? 0) > 5 * 1024 * 1024) {
+      await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ ကြီးလွန်းသည် (အများဆုံး 5 MB) — သေးငယ်သော ဓာတ်ပုံ ပြန်ပို့ပါ' });
+      return;
+    }
+    const { token } = await this.config();
+    if (!token) return;
+    const file = await this.call<{ file_path?: string }>('getFile', { file_id: best.file_id });
+    if (!file?.file_path) {
+      await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ မရယူနိုင်ပါ — ထပ်ပို့ပါ' });
+      return;
+    }
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
+    if (!res.ok) {
+      await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ မရယူနိုင်ပါ — ထပ်ပို့ပါ' });
+      return;
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (!buffer.length || buffer.length > 5 * 1024 * 1024) {
+      await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ ကြီးလွန်းသည် (အများဆုံး 5 MB) — သေးငယ်သော ဓာတ်ပုံ ပြန်ပို့ပါ' });
+      return;
+    }
+    this.pendingOdo.set(chatId, { ...pending, photo: { buffer, size: buffer.length }, at: Date.now() });
+    await this.call('sendMessage', {
+      chat_id: chatId,
+      text: '✅ ဓာတ်ပုံ ရပါပြီ — ယခု odometer ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)',
+    });
+  }
+
+  /** Driver sent text while a capture is armed: the number (or /cancel). true = consumed. */
+  private async handleOdoText(chatId: string, text: string): Promise<boolean> {
+    const pending = this.pendingOdo.get(chatId);
+    if (!pending) return false;
+    if (text === '/cancel') {
+      this.pendingOdo.delete(chatId);
+      await this.call('sendMessage', { chat_id: chatId, text: '🛣️ Odometer ထည့်သွင်းမှု ပယ်ဖျက်ပြီး — Administration မှ နောက်မှ ထည့်နိုင်သည်' });
+      return true;
+    }
+    // any other command aborts the capture instead of being swallowed by it
+    if (text.startsWith('/')) {
+      this.pendingOdo.delete(chatId);
+      return false;
+    }
+    if (!pending.photo) {
+      await this.call('sendMessage', { chat_id: chatId, text: '📷 အရင်ဆုံး odometer ဓာတ်ပုံကို ပို့ပါ (/cancel ဖြင့် ပယ်ဖျက်)' });
+      return true;
+    }
+    const clean = text.replace(/[,\s]/g, '');
+    if (!/^\d{1,7}$/.test(clean)) {
+      await this.call('sendMessage', { chat_id: chatId, text: '🔢 ဂဏန်းသက်သက် ရိုက်ထည့်ပါ (ဥပမာ: 45210)' });
+      return true;
+    }
+    const km = Number(clean);
+    this.pendingOdo.delete(chatId);
+    try {
+      if (!this.odoRef) throw new Error('Odometer handler not ready');
+      await this.odoRef.capture(
+        pending.assignmentId,
+        { stage: pending.stage, km, photo: pending.photo },
+        { username: 'driver-telegram' },
+      );
+      await this.call('sendMessage', {
+        chat_id: chatId,
+        text: `✅ Odometer ${km.toLocaleString()} km မှတ်တမ်းတင်ပြီး — ကျေးဇူးတင်ပါသည်`,
+      });
+    } catch (e) {
+      // keep the capture armed so the driver can correct the number
+      this.pendingOdo.set(chatId, { ...pending, at: Date.now() });
+      await this.call('sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ ${(e as Error).message || 'မှတ်တမ်းတင် မရပါ'} — ဂဏန်း ပြန်ရိုက်ထည့်ပါ သို့မဟုတ် /cancel`,
+      });
+    }
+    return true;
   }
 
   /** Core stage machine shared by the Telegram callback and the manual admin override. */
@@ -1576,6 +1725,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       results.push({ requestId: a.requestId, done: true });
     }
     await this.repaintDriverCards(assignmentId);
+    // 🛣️ the car came back: ask for the return odometer (photo → kilo)
+    await this.askOdometer(assignmentId, 'BACK').catch(() => undefined);
     return results;
   }
 
@@ -1829,6 +1980,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private pendingCombinedBack = new Map<string, string>();
   /** chatId → assignment armed for the ⏰ custom-ETA text entry (10 min TTL). */
   private pendingEtaCustom = new Map<string, { assignmentId: string; at: number }>();
+  /** 🛣️ odometer capture armed for this chat: waiting for the photo, then the kilo. */
+  private pendingOdo = new Map<
+    string,
+    { assignmentId: string; stage: 'READY' | 'BACK'; at: number; photo?: { buffer: Buffer; size: number } }
+  >();
 
   /** Shared notification payload — text plus an optional "Open in AMS" deep link. */
   private async sendToChat(chatId: string, title: string, body?: string, link?: string) {

@@ -1,6 +1,9 @@
 import { Module, OnApplicationBootstrap, OnModuleInit } from '@nestjs/common';
+import { MulterModule } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { AuthModule } from '../auth/auth.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { TelegramService } from '../telegram/telegram.service';
 import { WorkflowModule, WorkflowService } from '../workflow/workflow.module';
 import { SettingsModule } from '../settings/settings.module';
 import { FleetComplianceModule } from '../fleet/compliance.module';
@@ -12,7 +15,15 @@ import { TelegramCarActionsService } from './telegram-car-actions.service';
 export { CarsService } from './cars.service';
 
 @Module({
-  imports: [AuthModule, TelegramModule, WorkflowModule, SettingsModule, FleetComplianceModule],
+  imports: [
+    AuthModule,
+    TelegramModule,
+    WorkflowModule,
+    SettingsModule,
+    FleetComplianceModule,
+    // odometer photos are sniffed in memory before anything is written
+    MulterModule.register({ storage: memoryStorage() }),
+  ],
   controllers: [CarsController],
   providers: [CarsService, TripRemindersService, TelegramCarActionsService],
   exports: [CarsService],
@@ -22,7 +33,14 @@ export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
     private cars: CarsService,
     private workflow: WorkflowService,
     private tgActions: TelegramCarActionsService,
-  ) {}
+    private telegram: TelegramService,
+  ) {
+    // 🛣️ the driver's Telegram photo + kilo lands on the same capture path the
+    // Administration panel uses (validation, evidence photo, audit trail)
+    this.telegram.odoRef = {
+      capture: (assignmentId, data, actor) => this.cars.captureOdometer(assignmentId, data, data.photo, actor),
+    };
+  }
 
   /** Requester-initiated cancel of an approved car request → module cleanup + notifications. */
   onModuleInit() {

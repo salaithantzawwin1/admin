@@ -1,4 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -161,6 +163,38 @@ export class CarsController {
 
   /** Administration manual ack override — same effects as the driver's Telegram buttons
    *  (used when the driver confirms by phone and Telegram is unavailable). */
+  /**
+   * Odometer (car kilo) at READY (departure) or BACK (return) — multipart:
+   * `km` = the reading, `file` = the dashboard photo.
+   */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Post('assignments/:assignmentId/odometer')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  captureOdometer(
+    @Req() req,
+    @Param('assignmentId') assignmentId: string,
+    @Body() body: { stage?: string; km?: string },
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.cars.captureOdometer(assignmentId, body, file, this.actor(req));
+  }
+
+  /** Odometer photo of one stage (READY | BACK) — request-access checked in the service. */
+  @Get('assignments/:assignmentId/odometer/:stage/photo')
+  async odometerPhoto(@Req() req, @Param('assignmentId') assignmentId: string, @Param('stage') stage: string, @Res() res: Response) {
+    const { filePath, mime } = await this.cars.odometerPhoto(assignmentId, stage, this.actor(req));
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+    res.sendFile(filePath);
+  }
+
+  /** Monthly distance per vehicle (`?month=YYYY-MM`), from the odometer readings. */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Get('usage')
+  vehicleUsage(@Query('month') month?: string) {
+    return this.cars.vehicleUsage(month);
+  }
+
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Post('assignments/simulate-ack')
   simulateAck(@Req() req, @Body() dto: { assignmentId?: string; action?: string }) {
