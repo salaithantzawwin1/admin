@@ -773,6 +773,70 @@ export class TripRemindersService {
     }
   }
 
+  /**
+   * Odometer follow-up: a trip whose stage was tapped but whose car kilo was
+   * never recorded has no distance, so the month's total silently loses it.
+   * Nudge Administration (cars.assign holders) at most once a day per
+   * assignment until the reading arrives; the car panel is one click away.
+   */
+  @Cron('0 20 * * * *') // hourly at :20 — quiet, and after the shift's rush
+  async odometerMissingNudge() {
+    try {
+      const now = new Date();
+      const old = new Date(now.getTime() - 2 * 3600 * 1000); // give the driver time to send it
+      const dayAgo = new Date(now.getTime() - 24 * 3600 * 1000);
+      const rows = await this.prisma.carAssignment.findMany({
+        where: {
+          AND: [
+            {
+              OR: [
+                { driverArrivedAt: { not: null, lt: old }, startOdoKm: null },
+                { driverBackAtOfficeAt: { not: null, lt: old }, endOdoKm: null },
+              ],
+            },
+            { OR: [{ odoNudgeAt: null }, { odoNudgeAt: { lt: dayAgo } }] },
+          ],
+        },
+        select: {
+          id: true,
+          startOdoKm: true,
+          endOdoKm: true,
+          driver: { select: { name: true } },
+          vehicle: { select: { vehicleNo: true } },
+          request: { select: { id: true, docNumber: true } },
+        },
+        orderBy: { driverBackAtOfficeAt: 'desc' },
+        take: 50,
+      });
+      if (rows.length === 0) return;
+      const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+      let sent = 0;
+      for (const a of rows) {
+        const missing: string[] = [];
+        if (a.startOdoKm == null) missing.push('departure kilometre (Ready)');
+        if (a.endOdoKm == null) missing.push('return kilometre (Back at office)');
+        if (missing.length === 0) continue;
+        if (adminIds.length > 0) {
+          await this.notifications.notifyMany(adminIds, {
+            type: REMINDER_TYPE as never,
+            title: `🛣️ Odometer missing — ${a.request.docNumber}`,
+            body: `${a.vehicle?.vehicleNo ?? 'The vehicle'}${a.driver?.name ? ` (${a.driver.name})` : ''} has no ${missing.join(' and ')}. Open the car panel, enter the kilo and attach the dashboard photo so the monthly usage stays correct.`,
+            link: `/requests/${a.request.id}`,
+            requestId: a.request.id,
+          }).catch(() => undefined);
+        }
+        await this.prisma.carAssignment.update({ where: { id: a.id }, data: { odoNudgeAt: now } }).catch(() => undefined);
+        await this.prisma.auditLog.create({
+          data: { action: 'CAR_ODOMETER_NUDGE', module: 'CARS', recordId: a.request.id, newValue: { missing } as never },
+        }).catch(() => undefined);
+        sent++;
+      }
+      if (sent > 0) this.logger.log(`odometer nudge sent for ${sent} assignment(s)`);
+    } catch (e) {
+      this.logger.warn(`odometerMissingNudge failed: ${(e as Error).message}`);
+    }
+  }
+
   private async auditLogCreateSafe(requestId: string, meta: Record<string, unknown>) {
     await this.prisma.auditLog.create({
       data: { action: 'WINDOW_ENDING_NUDGE', module: 'CARS', recordId: requestId, newValue: meta as never },

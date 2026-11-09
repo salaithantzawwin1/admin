@@ -144,7 +144,8 @@ body.modal-open {
 
 /* Asset QR sticker: printing shows only the label, nothing else on the page */
 @media print {
-  body * { visibility: hidden; }
+  /* only when a sticker is on screen — otherwise every page would print blank */
+  body:has(.qr-print) * { visibility: hidden; }
   .qr-print, .qr-print * { visibility: visible; }
   .qr-print {
     position: fixed;

@@ -942,6 +942,7 @@ export class CarsService {
       include: {
         vehicle: { select: { id: true, vehicleNo: true, currentMileage: true } },
         request: { select: { id: true, docNumber: true } },
+        carRequest: { select: { sharedTripId: true } },
       },
     });
     if (!a) throw new NotFoundException('Assignment not found');
@@ -973,6 +974,22 @@ export class CarsService {
       if (!type) throw new BadRequestException('The odometer photo must be a JPEG, PNG or WebP image');
       stored = `${crypto.randomUUID()}.${type.ext}`;
       fs.writeFileSync(path.join(this.odoDir(), stored), stripPhotoMetadata(photo.buffer, type.mime), { mode: 0o600 });
+      // a replaced photo is dead weight on the volume — drop the old file, but only
+      // after the new one is safely on disk
+      if (existing && existing !== stored && CarsService.ODO_NAME.test(existing)) {
+        // a shared trip's members point at the SAME file — never delete one that
+        // another row still references
+        const stillUsed = await this.prisma.carAssignment.count({
+          where: { OR: [{ startOdoPhoto: existing }, { endOdoPhoto: existing }] },
+        }).catch(() => 1);
+        if (stillUsed === 0) {
+          try {
+            fs.unlinkSync(path.join(this.odoRoot, 'odometer', existing));
+          } catch {
+            /* the row is the source of truth */
+          }
+        }
+      }
     }
     if (!stored) throw new BadRequestException('Attach a photo of the odometer');
 
@@ -983,12 +1000,33 @@ export class CarsService {
         : { endOdoKm: km, endOdoPhoto: stored, endOdoAt: now };
     await this.prisma.carAssignment.update({ where: { id: assignmentId }, data: fields });
 
+    // A shared ride is ONE physical trip booked twice: the same kilo (and the same
+    // photo) belongs to every member. Without this the partner row sits at
+    // "pending" for ever and the month's report looks like a lost reading.
+    const sharedTripId = a.carRequest?.sharedTripId ?? null;
+    if (sharedTripId) {
+      const siblings = await this.prisma.carAssignment.findMany({
+        where: {
+          id: { not: assignmentId },
+          vehicleId: a.vehicleId,
+          carRequest: { sharedTripId },
+          ...(stage === 'READY' ? { startOdoKm: null } : { endOdoKm: null }),
+        },
+        select: { id: true, requestId: true },
+      }).catch(() => []);
+      for (const s of siblings) {
+        await this.prisma.carAssignment.update({ where: { id: s.id }, data: fields }).catch(() => undefined);
+        this.push(s.requestId);
+      }
+    }
+
     // stamp the stage only when it is still missing — a reading added later must
-    // not move a tap that already happened
+    // not move a tap that already happened, and a departure reading entered after
+    // the car already came back must not stamp a Ready later than the return
     let stamped: 'READY' | 'BACK' | null = null;
     if (actor.userId) {
       const who = { userId: actor.userId, username: actor.username };
-      if (stage === 'READY' && !a.driverArrivedAt) {
+      if (stage === 'READY' && !a.driverArrivedAt && !a.driverBackAtOfficeAt) {
         await this.telegram.manualAck(assignmentId, 'arrived', who);
         stamped = 'READY';
       } else if (stage === 'BACK' && !a.driverBackAtOfficeAt) {
@@ -1077,7 +1115,7 @@ export class CarsService {
         driver: { select: { name: true } },
         vehicle: { select: { vehicleNo: true, brandModel: true } },
         request: { select: { docNumber: true } },
-        carRequest: { select: { destination: true, startDate: true } },
+        carRequest: { select: { destination: true, startDate: true, sharedTripId: true } },
       },
       orderBy: [{ endOdoAt: 'asc' }, { startOdoAt: 'asc' }],
     });
@@ -1095,12 +1133,22 @@ export class CarsService {
       usageKm: number | null;
       hasPhoto: boolean;
       complete: boolean;
+      /** part of a shared ride — one car, several bookings */
+      shared: boolean;
+      /** the partner booking of a shared ride: the distance is counted once */
+      sharedDuplicate: boolean;
     };
     const byVehicle = new Map<string, { vehicleNo: string; brandModel: string | null; totalKm: number; tripCount: number; trips: Trip[] }>();
+    const countedShared = new Set<string>();
     for (const r of rows) {
       if (!r.vehicleId) continue;
       const complete = r.startOdoKm != null && r.endOdoKm != null;
-      const usageKm = complete ? (r.endOdoKm as number) - (r.startOdoKm as number) : null;
+      const sharedTripId = r.carRequest?.sharedTripId ?? null;
+      // two bookings, one car, one physical drive: counting both would double the
+      // month's distance, so the first member of a shared group owns the number
+      const duplicate = sharedTripId ? countedShared.has(sharedTripId) : false;
+      if (sharedTripId && !duplicate) countedShared.add(sharedTripId);
+      const usageKm = complete && !duplicate ? (r.endOdoKm as number) - (r.startOdoKm as number) : null;
       const g = byVehicle.get(r.vehicleId) ?? {
         vehicleNo: r.vehicle?.vehicleNo ?? '—',
         brandModel: r.vehicle?.brandModel ?? null,
@@ -1121,6 +1169,8 @@ export class CarsService {
         usageKm,
         hasPhoto: !!(r.startOdoPhoto || r.endOdoPhoto),
         complete,
+        shared: !!sharedTripId,
+        sharedDuplicate: duplicate,
       });
       if (usageKm != null) {
         g.totalKm += usageKm;
@@ -1142,6 +1192,48 @@ export class CarsService {
       pendingCount,
       vehicles,
     };
+  }
+
+  /**
+   * CSV of the monthly usage report: one row per trip (departure → return, with
+   * the distance) followed by a subtotal per vehicle and the fleet total. Trips
+   * with a missing reading are exported as PENDING instead of being dropped, so
+   * the spreadsheet shows the same gap the screen does. Excel needs the BOM and
+   * CRLF to open UTF-8 in one piece.
+   */
+  async vehicleUsageCsv(month?: string) {
+    const r = await this.vehicleUsage(month);
+    const esc = (v: unknown) => {
+      const s = v == null ? '' : String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const day = (d: Date | null) =>
+      d ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Yangon', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d) : '';
+    const km = (n: number | null) => (n == null ? '' : String(n));
+    const lines: string[] = [
+      ['Vehicle', 'Brand/Model', 'Doc No.', 'Trip date', 'Destination', 'Driver', 'Departure km', 'Return km', 'Distance km', 'Status']
+        .map(esc)
+        .join(','),
+    ];
+    for (const v of r.vehicles) {
+      for (const t of v.trips) {
+        lines.push(
+          [
+            v.vehicleNo, v.brandModel ?? '', t.docNumber, day(t.startDate), t.destination ?? '', t.driverName ?? '',
+            km(t.startOdoKm), km(t.endOdoKm), t.complete ? String(t.usageKm) : '', t.complete ? 'COMPLETE' : 'PENDING',
+          ].map(esc).join(','),
+        );
+      }
+      lines.push(
+        [v.vehicleNo, v.brandModel ?? '', 'SUBTOTAL', '', '', '', '', '', String(v.totalKm), `${v.tripCount} trip(s)`]
+          .map(esc).join(','),
+      );
+    }
+    lines.push(
+      ['ALL VEHICLES', '', 'TOTAL', '', '', '', '', '', String(r.grandTotalKm), `${r.tripCount} trip(s), ${r.pendingCount} pending`]
+        .map(esc).join(','),
+    );
+    return { filename: `vehicle-usage-${r.month}.csv`, csv: `\ufeff${lines.join('\r\n')}\r\n` };
   }
 
   /** Combined "Back at Office — BOTH trips" for a shared pair (Administration override; mirrors manualAck). */

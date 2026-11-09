@@ -195,6 +195,17 @@ export class CarsController {
     return this.cars.vehicleUsage(month);
   }
 
+  /** The same report as a spreadsheet-friendly CSV (`?month=YYYY-MM`). */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Get('usage.csv')
+  async vehicleUsageCsv(@Query('month') month: string | undefined, @Res() res: Response) {
+    const { filename, csv } = await this.cars.vehicleUsageCsv(month);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(csv);
+  }
+
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Post('assignments/simulate-ack')
   simulateAck(@Req() req, @Body() dto: { assignmentId?: string; action?: string }) {

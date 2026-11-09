@@ -1087,7 +1087,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ ကြီးလွန်းသည် (အများဆုံး 5 MB) — သေးငယ်သော ဓာတ်ပုံ ပြန်ပို့ပါ' });
       return;
     }
-    this.pendingOdo.set(chatId, { ...pending, photo: { buffer, size: buffer.length }, at: Date.now() });
+    const at = Date.now();
+    this.pendingOdo.set(chatId, { ...pending, photo: { buffer, size: buffer.length }, at });
+    // the photo refreshed the capture — re-arm the abandon timeout on the new stamp
+    setTimeout(() => {
+      const p = this.pendingOdo.get(chatId);
+      if (p && p.assignmentId === pending.assignmentId && p.at === at) this.pendingOdo.delete(chatId);
+    }, 30 * 60_000).unref?.();
     await this.call('sendMessage', {
       chat_id: chatId,
       text: '✅ ဓာတ်ပုံ ရပါပြီ — ယခု odometer ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)',

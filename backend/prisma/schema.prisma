@@ -1335,6 +1335,9 @@ model CarAssignment {
   endOdoKm             Int?
   endOdoPhoto          String?
   endOdoAt             DateTime?
+  /// When Administration was last nudged that this trip's kilo is still missing
+  /// (throttles the follow-up to once a day per assignment).
+  odoNudgeAt           DateTime?
   telegramMessageId    String? // Telegram message carrying the ack buttons (for stage edits)
 
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)

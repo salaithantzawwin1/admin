@@ -26,6 +26,7 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 const { CarsService } = require('../src/cars/cars.service');
+const { TripRemindersService } = require('../src/cars/trip-reminders.service');
 
 const ACTOR = { userId: '11111111-1111-1111-1111-111111111111', username: 'admin' };
 const ASSIGNMENT_ID = '22222222-2222-2222-2222-222222222222';
@@ -189,6 +190,101 @@ async function main() {
   await test('vehicleUsage: a bad month is a 400, not an empty report', async () => {
     const { svc } = build({ usageRows: [] });
     await assert.rejects(() => svc.vehicleUsage('2026-13'), /2026-11/);
+  });
+
+
+  await test('captureOdometer: a shared ride copies the reading to the partner booking', async () => {
+    const updated: any[] = [];
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => assignment({ carRequest: { sharedTripId: 'g1' }, endOdoPhoto: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jpg' }),
+        findFirst: async () => null,
+        update: async (args: any) => { updated.push(args); return {}; },
+        findMany: async (args: any) => (args?.where?.carRequest ? [{ id: 'sibling-1', requestId: 'req-2' }] : []),
+        count: async () => 1,
+      },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, { log: async () => undefined }, { manualAck: async () => ({}) }, {} as any, { publish: () => undefined });
+    await svc.captureOdometer(ASSIGNMENT_ID, { stage: 'BACK', km: 45268 }, undefined, ACTOR);
+    assert.strictEqual(updated.length, 2, 'the own row and the partner booking');
+    assert.deepStrictEqual(updated[1].where, { id: 'sibling-1' });
+    assert.strictEqual(updated[1].data.endOdoKm, 45268, 'one physical drive, one reading');
+  });
+
+  await test('vehicleUsage: a shared ride is counted once, not once per booking', async () => {
+    const row = (id: string, doc: string) => ({
+      id, vehicleId: 'v1', startOdoKm: 1000, endOdoKm: 1040,
+      startOdoAt: new Date('2026-11-02T01:00:00Z'), endOdoAt: new Date('2026-11-02T09:00:00Z'),
+      startOdoPhoto: 'p1.jpg', endOdoPhoto: 'p2.jpg',
+      driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234', brandModel: 'Hilux' },
+      request: { docNumber: doc }, carRequest: { destination: 'Bago', startDate: new Date('2026-11-02T01:00:00Z'), sharedTripId: 'g1' },
+    });
+    const { svc } = build({ usageRows: [row('a1', 'CAR-1'), row('a2', 'CAR-2')] });
+    const res = await svc.vehicleUsage('2026-11');
+    assert.strictEqual(res.grandTotalKm, 40, 'the distance is counted once');
+    assert.strictEqual(res.tripCount, 1);
+    const v = res.vehicles[0];
+    assert.strictEqual(v.trips.length, 2, 'both bookings are still listed');
+    assert.strictEqual(v.trips.filter((t: any) => t.sharedDuplicate).length, 1);
+    assert.strictEqual(v.trips.filter((t: any) => t.shared).length, 2);
+    assert.strictEqual(res.pendingCount, 0, 'the partner booking must not look pending');
+  });
+
+  await test('vehicleUsageCsv: escapes commas and quotes, marks pending, subtotals + total', async () => {
+    const { svc } = build({
+      usageRows: [
+        {
+          id: 'a1', vehicleId: 'v1', startOdoKm: 1000, endOdoKm: 1040,
+          startOdoAt: new Date('2026-11-02T01:00:00Z'), endOdoAt: new Date('2026-11-02T09:00:00Z'),
+          startOdoPhoto: null, endOdoPhoto: null,
+          driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234', brandModel: 'Hilux' },
+          request: { docNumber: 'CAR-1' }, carRequest: { destination: 'Bago, "East"', startDate: new Date('2026-11-01T18:00:00Z') },
+        },
+        {
+          id: 'a2', vehicleId: 'v1', startOdoKm: 1040, endOdoKm: null,
+          startOdoAt: new Date('2026-11-05T01:00:00Z'), endOdoAt: null,
+          startOdoPhoto: null, endOdoPhoto: null,
+          driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234', brandModel: 'Hilux' },
+          request: { docNumber: 'CAR-2' }, carRequest: { destination: 'Mandalay', startDate: new Date('2026-11-05T01:00:00Z') },
+        },
+      ],
+    });
+    const out = await svc.vehicleUsageCsv('2026-11');
+    assert.strictEqual(out.filename, 'vehicle-usage-2026-11.csv');
+    assert.ok(out.csv.startsWith('﻿'), 'Excel needs the UTF-8 BOM');
+    assert.ok(out.csv.includes('"Bago, ""East"""'), 'commas and quotes are escaped');
+    assert.ok(out.csv.includes('PENDING'), 'a trip without a return reading stays visible');
+    assert.ok(out.csv.includes('SUBTOTAL') && out.csv.includes('ALL VEHICLES'));
+    assert.ok(out.csv.includes(',40,'), 'the complete trip carries its distance');
+  });
+
+  await test('odometerMissingNudge: one nudge per assignment, with what is missing', async () => {
+    const rows = [
+      { id: 'a1', startOdoKm: null, endOdoKm: null, driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234' }, request: { id: 'r1', docNumber: 'CAR-202611-0001' } },
+    ];
+    const notified: any[] = [];
+    const updates: any[] = [];
+    const audits: any[] = [];
+    const prisma: any = {
+      carAssignment: {
+        findMany: async () => rows,
+        findUnique: async () => null,
+        findFirst: async () => null,
+        update: async (a: any) => { updates.push(a); return {}; },
+        count: async () => 1,
+      },
+      auditLog: { create: async (a: any) => { audits.push(a); return {}; } },
+    };
+    const notifications: any = { notifyMany: async (ids: string[], data: any) => notified.push({ ids, data }) };
+    const permissions: any = { usersWithPermissions: async () => ['admin-1', 'admin-2'] };
+    const svc: any = new TripRemindersService(prisma, notifications, {} as any, permissions);
+    await svc.odometerMissingNudge();
+    assert.strictEqual(notified.length, 1, 'one message per assignment');
+    assert.deepStrictEqual(notified[0].ids, ['admin-1', 'admin-2']);
+    assert.ok(/departure/.test(notified[0].data.body) && /return/.test(notified[0].data.body));
+    assert.strictEqual(notified[0].data.link, '/requests/r1');
+    assert.ok(updates[0].data.odoNudgeAt instanceof Date, 'the nudge is stamped so it repeats at most daily');
+    assert.strictEqual(audits[0].data.action, 'CAR_ODOMETER_NUDGE');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

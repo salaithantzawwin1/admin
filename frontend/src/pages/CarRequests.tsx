@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, hasPermission } from '../api';
-import { Badge, Card, Empty, Input, PageHeader } from '../components/ui';
+import { api, getToken, hasPermission } from '../api';
+import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { CarRequestForm } from '../components/CarRequestForm';
 import { DriverAckStages } from '../components/CarPanel';
@@ -656,7 +656,8 @@ export default function CarRequests() {
       )}
 
       {/* ============ Tab: Vehicle usage (kilometres per month) ============ */}
-      {tab === 'usage' && canAssign && <VehicleUsageTab />}
+      {tab === 'usage' &&
+        (canAssign ? <VehicleUsageTab /> : <Card className="p-5 text-sm text-gray-500">Vehicle usage is visible to Administration.</Card>)}
 
       {/* ============ Tab: Shift Handover (Administration) ============ */}
       {tab === 'handover' && canAssign && (
@@ -789,6 +790,9 @@ interface UsageTrip {
   usageKm: number | null;
   hasPhoto: boolean;
   complete: boolean;
+  /** one car, several bookings — the distance is counted on one of them */
+  shared: boolean;
+  sharedDuplicate: boolean;
 }
 interface UsageVehicle {
   vehicleId: string;
@@ -817,6 +821,7 @@ function VehicleUsageTab() {
   const [report, setReport] = useState<UsageReport | null>(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -831,6 +836,28 @@ function VehicleUsageTab() {
 
   const km = (n: number | null | undefined) => (n == null ? '—' : `${n.toLocaleString()} km`);
 
+  /** Spreadsheet copy of exactly what is on screen (same month, same numbers). */
+  const downloadCsv = async () => {
+    setExporting(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/cars/usage.csv?month=${encodeURIComponent(month)}`, {
+        headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+      });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `vehicle-usage-${month}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <Card className="p-5">
       <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
@@ -840,9 +867,14 @@ function VehicleUsageTab() {
             Distance per trip from the odometer at Ready and Back at office — summed per vehicle for the month.
           </p>
         </div>
-        <div className="w-44">
-          <label htmlFor="usage-month" className="block text-xs text-gray-500 mb-1">Month</label>
-          <Input id="usage-month" type="month" value={month} onChange={(e) => setMonth(e.target.value || thisMonth())} />
+        <div className="flex items-end gap-2">
+          <div className="w-44">
+            <label htmlFor="usage-month" className="block text-xs text-gray-500 mb-1">Month</label>
+            <Input id="usage-month" type="month" value={month} onChange={(e) => setMonth(e.target.value || thisMonth())} />
+          </div>
+          <Button variant="ghost" onClick={() => void downloadCsv()} disabled={exporting}>
+            {exporting ? 'Preparing…' : '⬇️ CSV'}
+          </Button>
         </div>
       </div>
 
@@ -914,7 +946,15 @@ function VehicleUsageTab() {
                                       {t.endOdoAt && <span className="text-gray-400"> · {fmtShort(t.endOdoAt)}</span>}
                                     </td>
                                     <td className="px-2 py-1 text-right font-medium text-gray-800">
-                                      {t.complete ? km(t.usageKm) : <span className="text-amber-700">⏳ pending</span>}
+                                      {!t.complete ? (
+                                        <span className="text-amber-700">⏳ pending</span>
+                                      ) : t.usageKm != null ? (
+                                        km(t.usageKm)
+                                      ) : (
+                                        <span className="text-sky-700" title="Shared ride — the distance is counted on the partner booking">
+                                          🤝 shared
+                                        </span>
+                                      )}
                                     </td>
                                   </tr>
                                 ))}
