@@ -536,6 +536,7 @@ export class FleetService {
     vehicleNo: string; vehicleType: string; brandModel: string; capacity?: number;
     driverId?: string; registrationExpiry?: string; insuranceExpiry?: string; notes?: string;
     vin?: string; fuelType?: string; engineNo?: string; chassisNo?: string; make?: string; model?: string; year?: number;
+    serviceIntervalKm?: number; lastServiceKm?: number; lastServiceAt?: string;
   }, actor: Actor) {
     const exists = await this.prisma.vehicle.findUnique({ where: { vehicleNo: data.vehicleNo } });
     if (exists) throw new BadRequestException('Vehicle number already exists');
@@ -561,6 +562,9 @@ export class FleetService {
         make: data.make || null,
         model: data.model || null,
         year: data.year ?? null,
+        serviceIntervalKm: data.serviceIntervalKm ?? null,
+        lastServiceKm: data.lastServiceKm ?? null,
+        lastServiceAt: data.lastServiceAt ? new Date(data.lastServiceAt) : null,
       },
     });
     await this.audit.log({
@@ -576,6 +580,7 @@ export class FleetService {
     registrationExpiry?: string | null; insuranceExpiry?: string | null; notes?: string; currentMileage?: number;
     vin?: string | null; fuelType?: string | null; engineNo?: string | null; chassisNo?: string | null;
     make?: string | null; model?: string | null; year?: number | null;
+    serviceIntervalKm?: number | null; lastServiceKm?: number | null; lastServiceAt?: string | null;
   }, actor: Actor) {
     const old = await this.prisma.vehicle.findUnique({ where: { id }, include: { driver: { select: { name: true } } } });
     if (!old) throw new NotFoundException('Vehicle not found');
@@ -611,6 +616,10 @@ export class FleetService {
         ...(data.make === undefined ? {} : { make: data.make || null }),
         ...(data.model === undefined ? {} : { model: data.model || null }),
         ...(data.year === undefined ? {} : { year: data.year }),
+        // service tracking: recording a new last-service resets the weekly nudge
+        ...(data.serviceIntervalKm === undefined ? {} : { serviceIntervalKm: data.serviceIntervalKm }),
+        ...(data.lastServiceKm === undefined ? {} : { lastServiceKm: data.lastServiceKm, serviceNudgedAt: null }),
+        ...(data.lastServiceAt === undefined ? {} : { lastServiceAt: data.lastServiceAt ? new Date(data.lastServiceAt) : null }),
       },
     });
     await this.audit.log({

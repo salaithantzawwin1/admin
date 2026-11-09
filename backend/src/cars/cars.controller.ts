@@ -8,6 +8,7 @@ import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { TelegramService } from '../telegram/telegram.service';
 import { CarsService } from './cars.service';
+import { TripRemindersService } from './trip-reminders.service';
 import { Actor } from '../org/org.service';
 
 /**
@@ -65,6 +66,8 @@ class CompleteTripDto {
 class ExpenseDto {
   @IsIn(['FUEL', 'TOLL', 'PARKING', 'REPAIR', 'OTHER']) type!: string;
   @IsNumber() @Min(0.01) @Max(999999999) amount!: number;
+  /** FUEL only — the receipt's litres; price per litre is derived server-side */
+  @IsOptional() @IsNumber() @Min(0.1) @Max(10000) litres?: number;
   @IsOptional() @IsString() @MaxLength(300) description?: string;
   @IsOptional() @IsDateString() expenseDate?: string;
 }
@@ -74,7 +77,7 @@ class ExpenseDto {
 @UseGuards(JwtAuthGuard)
 @Controller('cars')
 export class CarsController {
-  constructor(private cars: CarsService, private telegram: TelegramService) {}
+  constructor(private cars: CarsService, private telegram: TelegramService, private reminders: TripRemindersService) {}
 
   private actor(req): Actor {
     return { userId: req.user.id, username: req.user.username };
@@ -193,6 +196,13 @@ export class CarsController {
   @Get('usage')
   vehicleUsage(@Query('month') month?: string) {
     return this.cars.vehicleUsage(month);
+  }
+
+  /** Send the weekly usage summary now (the Monday 08:00 cron is the same message). */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Post('usage/weekly-digest')
+  sendWeeklyUsageDigest() {
+    return this.reminders.sendWeeklyUsageDigestNow();
   }
 
   /** Monthly distance trend per vehicle (last `months` months) + fuel per km. */

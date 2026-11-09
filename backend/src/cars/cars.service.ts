@@ -1134,7 +1134,7 @@ export class CarsService {
         startOdoPhoto: true,
         endOdoPhoto: true,
         driver: { select: { name: true } },
-        vehicle: { select: { vehicleNo: true, brandModel: true } },
+        vehicle: { select: { vehicleNo: true, brandModel: true, currentMileage: true, serviceIntervalKm: true, lastServiceKm: true } },
         request: { select: { docNumber: true } },
         carRequest: { select: { destination: true, startDate: true, sharedTripId: true } },
       },
@@ -1144,13 +1144,17 @@ export class CarsService {
     // next to what it cost, so the report carries both and their ratio.
     const vehicleIds = [...new Set(rows.map((r) => r.vehicleId).filter((v): v is string => !!v))];
     const fuelByVehicle = new Map<string, number>();
+    const fuelLitresByVehicle = new Map<string, number>();
     if (vehicleIds.length) {
       try {
         const fuelRows = await this.prisma.carExpense.findMany({
           where: { vehicleId: { in: vehicleIds }, type: 'FUEL', expenseDate: { gte: start, lt: end } },
-          select: { vehicleId: true, amount: true },
+          select: { vehicleId: true, amount: true, litres: true },
         });
-        for (const f of fuelRows) fuelByVehicle.set(f.vehicleId, (fuelByVehicle.get(f.vehicleId) ?? 0) + Number(f.amount));
+        for (const f of fuelRows) {
+          fuelByVehicle.set(f.vehicleId, (fuelByVehicle.get(f.vehicleId) ?? 0) + Number(f.amount));
+          if (f.litres != null) fuelLitresByVehicle.set(f.vehicleId, (fuelLitresByVehicle.get(f.vehicleId) ?? 0) + Number(f.litres));
+        }
       } catch {
         /* the report is still useful without the money column */
       }
@@ -1174,7 +1178,13 @@ export class CarsService {
       /** the partner booking of a shared ride: the distance is counted once */
       sharedDuplicate: boolean;
     };
-    const byVehicle = new Map<string, { vehicleNo: string; brandModel: string | null; totalKm: number; tripCount: number; trips: Trip[] }>();
+    const byVehicle = new Map<string, {
+      vehicleNo: string; brandModel: string | null; totalKm: number; tripCount: number; trips: Trip[];
+      /** service position: distance driven since the last recorded service */
+      serviceIntervalKm: number | null;
+      lastServiceKm: number | null;
+      currentMileage: number;
+    }>();
     const countedShared = new Set<string>();
     for (const r of rows) {
       if (!r.vehicleId) continue;
@@ -1191,6 +1201,9 @@ export class CarsService {
         totalKm: 0,
         tripCount: 0,
         trips: [],
+        serviceIntervalKm: r.vehicle?.serviceIntervalKm ?? null,
+        lastServiceKm: r.vehicle?.lastServiceKm ?? null,
+        currentMileage: r.vehicle?.currentMileage ?? 0,
       };
       g.trips.push({
         assignmentId: r.id,
@@ -1218,11 +1231,17 @@ export class CarsService {
     const vehicles = [...byVehicle.entries()]
       .map(([vehicleId, g]) => {
         const fuelCost = Math.round((fuelByVehicle.get(vehicleId) ?? 0) * 100) / 100;
+        const fuelLitres = Math.round((fuelLitresByVehicle.get(vehicleId) ?? 0) * 100) / 100;
+        const sinceServiceKm = g.lastServiceKm != null ? Math.max(0, g.currentMileage - g.lastServiceKm) : null;
         return {
           vehicleId,
           ...g,
           fuelCost,
+          fuelLitres,
+          fuelPricePerLitre: fuelLitres > 0 && fuelCost > 0 ? Math.round((fuelCost / fuelLitres) * 100) / 100 : null,
           fuelCostPerKm: g.totalKm > 0 && fuelCost > 0 ? Math.round((fuelCost / g.totalKm) * 100) / 100 : null,
+          sinceServiceKm,
+          serviceDue: !!(g.serviceIntervalKm && g.serviceIntervalKm > 0 && sinceServiceKm != null && sinceServiceKm >= g.serviceIntervalKm),
         };
       })
       .sort((a, b) => a.vehicleNo.localeCompare(b.vehicleNo));
@@ -1233,6 +1252,7 @@ export class CarsService {
       to: end,
       grandTotalKm: vehicles.reduce((n, v) => n + v.totalKm, 0),
       grandTotalFuel: Math.round(vehicles.reduce((n, v) => n + v.fuelCost, 0) * 100) / 100,
+      grandTotalFuelLitres: Math.round(vehicles.reduce((n, v) => n + v.fuelLitres, 0) * 100) / 100,
       tripCount: vehicles.reduce((n, v) => n + v.tripCount, 0),
       pendingCount,
       vehicles,
@@ -1256,7 +1276,7 @@ export class CarsService {
       d ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Yangon', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d) : '';
     const km = (n: number | null) => (n == null ? '' : String(n));
     const lines: string[] = [
-      ['Vehicle', 'Brand/Model', 'Doc No.', 'Trip date', 'Destination', 'Driver', 'Departure km', 'Return km', 'Distance km', 'Status', 'Fuel cost (MMK)', 'Fuel per km']
+      ['Vehicle', 'Brand/Model', 'Doc No.', 'Trip date', 'Destination', 'Driver', 'Departure km', 'Return km', 'Distance km', 'Status', 'Fuel cost (MMK)', 'Fuel litres', 'Price per litre', 'Fuel per km']
         .map(esc)
         .join(','),
     ];
@@ -1266,19 +1286,22 @@ export class CarsService {
           [
             v.vehicleNo, v.brandModel ?? '', t.docNumber, day(t.startDate), t.destination ?? '', t.driverName ?? '',
             km(t.startOdoKm), km(t.endOdoKm), t.complete ? String(t.usageKm) : '', t.complete ? 'COMPLETE' : 'PENDING',
-            '', '',
+            '', '', '',
           ].map(esc).join(','),
         );
       }
       lines.push(
         [v.vehicleNo, v.brandModel ?? '', 'SUBTOTAL', '', '', '', '', '', String(v.totalKm), `${v.tripCount} trip(s)`,
-          v.fuelCost ? String(v.fuelCost) : '', v.fuelCostPerKm != null ? String(v.fuelCostPerKm) : '']
+          v.fuelCost ? String(v.fuelCost) : '', v.fuelLitres ? String(v.fuelLitres) : '',
+          v.fuelPricePerLitre != null ? String(v.fuelPricePerLitre) : '', v.fuelCostPerKm != null ? String(v.fuelCostPerKm) : '']
           .map(esc).join(','),
       );
     }
     lines.push(
       ['ALL VEHICLES', '', 'TOTAL', '', '', '', '', '', String(r.grandTotalKm), `${r.tripCount} trip(s), ${r.pendingCount} pending`,
-        String(r.grandTotalFuel), r.grandTotalKm > 0 && r.grandTotalFuel > 0 ? String(Math.round((r.grandTotalFuel / r.grandTotalKm) * 100) / 100) : '']
+        String(r.grandTotalFuel), String(r.grandTotalFuelLitres),
+        r.grandTotalFuelLitres > 0 ? String(Math.round((r.grandTotalFuel / r.grandTotalFuelLitres) * 100) / 100) : '',
+        r.grandTotalKm > 0 && r.grandTotalFuel > 0 ? String(Math.round((r.grandTotalFuel / r.grandTotalKm) * 100) / 100) : '']
         .map(esc).join(','),
     );
     return { filename: `vehicle-usage-${r.month}.csv`, csv: `\ufeff${lines.join('\r\n')}\r\n` };
@@ -2379,7 +2402,7 @@ export class CarsService {
   }
 
   async addExpense(requestId: string, data: {
-    type: string; amount: number; description?: string; expenseDate?: string;
+    type: string; amount: number; description?: string; expenseDate?: string; litres?: number;
   }, actor: Actor) {
     await this.assertExpenseAccess(requestId, actor);
     const assignment = await this.prisma.carAssignment.findUnique({
@@ -2389,6 +2412,11 @@ export class CarsService {
     if (!assignment?.trip) throw new NotFoundException('Trip not started for this request');
 
     if (!data.amount || data.amount <= 0) throw new BadRequestException('Amount must be positive');
+    // litres only make sense on fuel — a toll in litres is a typo, not data
+    if (data.litres != null && data.type === 'FUEL' && (!Number.isFinite(data.litres) || data.litres <= 0)) {
+      throw new BadRequestException('Litres must be a positive number');
+    }
+    const litres = data.type === 'FUEL' && data.litres ? new Prisma.Decimal(data.litres) : undefined;
 
     const expense = await this.prisma.carExpense.create({
       data: {
@@ -2396,6 +2424,7 @@ export class CarsService {
         vehicleId: assignment.vehicleId,
         type: data.type as never,
         amount: new Prisma.Decimal(data.amount),
+        litres,
         description: data.description,
         expenseDate: data.expenseDate ? new Date(data.expenseDate) : new Date(),
         createdById: actor.userId,
@@ -2405,7 +2434,7 @@ export class CarsService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'CAR_EXPENSE_ADDED', module: 'CARS', recordId: expense.id,
-      newValue: { requestId, type: data.type, amount: data.amount },
+      newValue: { requestId, type: data.type, amount: data.amount, litres: litres ? Number(litres) : undefined },
     });
     return expense;
   }

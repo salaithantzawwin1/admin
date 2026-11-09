@@ -96,6 +96,10 @@ export class VehicleDto {
   @IsOptional() @IsString() @MaxLength(64) make?: string;
   @IsOptional() @IsString() @MaxLength(64) model?: string;
   @IsOptional() @IsInt() @Min(1950) @Max(2100) year?: number;
+  // ---- service due by distance (both blank = no reminder)
+  @IsOptional() @IsInt() @Min(100) @Max(100000) serviceIntervalKm?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(2000000) lastServiceKm?: number;
+  @IsOptional() @IsDateString() lastServiceAt?: string;
 }
 
 class VehicleUpdateDto {
@@ -118,6 +122,10 @@ class VehicleUpdateDto {
   @IsOptional() @IsString() @MaxLength(64) make?: string | null;
   @IsOptional() @IsString() @MaxLength(64) model?: string | null;
   @IsOptional() @IsInt() @Min(1950) @Max(2100) year?: number | null;
+  // ---- service due by distance (null clears, number sets)
+  @IsOptional() @IsInt() @Min(100) @Max(100000) serviceIntervalKm?: number | null;
+  @IsOptional() @IsInt() @Min(0) @Max(2000000) lastServiceKm?: number | null;
+  @IsOptional() @IsDateString() lastServiceAt?: string | null;
 }
 
 class DriverDto {

@@ -1172,6 +1172,13 @@ model Vehicle {
   make               String? // e.g. Toyota
   model              String? // e.g. Probox
   year               Int? // manufacture year
+  // ---- Service due by distance (optional): remind once the car has driven
+  // serviceIntervalKm since lastServiceKm. Both blank = no reminder.
+  serviceIntervalKm  Int?
+  lastServiceKm      Int?
+  lastServiceAt      DateTime?
+  /// last time the "service due" reminder went out — one per week at most
+  serviceNudgedAt    DateTime?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @updatedAt
 
@@ -1375,6 +1382,9 @@ model CarExpense {
   type        CarExpenseType
   description String?
   amount      Decimal        @db.Decimal(12, 2)
+  /// Fuel bought, in litres, straight off the receipt. The price per litre is
+  /// derived (amount ÷ litres) so the two can never disagree.
+  litres      Decimal?       @db.Decimal(10, 2)
   expenseDate DateTime       @default(now())
   createdById String         @db.Uuid
   createdAt   DateTime       @default(now())

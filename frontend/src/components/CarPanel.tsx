@@ -92,6 +92,8 @@ interface Expense {
   id: string;
   type: string;
   amount: string;
+  /** FUEL only — the receipt's litres (price per litre is amount ÷ litres) */
+  litres?: string | null;
   description?: string;
   expenseDate: string;
 }
@@ -117,7 +119,7 @@ export function CarPanel({
   const [share, setShare] = useState(false);
   const [shiftForm, setShiftForm] = useState({ startDate: '', endDate: '' });
   const [tripForm, setTripForm] = useState({ startMileage: '', endMileage: '', remarks: '' });
-  const [expenseForm, setExpenseForm] = useState({ type: 'FUEL', amount: '', description: '' });
+  const [expenseForm, setExpenseForm] = useState({ type: 'FUEL', amount: '', litres: '', description: '' });
   // in-app dialogs (replace browser confirm/prompt)
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [confirmShift, setConfirmShift] = useState(false);
@@ -821,7 +823,14 @@ export function CarPanel({
             <ul className="mb-3 space-y-1 text-sm">
               {expenses.map((x) => (
                 <li key={x.id} className="flex justify-between">
-                  <span>{x.type}{x.description ? ` — ${x.description}` : ''}</span>
+                  <span>
+                    {x.type}{x.description ? ` — ${x.description}` : ''}
+                    {x.litres && Number(x.litres) > 0 && (
+                      <span className="text-gray-400">
+                        {' '}· {Number(x.litres).toLocaleString()} L · {(Number(x.amount) / Number(x.litres)).toLocaleString(undefined, { maximumFractionDigits: 0 })} MMK/L
+                      </span>
+                    )}
+                  </span>
                   <span className="font-medium">{Number(x.amount).toLocaleString()} MMK</span>
                 </li>
               ))}
@@ -837,11 +846,30 @@ export function CarPanel({
                 <option value="OTHER">Other</option>
               </Select>
               <Input className="!w-36" type="number" min={0} placeholder="Amount" value={expenseForm.amount} onChange={(e) => setExpenseForm({ ...expenseForm, amount: e.target.value })} />
+              {expenseForm.type === 'FUEL' && (
+                <Input
+                  className="!w-28"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  placeholder="Litres"
+                  title="Litres on the receipt — the price per litre is worked out from the amount"
+                  value={expenseForm.litres}
+                  onChange={(e) => setExpenseForm({ ...expenseForm, litres: e.target.value })}
+                />
+              )}
               <Input className="!w-52" placeholder="Description (optional)" value={expenseForm.description} onChange={(e) => setExpenseForm({ ...expenseForm, description: e.target.value })} />
               <Button
                 variant="ghost"
                 disabled={!expenseForm.amount}
-                onClick={() => act(() => api(`/cars/requests/${requestId}/expenses`, { method: 'POST', body: { ...expenseForm, amount: Number(expenseForm.amount) } }))}
+                onClick={() => act(() => api(`/cars/requests/${requestId}/expenses`, {
+                  method: 'POST',
+                  body: {
+                    ...expenseForm,
+                    amount: Number(expenseForm.amount),
+                    litres: expenseForm.type === 'FUEL' && expenseForm.litres ? Number(expenseForm.litres) : undefined,
+                  },
+                }))}
               >
                 Add Expense
               </Button>

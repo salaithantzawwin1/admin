@@ -1030,104 +1030,182 @@ export class TripRemindersService {
    * Monday 08:00 Yangon — the week's distance and fuel per vehicle for
    * Administration, with any vehicle running well above the fleet's cost per
    * kilometre flagged (the first sign of a fuel-card or odometer problem).
-   * Silent when nothing was driven. Shared rides count once.
+   * Shared rides count once. Silent when nothing was driven.
    */
   @Cron('0 0 8 * * 1')
   async weeklyUsageDigest() {
     try {
-      const now = new Date();
-      const nowY = new Date(Date.now() + 6.5 * 3600 * 1000);
-      const todayStart = new Date(Date.UTC(nowY.getUTCFullYear(), nowY.getUTCMonth(), nowY.getUTCDate()) - 6.5 * 3600 * 1000);
-      const from = new Date(todayStart.getTime() - 7 * 24 * 3600 * 1000);
-      const to = todayStart;
-
-      const rows = await this.prisma.carAssignment.findMany({
-        where: { endOdoAt: { gte: from, lt: to }, startOdoKm: { not: null }, endOdoKm: { not: null } },
-        select: {
-          startOdoKm: true,
-          endOdoKm: true,
-          vehicle: { select: { id: true, vehicleNo: true } },
-          carRequest: { select: { sharedTripId: true } },
-        },
-      });
-      const fuelRows = await this.prisma.carExpense.findMany({
-        where: { type: 'FUEL', expenseDate: { gte: from, lt: to } },
-        select: { vehicleId: true, amount: true },
-      }).catch(() => [] as Array<{ vehicleId: string; amount: unknown }>);
-
-      const kmByVehicle = new Map<string, { plate: string; km: number }>();
-      const sharedSeen = new Set<string>();
-      let totalKm = 0;
-      for (const r of rows) {
-        const id = r.vehicle?.id;
-        if (!id) continue;
-        const group = r.carRequest?.sharedTripId ?? null;
-        if (group) {
-          if (sharedSeen.has(group)) continue;
-          sharedSeen.add(group);
-        }
-        const distance = (r.endOdoKm ?? 0) - (r.startOdoKm ?? 0);
-        if (!Number.isFinite(distance) || distance < 0) continue;
-        const cur = kmByVehicle.get(id) ?? { plate: r.vehicle?.vehicleNo ?? '—', km: 0 };
-        cur.km += distance;
-        kmByVehicle.set(id, cur);
-        totalKm += distance;
-      }
-      const fuelByVehicle = new Map<string, number>();
-      let totalFuel = 0;
-      for (const f of fuelRows) {
-        if (!f.vehicleId) continue;
-        fuelByVehicle.set(f.vehicleId, (fuelByVehicle.get(f.vehicleId) ?? 0) + Number(f.amount));
-        totalFuel += Number(f.amount);
-      }
-      const ids = [...new Set([...kmByVehicle.keys(), ...fuelByVehicle.keys()])];
-      if (ids.length === 0 || (totalKm === 0 && totalFuel === 0)) {
-        this.logger.log('weekly usage digest: nothing driven — skipped');
-        return;
-      }
-      const fleetPerKm = totalKm > 0 && totalFuel > 0 ? totalFuel / totalKm : null;
-      const perVehicle = ids
-        .map((id) => {
-          const km = kmByVehicle.get(id)?.km ?? 0;
-          const fuel = Math.round((fuelByVehicle.get(id) ?? 0) * 100) / 100;
-          const perKm = km > 0 && fuel > 0 ? Math.round((fuel / km) * 100) / 100 : null;
-          return {
-            plate: kmByVehicle.get(id)?.plate ?? '—',
-            km,
-            fuel,
-            perKm,
-            flagged: !!perKm && !!fleetPerKm && km >= 50 && perKm > fleetPerKm * 1.3,
-          };
-        })
-        .sort((a, b) => b.km - a.km);
-
-      const lines: string[] = [`🗓️ <b>Weekly fleet usage — ${escapeHtml(yangonShort(from))} → ${escapeHtml(yangonShort(to))}</b>`];
-      lines.push(`🛣️ <b>${totalKm.toLocaleString()} km</b> · ⛽ ${Math.round(totalFuel).toLocaleString()} MMK${fleetPerKm ? ` · ${Math.round(fleetPerKm).toLocaleString()} MMK/km` : ''}`);
-      lines.push('', '<b>Per vehicle:</b>');
-      for (const v of perVehicle.slice(0, 20)) {
-        const parts = [`${v.km.toLocaleString()} km`];
-        if (v.fuel > 0) parts.push(`${Math.round(v.fuel).toLocaleString()} MMK`);
-        if (v.perKm != null) parts.push(`${Math.round(v.perKm).toLocaleString()} MMK/km`);
-        lines.push(`• ${escapeHtml(v.plate)} — ${parts.join(' · ')}${v.flagged ? ' ⚠️ high' : ''}`);
-      }
-      if (perVehicle.length > 20) lines.push(`• …and ${perVehicle.length - 20} more`);
-      if (perVehicle.some((v) => v.flagged)) {
-        lines.push('', '<i>⚠️ = more than 30% above the fleet average per km — check the fuel receipts or the odometer entry.</i>');
-      }
-      const text = lines.join('\n');
-      const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
-      const admins = await this.prisma.user.findMany({
-        where: { id: { in: adminIds }, telegramChatId: { not: null } },
-        select: { telegramChatId: true },
-      });
-      for (const a of admins) {
-        if (a.telegramChatId) await this.telegram.sendRaw(a.telegramChatId, text).catch(() => undefined);
-      }
-      this.logger.log(`weekly usage digest sent to ${admins.length} admin(s): ${totalKm} km, ${perVehicle.filter((v) => v.flagged).length} flagged`);
+      return await this.sendWeeklyUsageDigestNow();
     } catch (e) {
       this.logger.warn(`weeklyUsageDigest failed: ${(e as Error).message}`);
+      return { sent: 0, totalKm: 0, fuelCost: 0, flagged: 0, vehicles: [] as Array<{ plate: string; km: number; fuel: number; perKm: number | null; flagged: boolean }>, preview: '' };
     }
   }
+
+  /**
+   * The message itself — the cron above and the Usage tab's "send now" button
+   * run the very same code, so what Administration previews is what arrives.
+   */
+  async sendWeeklyUsageDigestNow() {
+    const nowY = new Date(Date.now() + 6.5 * 3600 * 1000);
+    const todayStart = new Date(Date.UTC(nowY.getUTCFullYear(), nowY.getUTCMonth(), nowY.getUTCDate()) - 6.5 * 3600 * 1000);
+    const from = new Date(todayStart.getTime() - 7 * 24 * 3600 * 1000);
+    const to = todayStart;
+
+    const rows = await this.prisma.carAssignment.findMany({
+      where: { endOdoAt: { gte: from, lt: to }, startOdoKm: { not: null }, endOdoKm: { not: null } },
+      select: {
+        startOdoKm: true,
+        endOdoKm: true,
+        vehicle: { select: { id: true, vehicleNo: true } },
+        carRequest: { select: { sharedTripId: true } },
+      },
+    });
+    const fuelRows = await this.prisma.carExpense.findMany({
+      where: { type: 'FUEL', expenseDate: { gte: from, lt: to } },
+      select: { vehicleId: true, amount: true, litres: true },
+    }).catch(() => [] as Array<{ vehicleId: string; amount: unknown; litres: unknown }>);
+
+    const kmByVehicle = new Map<string, { plate: string; km: number }>();
+    const sharedSeen = new Set<string>();
+    let totalKm = 0;
+    for (const r of rows) {
+      const id = r.vehicle?.id;
+      if (!id) continue;
+      const group = r.carRequest?.sharedTripId ?? null;
+      if (group) {
+        if (sharedSeen.has(group)) continue;
+        sharedSeen.add(group);
+      }
+      const distance = (r.endOdoKm ?? 0) - (r.startOdoKm ?? 0);
+      if (!Number.isFinite(distance) || distance < 0) continue;
+      const cur = kmByVehicle.get(id) ?? { plate: r.vehicle?.vehicleNo ?? '—', km: 0 };
+      cur.km += distance;
+      kmByVehicle.set(id, cur);
+      totalKm += distance;
+    }
+    const fuelByVehicle = new Map<string, number>();
+    const litresByVehicle = new Map<string, number>();
+    let totalFuel = 0;
+    let totalLitres = 0;
+    for (const f of fuelRows) {
+      if (!f.vehicleId) continue;
+      fuelByVehicle.set(f.vehicleId, (fuelByVehicle.get(f.vehicleId) ?? 0) + Number(f.amount));
+      totalFuel += Number(f.amount);
+      if (f.litres != null) {
+        litresByVehicle.set(f.vehicleId, (litresByVehicle.get(f.vehicleId) ?? 0) + Number(f.litres));
+        totalLitres += Number(f.litres);
+      }
+    }
+    const ids = [...new Set([...kmByVehicle.keys(), ...fuelByVehicle.keys()])];
+    if (ids.length === 0 || (totalKm === 0 && totalFuel === 0)) {
+      this.logger.log('weekly usage digest: nothing driven — skipped');
+      return { sent: 0, totalKm: 0, fuelCost: 0, flagged: 0, vehicles: [] as Array<{ plate: string; km: number; fuel: number; perKm: number | null; flagged: boolean }>, preview: '' };
+    }
+    const fleetPerKm = totalKm > 0 && totalFuel > 0 ? totalFuel / totalKm : null;
+    const perVehicle = ids
+      .map((id) => {
+        const km = kmByVehicle.get(id)?.km ?? 0;
+        const fuel = Math.round((fuelByVehicle.get(id) ?? 0) * 100) / 100;
+        const litres = Math.round((litresByVehicle.get(id) ?? 0) * 100) / 100;
+        const perKm = km > 0 && fuel > 0 ? Math.round((fuel / km) * 100) / 100 : null;
+        return {
+          plate: kmByVehicle.get(id)?.plate ?? '—',
+          km,
+          fuel,
+          litres,
+          pricePerLitre: litres > 0 && fuel > 0 ? Math.round((fuel / litres) * 100) / 100 : null,
+          perKm,
+          flagged: !!perKm && !!fleetPerKm && km >= 50 && perKm > fleetPerKm * 1.3,
+        };
+      })
+      .sort((a, b) => b.km - a.km);
+
+    const lines: string[] = [`🗓️ <b>Weekly fleet usage — ${escapeHtml(yangonShort(from))} → ${escapeHtml(yangonShort(to))}</b>`];
+    lines.push(`🛣️ <b>${totalKm.toLocaleString()} km</b> · ⛽ ${Math.round(totalFuel).toLocaleString()} MMK${fleetPerKm ? ` · ${Math.round(fleetPerKm).toLocaleString()} MMK/km` : ''}`);
+    if (totalLitres > 0) lines.push(`⛽ ${Math.round(totalLitres).toLocaleString()} L · ${Math.round(totalFuel / totalLitres).toLocaleString()} MMK/L`);
+    lines.push('', '<b>Per vehicle:</b>');
+    for (const v of perVehicle.slice(0, 20)) {
+      const parts = [`${v.km.toLocaleString()} km`];
+      if (v.fuel > 0) parts.push(`${Math.round(v.fuel).toLocaleString()} MMK`);
+      if (v.litres > 0) parts.push(`${Math.round(v.litres).toLocaleString()} L`);
+      if (v.perKm != null) parts.push(`${Math.round(v.perKm).toLocaleString()} MMK/km`);
+      lines.push(`• ${escapeHtml(v.plate)} — ${parts.join(' · ')}${v.flagged ? ' ⚠️ high' : ''}`);
+    }
+    if (perVehicle.length > 20) lines.push(`• …and ${perVehicle.length - 20} more`);
+    if (perVehicle.some((v) => v.flagged)) {
+      lines.push('', '<i>⚠️ = more than 30% above the fleet average per km — check the fuel receipts or the odometer entry.</i>');
+    }
+    const text = lines.join('\n');
+
+    const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+    const admins = await this.prisma.user.findMany({
+      where: { id: { in: adminIds }, telegramChatId: { not: null } },
+      select: { telegramChatId: true },
+    });
+    for (const a of admins) {
+      if (a.telegramChatId) await this.telegram.sendRaw(a.telegramChatId, text).catch(() => undefined);
+    }
+    const flagged = perVehicle.filter((v) => v.flagged).length;
+    this.logger.log(`weekly usage digest sent to ${admins.length} admin(s): ${totalKm} km, ${flagged} flagged`);
+    return {
+      sent: admins.length,
+      totalKm,
+      fuelCost: Math.round(totalFuel),
+      fuelLitres: Math.round(totalLitres * 100) / 100,
+      flagged,
+      vehicles: perVehicle.map((v) => ({ plate: v.plate, km: v.km, fuel: v.fuel, litres: v.litres, perKm: v.perKm, flagged: v.flagged })),
+      preview: text,
+    };
+  }
+
+  /**
+   * Daily 09:00 — a vehicle that has driven its service interval since the last
+   * recorded service gets one reminder a week to Fleet/Administration. The
+   * interval and the last service odometer live on the vehicle, so this needs
+   * no maintenance record; clearing the interval stops the reminders.
+   */
+  @Cron('0 0 9 * * *')
+  async serviceDueNudge() {
+    try {
+      const vehicles = await this.prisma.vehicle.findMany({
+        where: { serviceIntervalKm: { not: null }, lastServiceKm: { not: null } },
+        select: { id: true, vehicleNo: true, currentMileage: true, serviceIntervalKm: true, lastServiceKm: true, serviceNudgedAt: true },
+      });
+      const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+      const due = vehicles.filter((v) =>
+        v.serviceIntervalKm != null && v.lastServiceKm != null &&
+        v.currentMileage - v.lastServiceKm >= v.serviceIntervalKm &&
+        (!v.serviceNudgedAt || v.serviceNudgedAt < weekAgo),
+      );
+      if (due.length === 0) return { sent: 0, vehicles: [] as Array<{ vehicleNo: string; sinceServiceKm: number }> };
+
+      const userIds = await this.permissions.usersWithPermissions(['fleet.manage', 'cars.assign']);
+      for (const v of due) {
+        const sinceServiceKm = v.currentMileage - (v.lastServiceKm as number);
+        await this.notifications.notifyMany(userIds, {
+          type: 'VEHICLE_SERVICE_DUE' as never,
+          title: `🛠 ${v.vehicleNo} is due for service`,
+          body: `${sinceServiceKm.toLocaleString()} km since the last service (every ${(v.serviceIntervalKm as number).toLocaleString()} km) — book it before the next trip.`,
+          link: '/fleet',
+        });
+      }
+      await this.prisma.vehicle.updateMany({
+        where: { id: { in: due.map((v) => v.id) } },
+        data: { serviceNudgedAt: new Date() },
+      });
+      this.logger.log(`service due: ${due.length} vehicle(s) reminded`);
+      return {
+        sent: due.length,
+        vehicles: due.map((v) => ({ vehicleNo: v.vehicleNo, sinceServiceKm: v.currentMileage - (v.lastServiceKm as number) })),
+      };
+    } catch (e) {
+      this.logger.warn(`serviceDueNudge failed: ${(e as Error).message}`);
+      return { sent: 0, vehicles: [] as Array<{ vehicleNo: string; sinceServiceKm: number }> };
+    }
+  }
+
+
 
   /**
    * Overdue running trips: the booking window ended but the driver never tapped

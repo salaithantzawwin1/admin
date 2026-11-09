@@ -313,6 +313,73 @@ async function main() {
     assert.ok(csv.csv.includes('Fuel cost (MMK)') && csv.csv.includes('1400'));
   });
 
+
+  await test('addExpense: litres are stored for fuel and ignored for a toll', async () => {
+    const created: any[] = [];
+    const prisma: any = {
+      requestDocument: { findUnique: async () => ({ requesterId: ACTOR.userId }) },
+      carAssignment: { findUnique: async () => ({ id: ASSIGNMENT_ID, vehicleId: VEHICLE_ID, trip: { id: 't1' } }) },
+      carExpense: { create: async (args: any) => { created.push(args.data); return { id: 'e1', ...args.data }; } },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, { log: async () => undefined } as any, {} as any, {} as any, { publish: () => undefined } as any);
+    await svc.addExpense(REQUEST_ID, { type: 'FUEL', amount: 90000, litres: 40 }, ACTOR);
+    await svc.addExpense(REQUEST_ID, { type: 'TOLL', amount: 5000, litres: 40 }, ACTOR);
+    assert.strictEqual(Number(created[0].litres), 40, 'fuel keeps the litres');
+    assert.strictEqual(created[1].litres, undefined, 'a toll never carries litres');
+    await assert.rejects(() => svc.addExpense(REQUEST_ID, { type: 'FUEL', amount: 90000, litres: -1 }, ACTOR), /Litres/);
+  });
+
+  await test('vehicleUsage: fuel litres, price per litre and the service-due position', async () => {
+    const { svc } = build({
+      usageRows: [
+        {
+          id: 'a1', vehicleId: 'v1', startOdoKm: 1000, endOdoKm: 1100,
+          startOdoAt: new Date('2026-11-02T01:00:00Z'), endOdoAt: new Date('2026-11-02T09:00:00Z'),
+          startOdoPhoto: null, endOdoPhoto: null,
+          driver: { name: 'U Aung' },
+          vehicle: { vehicleNo: 'YGN-1234', brandModel: 'Hilux', currentMileage: 50500, serviceIntervalKm: 5000, lastServiceKm: 45000 },
+          request: { docNumber: 'CAR-1' }, carRequest: { destination: 'Bago', startDate: new Date('2026-11-02T01:00:00Z') },
+        },
+      ],
+      fuelRows: [{ vehicleId: 'v1', amount: '46000', litres: '10' }],
+    });
+    const res = await svc.vehicleUsage('2026-11');
+    const v = res.vehicles[0];
+    assert.strictEqual(v.fuelLitres, 10);
+    assert.strictEqual(v.fuelPricePerLitre, 4600, '46,000 MMK for 10 L');
+    assert.strictEqual(v.sinceServiceKm, 5500);
+    assert.strictEqual(v.serviceDue, true, '5,500 km since service on a 5,000 km interval');
+    assert.strictEqual(res.grandTotalFuelLitres, 10);
+    const csv = await svc.vehicleUsageCsv('2026-11');
+    assert.ok(csv.csv.includes('Fuel litres') && csv.csv.includes('Price per litre'));
+  });
+
+  await test('serviceDueNudge: only the vehicle past its interval is reminded, once', async () => {
+    const notified: any[] = [];
+    const stamped: any[] = [];
+    const prisma: any = {
+      vehicle: {
+        findMany: async () => [
+          { id: 'v1', vehicleNo: 'YGN-1234', currentMileage: 50500, serviceIntervalKm: 5000, lastServiceKm: 45000, serviceNudgedAt: null },
+          { id: 'v2', vehicleNo: 'YGN-5678', currentMileage: 49000, serviceIntervalKm: 5000, lastServiceKm: 45000, serviceNudgedAt: null },
+          { id: 'v3', vehicleNo: 'YGN-9999', currentMileage: 60000, serviceIntervalKm: 5000, lastServiceKm: 45000, serviceNudgedAt: new Date() },
+        ],
+        updateMany: async (args: any) => { stamped.push(args); return { count: 1 }; },
+      },
+    };
+    const svc: any = new TripRemindersService(
+      prisma,
+      { notifyMany: async (ids: string[], payload: any) => notified.push({ ids, payload }) } as any,
+      { sendRaw: async () => undefined } as any,
+      { usersWithPermissions: async () => ['a1'] } as any,
+    );
+    const res = await svc.serviceDueNudge();
+    assert.strictEqual(res.sent, 1, 'the recently nudged vehicle waits a week');
+    assert.ok(notified.length === 1 && notified[0].payload.title.includes('YGN-1234'));
+    assert.ok(notified[0].payload.body.includes('5,500 km'));
+    assert.deepStrictEqual(stamped[0].where.id.in, ['v1']);
+  });
+
   await test('shiftHandoverDigest: today\'s distance is reported per vehicle (shared ride once)', async () => {
     const odo = (plate: string, a: number, b: number, group: string | null) => ({
       startOdoKm: a, endOdoKm: b,
@@ -388,13 +455,16 @@ async function main() {
     const sent: string[] = [];
     const telegram: any = { sendRaw: async (_c: string, text: string) => { sent.push(text); } };
     const svc: any = new TripRemindersService(prisma, { notifyMany: async () => undefined } as any, telegram, { usersWithPermissions: async () => ['a1'] } as any);
-    await svc.weeklyUsageDigest();
+    const res = await svc.weeklyUsageDigest();
     assert.strictEqual(sent.length, 1);
     assert.ok(sent[0].includes('Weekly fleet usage'));
     assert.ok(sent[0].includes('200 km'), '100 + 100 km driven');
     assert.ok(sent[0].includes('YGN-1234') && sent[0].includes('YGN-5678'));
     assert.ok(sent[0].includes('⚠️ high'), 'the 4,000 MMK/km vehicle is flagged');
     assert.strictEqual((sent[0].match(/⚠️ high/g) ?? []).length, 1, 'only the outlier is flagged');
+    assert.strictEqual(res.sent, 1, 'the send-now button reports how many admins got it');
+    assert.strictEqual(res.flagged, 1);
+    assert.strictEqual(res.totalKm, 200);
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

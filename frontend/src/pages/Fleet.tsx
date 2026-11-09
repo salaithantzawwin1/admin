@@ -105,6 +105,10 @@ interface Vehicle {
   year?: number | null;
   registrationExpiry?: string | null;
   insuranceExpiry?: string | null;
+  /** service reminder: remind once this many km have been driven since lastServiceKm */
+  serviceIntervalKm?: number | null;
+  lastServiceKm?: number | null;
+  lastServiceAt?: string | null;
   /** server-computed VMS §6.3 status — EXPIRED | DUE_TODAY | UPCOMING | VALID | null */
   registrationExpiryStatus?: string | null;
   insuranceExpiryStatus?: string | null;
@@ -172,6 +176,7 @@ const emptyVForm: Record<string, string | number> = {
   vehicleNo: '', vehicleType: '', brandModel: '', capacity: 4, driverId: '', status: 'AVAILABLE',
   vin: '', fuelType: '', engineNo: '', chassisNo: '', make: '', model: '', year: '',
   registrationExpiry: '', insuranceExpiry: '',
+  serviceIntervalKm: '', lastServiceKm: '', lastServiceAt: '',
 };
 const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'];
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i; // same rule as the backend vehicle DTO
@@ -312,6 +317,9 @@ export default function Fleet() {
           year: vForm.year === '' ? undefined : Number(vForm.year),
           registrationExpiry: opt(vForm.registrationExpiry),
           insuranceExpiry: opt(vForm.insuranceExpiry),
+          serviceIntervalKm: opt(vForm.serviceIntervalKm === '' ? '' : Number(vForm.serviceIntervalKm)),
+          lastServiceKm: opt(vForm.lastServiceKm === '' ? '' : Number(vForm.lastServiceKm)),
+          lastServiceAt: opt(vForm.lastServiceAt),
         },
       });
       setVForm(emptyVForm);
@@ -363,6 +371,10 @@ export default function Fleet() {
           // null clears the expiry date (spec §6.2 renewal replaces it elsewhere)
           registrationExpiry: vForm.registrationExpiry || null,
           insuranceExpiry: vForm.insuranceExpiry || null,
+          // service reminder: blank clears it (no reminder), a number arms it
+          serviceIntervalKm: vForm.serviceIntervalKm === '' ? null : Number(vForm.serviceIntervalKm),
+          lastServiceKm: vForm.lastServiceKm === '' ? null : Number(vForm.lastServiceKm),
+          lastServiceAt: vForm.lastServiceAt || null,
         },
       });
       setEditingV(null);
@@ -1022,6 +1034,28 @@ export default function Fleet() {
                 <Input id="fleet-ins-expiry" type="date" value={vForm.insuranceExpiry} onChange={(e) => setVForm({ ...vForm, insuranceExpiry: e.target.value })} />
               </div>
             </div>
+            <details className="rounded-lg border border-gray-200 px-3 py-2">
+              <summary className="cursor-pointer select-none text-sm text-gray-600 font-medium">🛠 Service reminder (optional)</summary>
+              <div className="space-y-3 pt-3">
+                <p className="text-xs text-gray-500">
+                  Remind Administration once this many km have been driven since the last service. Leave both blank for no reminder.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label htmlFor="fleet-service-km" className="block text-xs text-gray-500 mb-1">Every (km)</label>
+                    <Input id="fleet-service-km" type="number" min={100} placeholder="5000" value={vForm.serviceIntervalKm} onChange={(e) => setVForm({ ...vForm, serviceIntervalKm: e.target.value })} />
+                  </div>
+                  <div>
+                    <label htmlFor="fleet-service-last-km" className="block text-xs text-gray-500 mb-1">Last service at (km)</label>
+                    <Input id="fleet-service-last-km" type="number" min={0} placeholder="42000" value={vForm.lastServiceKm} onChange={(e) => setVForm({ ...vForm, lastServiceKm: e.target.value })} />
+                  </div>
+                  <div>
+                    <label htmlFor="fleet-service-last-date" className="block text-xs text-gray-500 mb-1">Last service date</label>
+                    <Input id="fleet-service-last-date" type="date" value={vForm.lastServiceAt} onChange={(e) => setVForm({ ...vForm, lastServiceAt: e.target.value })} />
+                  </div>
+                </div>
+              </div>
+            </details>
             {/* Optional paperwork/spec data — collapsed so the quick add stays quick */}
             <details className="rounded-lg border border-gray-200 px-3 py-2">
               <summary className="cursor-pointer select-none text-sm text-gray-600 font-medium">Identification &amp; specs (optional)</summary>
@@ -1109,6 +1143,20 @@ export default function Fleet() {
               <div>
                 <label htmlFor="fleet-ins-expiry-2" className="block text-xs text-gray-500 mb-1">Insurance expiry</label>
                 <Input id="fleet-ins-expiry-2" type="date" value={vForm.insuranceExpiry} onChange={(e) => setVForm({ ...vForm, insuranceExpiry: e.target.value })} />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label htmlFor="fleet-service-km-2" className="block text-xs text-gray-500 mb-1">Service every (km)</label>
+                <Input id="fleet-service-km-2" type="number" min={100} placeholder="5000" value={vForm.serviceIntervalKm} onChange={(e) => setVForm({ ...vForm, serviceIntervalKm: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-service-last-km-2" className="block text-xs text-gray-500 mb-1">Last service at (km)</label>
+                <Input id="fleet-service-last-km-2" type="number" min={0} placeholder="42000" value={vForm.lastServiceKm} onChange={(e) => setVForm({ ...vForm, lastServiceKm: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-service-last-date-2" className="block text-xs text-gray-500 mb-1">Last service date</label>
+                <Input id="fleet-service-last-date-2" type="date" value={vForm.lastServiceAt} onChange={(e) => setVForm({ ...vForm, lastServiceAt: e.target.value })} />
               </div>
             </div>
             {/* Identification & specs — rarely edited, collapsed by default to keep
@@ -1311,6 +1359,9 @@ export default function Fleet() {
                           vin: v.vin ?? '', fuelType: v.fuelType ?? '', engineNo: v.engineNo ?? '', chassisNo: v.chassisNo ?? '', make: v.make ?? '', model: v.model ?? '', year: v.year ? String(v.year) : '',
                           registrationExpiry: v.registrationExpiry ? v.registrationExpiry.slice(0, 10) : '',
                           insuranceExpiry: v.insuranceExpiry ? v.insuranceExpiry.slice(0, 10) : '',
+                          serviceIntervalKm: v.serviceIntervalKm ? String(v.serviceIntervalKm) : '',
+                          lastServiceKm: v.lastServiceKm != null ? String(v.lastServiceKm) : '',
+                          lastServiceAt: v.lastServiceAt ? v.lastServiceAt.slice(0, 10) : '',
                         });
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}

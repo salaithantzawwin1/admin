@@ -803,7 +803,12 @@ interface UsageVehicle {
   trips: UsageTrip[];
   /** fuel bought for this vehicle in the month, and what a kilometre cost */
   fuelCost: number;
+  fuelLitres: number;
+  fuelPricePerLitre: number | null;
   fuelCostPerKm: number | null;
+  /** distance driven since the last recorded service, and whether it is due */
+  sinceServiceKm: number | null;
+  serviceDue: boolean;
 }
 interface TrendPoint {
   month: string;
@@ -851,6 +856,7 @@ interface UsageReport {
   month: string;
   grandTotalKm: number;
   grandTotalFuel: number;
+  grandTotalFuelLitres: number;
   tripCount: number;
   pendingCount: number;
   vehicles: UsageVehicle[];
@@ -869,6 +875,9 @@ function VehicleUsageTab() {
   const [open, setOpen] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [trend, setTrend] = useState<TrendReport | null>(null);
+  const [digestConfirm, setDigestConfirm] = useState(false);
+  const [sendingDigest, setSendingDigest] = useState(false);
+  const [digestNote, setDigestNote] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -887,6 +896,24 @@ function VehicleUsageTab() {
   const km = (n: number | null | undefined) => (n == null ? '—' : `${n.toLocaleString()} km`);
 
   /** Spreadsheet copy of exactly what is on screen (same month, same numbers). */
+  const sendDigest = async () => {
+    setSendingDigest(true);
+    setDigestNote('');
+    try {
+      const r = await api<{ sent: number; totalKm: number; flagged: number }>('/cars/usage/weekly-digest', { method: 'POST' });
+      setDigestNote(
+        r.sent > 0
+          ? `Sent to ${r.sent} admin${r.sent === 1 ? '' : 's'} — ${r.totalKm.toLocaleString()} km, ${r.flagged} flagged.`
+          : 'Nothing was driven in the last seven days — no message sent.',
+      );
+    } catch (e) {
+      setDigestNote(e instanceof Error ? e.message : 'Could not send the summary');
+    } finally {
+      setSendingDigest(false);
+      setDigestConfirm(false);
+    }
+  };
+
   const downloadCsv = async () => {
     setExporting(true);
     setError('');
@@ -925,8 +952,20 @@ function VehicleUsageTab() {
           <Button variant="ghost" onClick={() => void downloadCsv()} disabled={exporting}>
             {exporting ? 'Preparing…' : '⬇️ CSV'}
           </Button>
+          <Button
+            variant="ghost"
+            disabled={sendingDigest}
+            title="Send last week's distance and fuel per vehicle to Administration's Telegram (the Monday 08:00 message)"
+            onClick={() => (digestConfirm ? void sendDigest() : setDigestConfirm(true))}
+          >
+            {sendingDigest ? 'Sending…' : digestConfirm ? '✅ Confirm send' : '📨 Weekly summary'}
+          </Button>
+          {digestConfirm && !sendingDigest && (
+            <button className="text-xs text-gray-500 hover:underline pb-2" onClick={() => setDigestConfirm(false)}>cancel</button>
+          )}
         </div>
       </div>
+      {digestNote && <div className="mb-3 text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">{digestNote}</div>}
 
       {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
       {!report ? (
@@ -942,6 +981,7 @@ function VehicleUsageTab() {
             {report.grandTotalFuel > 0 && (
               <span className="px-3 py-1 rounded-full bg-sky-50 border border-sky-200 text-sky-800">
                 ⛽ {report.grandTotalFuel.toLocaleString()} MMK fuel
+                {report.grandTotalFuelLitres > 0 ? ` · ${report.grandTotalFuelLitres.toLocaleString()} L` : ''}
                 {report.grandTotalKm > 0 ? ` · ${(report.grandTotalFuel / report.grandTotalKm).toLocaleString(undefined, { maximumFractionDigits: 2 })} MMK/km` : ''}
               </span>
             )}
@@ -996,6 +1036,14 @@ function VehicleUsageTab() {
                         <td className="px-3 py-2">
                           <span className="font-medium text-gray-800">🚗 {v.vehicleNo}</span>
                           {v.brandModel && <span className="text-xs text-gray-500"> {v.brandModel}</span>}
+                          {v.serviceDue && (
+                            <div
+                              className="mt-0.5 inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-800"
+                              title={`${(v.sinceServiceKm ?? 0).toLocaleString()} km since the last service — due`}
+                            >
+                              🛠 service due
+                            </div>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-gray-600">{v.tripCount}</td>
                         <td className="px-3 py-2 font-medium text-gray-800">{km(v.totalKm)}</td>
@@ -1003,6 +1051,12 @@ function VehicleUsageTab() {
                           {v.fuelCost > 0 ? (
                             <>
                               {v.fuelCost.toLocaleString()} MMK
+                              {v.fuelLitres > 0 && (
+                                <div className="text-[11px] text-gray-400">
+                                  {v.fuelLitres.toLocaleString()} L
+                                  {v.fuelPricePerLitre != null ? ` · ${v.fuelPricePerLitre.toLocaleString()} MMK/L` : ''}
+                                </div>
+                              )}
                               {v.fuelCostPerKm != null && (
                                 <div className="text-[11px] text-gray-400">{v.fuelCostPerKm.toLocaleString()} MMK/km</div>
                               )}
