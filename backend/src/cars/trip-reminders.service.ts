@@ -944,7 +944,38 @@ export class TripRemindersService {
         orderBy: { endsAt: 'asc' },
       });
 
-      if (onRoad.length === 0 && today.length === 0 && blocked.length === 0) {
+      // Today's distance (Yangon day) from the odometer readings — the handover
+      // should say how much the fleet actually drove, not only who is still out.
+      // A shared ride is one physical drive, so its group counts once.
+      const nowY = new Date(Date.now() + 6.5 * 3600 * 1000);
+      const yStart = new Date(Date.UTC(nowY.getUTCFullYear(), nowY.getUTCMonth(), nowY.getUTCDate()) - 6.5 * 3600 * 1000);
+      const yEnd = new Date(yStart.getTime() + 24 * 3600 * 1000);
+      const odoToday = await this.prisma.carAssignment.findMany({
+        where: { endOdoAt: { gte: yStart, lt: yEnd }, startOdoKm: { not: null }, endOdoKm: { not: null } },
+        select: {
+          startOdoKm: true,
+          endOdoKm: true,
+          vehicle: { select: { vehicleNo: true } },
+          carRequest: { select: { sharedTripId: true } },
+        },
+      }).catch(() => [] as Array<{ startOdoKm: number | null; endOdoKm: number | null; vehicle: { vehicleNo: string } | null; carRequest: { sharedTripId: string | null } | null }>);
+      const sharedSeen = new Set<string>();
+      const kmByVehicle = new Map<string, number>();
+      let todayKm = 0;
+      for (const r of odoToday) {
+        const group = r.carRequest?.sharedTripId ?? null;
+        if (group) {
+          if (sharedSeen.has(group)) continue;
+          sharedSeen.add(group);
+        }
+        const km = (r.endOdoKm ?? 0) - (r.startOdoKm ?? 0);
+        if (!Number.isFinite(km) || km < 0) continue;
+        todayKm += km;
+        const plate = r.vehicle?.vehicleNo ?? '—';
+        kmByVehicle.set(plate, (kmByVehicle.get(plate) ?? 0) + km);
+      }
+
+      if (onRoad.length === 0 && today.length === 0 && blocked.length === 0 && todayKm === 0) {
         this.logger.log('shift-handover digest: nothing to report — skipped');
         return;
       }
@@ -972,6 +1003,12 @@ export class TripRemindersService {
       if (blocked.length > 0) {
         lines.push('', `<b>🛠 Blocked vehicles (${blocked.length}):</b>`);
         for (const u of blocked) lines.push(`• ${escapeHtml(u.vehicle?.vehicleNo ?? '—')} — ${escapeHtml(u.reason || 'Unavailable')} · until ${yangonClock(new Date(u.endsAt))}`);
+      }
+      if (todayKm > 0) {
+        lines.push('', `<b>🛣️ Today's distance (${todayKm.toLocaleString()} km):</b>`);
+        for (const [plate, km] of [...kmByVehicle.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)) {
+          lines.push(`• ${escapeHtml(plate)} — ${km.toLocaleString()} km`);
+        }
       }
       lines.push('', '<i>⏰ ETA သည် ကား ပြန်ရောက်မည့် ခန့်မှန်းချိန် — Back at Office နှိပ်ပါက အလိုအလျောက် ပျက်ပြယ်မည်။</i>');
       const text = lines.join('\n');

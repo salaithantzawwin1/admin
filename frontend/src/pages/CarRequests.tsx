@@ -801,10 +801,14 @@ interface UsageVehicle {
   totalKm: number;
   tripCount: number;
   trips: UsageTrip[];
+  /** fuel bought for this vehicle in the month, and what a kilometre cost */
+  fuelCost: number;
+  fuelCostPerKm: number | null;
 }
 interface UsageReport {
   month: string;
   grandTotalKm: number;
+  grandTotalFuel: number;
   tripCount: number;
   pendingCount: number;
   vehicles: UsageVehicle[];
@@ -889,11 +893,41 @@ function VehicleUsageTab() {
             <span className="px-3 py-1 rounded-full bg-yellow-50 border border-yellow-200 text-yellow-800 font-medium">
               {report.grandTotalKm.toLocaleString()} km total · {report.tripCount} trip{report.tripCount === 1 ? '' : 's'}
             </span>
+            {report.grandTotalFuel > 0 && (
+              <span className="px-3 py-1 rounded-full bg-sky-50 border border-sky-200 text-sky-800">
+                ⛽ {report.grandTotalFuel.toLocaleString()} MMK fuel
+                {report.grandTotalKm > 0 ? ` · ${(report.grandTotalFuel / report.grandTotalKm).toLocaleString(undefined, { maximumFractionDigits: 2 })} MMK/km` : ''}
+              </span>
+            )}
             {report.pendingCount > 0 && (
               <span className="px-3 py-1 rounded-full bg-amber-50 border border-amber-200 text-amber-800">
                 ⏳ {report.pendingCount} trip{report.pendingCount === 1 ? '' : 's'} waiting for a return reading
               </span>
             )}
+          </div>
+
+          {/* Distance at a glance — plain bars, no chart library, same numbers
+              as the table below. */}
+          <div className="mb-5">
+            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Distance by vehicle</h3>
+            <div className="space-y-1.5">
+              {report.vehicles.map((v) => {
+                const max = Math.max(...report.vehicles.map((x) => x.totalKm), 1);
+                return (
+                  <div key={v.vehicleId} className="flex items-center gap-2 text-xs">
+                    <span className="w-28 shrink-0 truncate text-gray-600" title={v.vehicleNo}>🚗 {v.vehicleNo}</span>
+                    <div className="h-4 flex-1 overflow-hidden rounded-full bg-gray-100">
+                      <div
+                        className="h-full rounded-full bg-yellow-500/80"
+                        style={{ width: `${Math.max(2, Math.round((v.totalKm / max) * 100))}%` }}
+                        title={`${v.totalKm.toLocaleString()} km`}
+                      />
+                    </div>
+                    <span className="w-24 shrink-0 text-right font-medium text-gray-700">{v.totalKm.toLocaleString()} km</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -902,6 +936,7 @@ function VehicleUsageTab() {
                   <th className="px-3 py-2 font-medium">Vehicle</th>
                   <th className="px-3 py-2 font-medium">Trips</th>
                   <th className="px-3 py-2 font-medium">Distance</th>
+                  <th className="px-3 py-2 font-medium">Fuel</th>
                   <th className="px-3 py-2 font-medium" />
                 </tr>
               </thead>
@@ -917,11 +952,23 @@ function VehicleUsageTab() {
                         </td>
                         <td className="px-3 py-2 text-gray-600">{v.tripCount}</td>
                         <td className="px-3 py-2 font-medium text-gray-800">{km(v.totalKm)}</td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {v.fuelCost > 0 ? (
+                            <>
+                              {v.fuelCost.toLocaleString()} MMK
+                              {v.fuelCostPerKm != null && (
+                                <div className="text-[11px] text-gray-400">{v.fuelCostPerKm.toLocaleString()} MMK/km</div>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right text-xs text-blue-600">{isOpen ? '▾ hide trips' : '▸ trips'}</td>
                       </tr>
                       {isOpen && (
                         <tr key={`${v.vehicleId}-detail`}>
-                          <td colSpan={4} className="px-3 pb-3 bg-gray-50/60">
+                          <td colSpan={5} className="px-3 pb-3 bg-gray-50/60">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr className="text-left text-gray-400 uppercase tracking-wide">

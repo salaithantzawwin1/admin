@@ -50,7 +50,7 @@ function assignment(over: Record<string, unknown> = {}) {
   };
 }
 
-function build(opts: { row?: any; lastReturn?: any; usageRows?: any[] } = {}) {
+function build(opts: { row?: any; lastReturn?: any; usageRows?: any[]; fuelRows?: any[] } = {}) {
   const updates: any[] = [];
   const audits: any[] = [];
   const ackCalls: any[] = [];
@@ -64,6 +64,7 @@ function build(opts: { row?: any; lastReturn?: any; usageRows?: any[] } = {}) {
       },
       findMany: async () => opts.usageRows ?? [],
     },
+    carExpense: { findMany: async () => opts.fuelRows ?? [] },
   };
   const audit: any = { log: async (payload: any) => audits.push(payload) };
   const telegram: any = {
@@ -285,6 +286,53 @@ async function main() {
     assert.strictEqual(notified[0].data.link, '/requests/r1');
     assert.ok(updates[0].data.odoNudgeAt instanceof Date, 'the nudge is stamped so it repeats at most daily');
     assert.strictEqual(audits[0].data.action, 'CAR_ODOMETER_NUDGE');
+  });
+
+
+  await test('vehicleUsage: fuel for the month is summed per vehicle and priced per km', async () => {
+    const { svc } = build({
+      usageRows: [
+        {
+          id: 'a1', vehicleId: 'v1', startOdoKm: 1000, endOdoKm: 1100,
+          startOdoAt: new Date('2026-11-02T01:00:00Z'), endOdoAt: new Date('2026-11-02T09:00:00Z'),
+          startOdoPhoto: null, endOdoPhoto: null,
+          driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234', brandModel: 'Hilux' },
+          request: { docNumber: 'CAR-1' }, carRequest: { destination: 'Bago', startDate: new Date('2026-11-02T01:00:00Z') },
+        },
+      ],
+      fuelRows: [
+        { vehicleId: 'v1', amount: '90000' },
+        { vehicleId: 'v1', amount: 50000 },
+      ],
+    });
+    const res = await svc.vehicleUsage('2026-11');
+    assert.strictEqual(res.vehicles[0].fuelCost, 140000);
+    assert.strictEqual(res.vehicles[0].fuelCostPerKm, 1400, '140,000 MMK over 100 km');
+    assert.strictEqual(res.grandTotalFuel, 140000);
+    const csv = await svc.vehicleUsageCsv('2026-11');
+    assert.ok(csv.csv.includes('Fuel cost (MMK)') && csv.csv.includes('1400'));
+  });
+
+  await test('shiftHandoverDigest: today\'s distance is reported per vehicle (shared ride once)', async () => {
+    const odo = (plate: string, a: number, b: number, group: string | null) => ({
+      startOdoKm: a, endOdoKm: b,
+      vehicle: { vehicleNo: plate },
+      carRequest: { sharedTripId: group },
+    });
+    const prisma: any = {
+      carAssignment: { findMany: async (args: any) => (args?.where?.endOdoAt ? [odo('YGN-1234', 1000, 1040, null), odo('YGN-1234', 2000, 2020, 'g1'), odo('YGN-1234', 2000, 2020, 'g1')] : []) },
+      carRequest: { findMany: async () => [] },
+      vehicleUnavailability: { findMany: async () => [] },
+      user: { findMany: async () => [{ telegramChatId: '777' }] },
+    };
+    const sent: string[] = [];
+    const telegram: any = { sendRaw: async (_chat: string, text: string) => { sent.push(text); } };
+    const svc: any = new TripRemindersService(prisma, { notifyMany: async () => undefined } as any, telegram, { usersWithPermissions: async () => ['a1'] } as any);
+    await svc.shiftHandoverDigest();
+    assert.strictEqual(sent.length, 1);
+    assert.ok(sent[0].includes("Today's distance"), 'the digest carries the day\'s distance');
+    assert.ok(sent[0].includes('60 km'), '40 + 20 shared counted once');
+    assert.ok(sent[0].includes('YGN-1234'));
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

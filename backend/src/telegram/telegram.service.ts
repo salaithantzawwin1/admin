@@ -1205,6 +1205,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return updated;
   }
 
+  /**
+   * Drop an armed odometer capture for this assignment — a re-assign or release
+   * makes the driver's half-finished photo/number belong to a car that is no
+   * longer theirs, and writing it to the new row would corrupt its history.
+   */
+  forgetOdometer(assignmentId: string) {
+    for (const [chatId, p] of this.pendingOdo) {
+      if (p.assignmentId === assignmentId) this.pendingOdo.delete(chatId);
+    }
+  }
+
   /** "Back at Office": free the vehicle + driver immediately (also on re-assign paths). */
   private async freeVehicle(assignmentId: string) {
     const a = await this.prisma.carAssignment.findUnique({

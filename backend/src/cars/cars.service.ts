@@ -836,6 +836,16 @@ export class CarsService {
           driverArrivedAt: null,
           driverBackAtOfficeAt: null,
           telegramMessageId: null,
+          // ...and neither may its odometer: those kilos belong to the car that
+          // was just taken off this booking, and counting them again would put
+          // the wrong distance on both vehicles' monthly totals
+          startOdoKm: null,
+          startOdoPhoto: null,
+          startOdoAt: null,
+          endOdoKm: null,
+          endOdoPhoto: null,
+          endOdoAt: null,
+          odoNudgeAt: null,
         },
       });
       await tx.carRequest.update({
@@ -890,6 +900,8 @@ export class CarsService {
       action: 'CAR_ASSIGNED', module: 'CARS', recordId: requestId,
       newValue: { vehicleId: data.vehicleId, driverId: data.driverId, ...(share ? { sharedTrip: true } : {}) },
     });
+    // a half-finished odometer capture belongs to the PREVIOUS car — drop it
+    this.telegram.forgetOdometer?.(assignment.id);
     // the requester's panel is already open in another tab — show the car now
     this.push(requestId);
     return assignment;
@@ -1119,6 +1131,21 @@ export class CarsService {
       },
       orderBy: [{ endOdoAt: 'asc' }, { startOdoAt: 'asc' }],
     });
+    // Fuel bought for the vehicle in the same month — a distance is only useful
+    // next to what it cost, so the report carries both and their ratio.
+    const vehicleIds = [...new Set(rows.map((r) => r.vehicleId).filter((v): v is string => !!v))];
+    const fuelByVehicle = new Map<string, number>();
+    if (vehicleIds.length) {
+      try {
+        const fuelRows = await this.prisma.carExpense.findMany({
+          where: { vehicleId: { in: vehicleIds }, type: 'FUEL', expenseDate: { gte: start, lt: end } },
+          select: { vehicleId: true, amount: true },
+        });
+        for (const f of fuelRows) fuelByVehicle.set(f.vehicleId, (fuelByVehicle.get(f.vehicleId) ?? 0) + Number(f.amount));
+      } catch {
+        /* the report is still useful without the money column */
+      }
+    }
 
     type Trip = {
       assignmentId: string;
@@ -1180,7 +1207,15 @@ export class CarsService {
     }
 
     const vehicles = [...byVehicle.entries()]
-      .map(([vehicleId, g]) => ({ vehicleId, ...g }))
+      .map(([vehicleId, g]) => {
+        const fuelCost = Math.round((fuelByVehicle.get(vehicleId) ?? 0) * 100) / 100;
+        return {
+          vehicleId,
+          ...g,
+          fuelCost,
+          fuelCostPerKm: g.totalKm > 0 && fuelCost > 0 ? Math.round((fuelCost / g.totalKm) * 100) / 100 : null,
+        };
+      })
       .sort((a, b) => a.vehicleNo.localeCompare(b.vehicleNo));
     const pendingCount = vehicles.reduce((n, v) => n + v.trips.filter((t) => !t.complete).length, 0);
     return {
@@ -1188,6 +1223,7 @@ export class CarsService {
       from: start,
       to: end,
       grandTotalKm: vehicles.reduce((n, v) => n + v.totalKm, 0),
+      grandTotalFuel: Math.round(vehicles.reduce((n, v) => n + v.fuelCost, 0) * 100) / 100,
       tripCount: vehicles.reduce((n, v) => n + v.tripCount, 0),
       pendingCount,
       vehicles,
@@ -1211,7 +1247,7 @@ export class CarsService {
       d ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Yangon', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d) : '';
     const km = (n: number | null) => (n == null ? '' : String(n));
     const lines: string[] = [
-      ['Vehicle', 'Brand/Model', 'Doc No.', 'Trip date', 'Destination', 'Driver', 'Departure km', 'Return km', 'Distance km', 'Status']
+      ['Vehicle', 'Brand/Model', 'Doc No.', 'Trip date', 'Destination', 'Driver', 'Departure km', 'Return km', 'Distance km', 'Status', 'Fuel cost (MMK)', 'Fuel per km']
         .map(esc)
         .join(','),
     ];
@@ -1221,16 +1257,19 @@ export class CarsService {
           [
             v.vehicleNo, v.brandModel ?? '', t.docNumber, day(t.startDate), t.destination ?? '', t.driverName ?? '',
             km(t.startOdoKm), km(t.endOdoKm), t.complete ? String(t.usageKm) : '', t.complete ? 'COMPLETE' : 'PENDING',
+            '', '',
           ].map(esc).join(','),
         );
       }
       lines.push(
-        [v.vehicleNo, v.brandModel ?? '', 'SUBTOTAL', '', '', '', '', '', String(v.totalKm), `${v.tripCount} trip(s)`]
+        [v.vehicleNo, v.brandModel ?? '', 'SUBTOTAL', '', '', '', '', '', String(v.totalKm), `${v.tripCount} trip(s)`,
+          v.fuelCost ? String(v.fuelCost) : '', v.fuelCostPerKm != null ? String(v.fuelCostPerKm) : '']
           .map(esc).join(','),
       );
     }
     lines.push(
-      ['ALL VEHICLES', '', 'TOTAL', '', '', '', '', '', String(r.grandTotalKm), `${r.tripCount} trip(s), ${r.pendingCount} pending`]
+      ['ALL VEHICLES', '', 'TOTAL', '', '', '', '', '', String(r.grandTotalKm), `${r.tripCount} trip(s), ${r.pendingCount} pending`,
+        String(r.grandTotalFuel), r.grandTotalKm > 0 && r.grandTotalFuel > 0 ? String(Math.round((r.grandTotalFuel / r.grandTotalKm) * 100) / 100) : '']
         .map(esc).join(','),
     );
     return { filename: `vehicle-usage-${r.month}.csv`, csv: `\ufeff${lines.join('\r\n')}\r\n` };
@@ -1466,6 +1505,15 @@ export class CarsService {
           driverArrivedAt: null,
           driverBackAtOfficeAt: null,
           telegramMessageId: null,
+          // a different car starts its own kilo history — keeping the old
+          // readings would credit this trip's distance to the wrong vehicle
+          startOdoKm: null,
+          startOdoPhoto: null,
+          startOdoAt: null,
+          endOdoKm: null,
+          endOdoPhoto: null,
+          endOdoAt: null,
+          odoNudgeAt: null,
         },
       });
       await tx.carRequest.update({
@@ -1518,6 +1566,7 @@ export class CarsService {
       }
     }
 
+    this.telegram.forgetOdometer?.(assignment.id);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'CAR_REASSIGNED', module: 'CARS', recordId: requestId,
