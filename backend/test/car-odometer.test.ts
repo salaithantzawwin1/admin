@@ -335,6 +335,68 @@ async function main() {
     assert.ok(sent[0].includes('YGN-1234'));
   });
 
+
+  await test('vehicleUsageTrend: six months of distance per vehicle, fuel per km, and the flag', async () => {
+    const row = (id: string, plate: string, kmStart: number, kmEnd: number, at: string) => ({
+      vehicleId: id, startOdoKm: kmStart, endOdoKm: kmEnd, endOdoAt: new Date(at),
+      vehicle: { vehicleNo: plate, brandModel: null }, carRequest: { sharedTripId: null },
+    });
+    const { svc } = build({
+      usageRows: [
+        row('v1', 'YGN-1234', 1000, 1100, '2026-10-12T03:00:00Z'),
+        row('v1', 'YGN-1234', 1100, 1200, '2026-11-03T03:00:00Z'),
+        row('v2', 'YGN-5678', 500, 600, '2026-11-04T03:00:00Z'),
+      ],
+      fuelRows: [
+        { vehicleId: 'v1', amount: 400000, expenseDate: new Date('2026-11-05T03:00:00Z') },
+        { vehicleId: 'v2', amount: 30000, expenseDate: new Date('2026-11-06T03:00:00Z') },
+      ],
+    });
+    const res = await svc.vehicleUsageTrend('2026-11', 6);
+    assert.deepStrictEqual(res.months, ['2026-06', '2026-07', '2026-08', '2026-09', '2026-10', '2026-11']);
+    const v1 = res.vehicles.find((v: any) => v.vehicleId === 'v1');
+    assert.strictEqual(v1.series.length, 6);
+    assert.strictEqual(v1.series[4].totalKm, 100, 'October distance');
+    assert.strictEqual(v1.series[5].totalKm, 100, 'November distance');
+    assert.strictEqual(v1.series[5].fuelPerKm, 4000, '400,000 MMK over 100 km');
+    assert.strictEqual(v1.totalKm, 200);
+    assert.strictEqual(v1.flagged, true, '4,000 vs fleet 1,433 MMK/km');
+    const v2 = res.vehicles.find((v: any) => v.vehicleId === 'v2');
+    assert.strictEqual(v2.flagged, false);
+    assert.strictEqual(Math.round(res.fleetFuelPerKm), 1433, '430,000 MMK over 300 km');
+    assert.strictEqual(res.vehicles[0].vehicleNo, 'YGN-1234', 'sorted by plate');
+  });
+
+  await test('weeklyUsageDigest: weekly km + fuel per vehicle, flags the expensive one', async () => {
+    const prisma: any = {
+      carAssignment: {
+        findMany: async () => [
+          { startOdoKm: 1000, endOdoKm: 1100, vehicle: { id: 'v1', vehicleNo: 'YGN-1234' }, carRequest: { sharedTripId: null } },
+          { startOdoKm: 500, endOdoKm: 600, vehicle: { id: 'v2', vehicleNo: 'YGN-5678' }, carRequest: { sharedTripId: null } },
+        ],
+      },
+      carExpense: {
+        findMany: async () => [
+          { vehicleId: 'v1', amount: 400000 },
+          { vehicleId: 'v2', amount: 30000 },
+        ],
+      },
+      user: { findMany: async () => [{ telegramChatId: '777' }] },
+      carRequest: { findMany: async () => [] },
+      vehicleUnavailability: { findMany: async () => [] },
+    };
+    const sent: string[] = [];
+    const telegram: any = { sendRaw: async (_c: string, text: string) => { sent.push(text); } };
+    const svc: any = new TripRemindersService(prisma, { notifyMany: async () => undefined } as any, telegram, { usersWithPermissions: async () => ['a1'] } as any);
+    await svc.weeklyUsageDigest();
+    assert.strictEqual(sent.length, 1);
+    assert.ok(sent[0].includes('Weekly fleet usage'));
+    assert.ok(sent[0].includes('200 km'), '100 + 100 km driven');
+    assert.ok(sent[0].includes('YGN-1234') && sent[0].includes('YGN-5678'));
+    assert.ok(sent[0].includes('⚠️ high'), 'the 4,000 MMK/km vehicle is flagged');
+    assert.strictEqual((sent[0].match(/⚠️ high/g) ?? []).length, 1, 'only the outlier is flagged');
+  });
+
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) {
     failures.forEach((f) => console.error(` - ${f}`));

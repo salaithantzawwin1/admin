@@ -195,6 +195,13 @@ export class CarsController {
     return this.cars.vehicleUsage(month);
   }
 
+  /** Monthly distance trend per vehicle (last `months` months) + fuel per km. */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Get('usage/trend')
+  vehicleUsageTrend(@Query('month') month?: string, @Query('months') months?: string) {
+    return this.cars.vehicleUsageTrend(month, Number(months) || 6);
+  }
+
   /** The same report as a spreadsheet-friendly CSV (`?month=YYYY-MM`). */
   @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
   @Get('usage.csv')

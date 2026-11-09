@@ -805,6 +805,48 @@ interface UsageVehicle {
   fuelCost: number;
   fuelCostPerKm: number | null;
 }
+interface TrendPoint {
+  month: string;
+  totalKm: number;
+  fuelCost: number;
+  fuelPerKm: number | null;
+}
+interface TrendVehicle {
+  vehicleId: string;
+  vehicleNo: string;
+  brandModel: string | null;
+  series: TrendPoint[];
+  totalKm: number;
+  fuelCost: number;
+  fuelPerKm: number | null;
+  /** running well above the fleet's MMK/km */
+  flagged: boolean;
+}
+interface TrendReport {
+  months: string[];
+  fleetFuelPerKm: number | null;
+  vehicles: TrendVehicle[];
+}
+
+/** Six-month distance trend as a tiny inline SVG — no chart library needed. */
+function Sparkline({ values, months }: { values: number[]; months: string[] }) {
+  const w = 76;
+  const h = 20;
+  const max = Math.max(...values, 1);
+  const step = values.length > 1 ? w / (values.length - 1) : w;
+  const points = values
+    .map((v, i) => `${(i * step).toFixed(1)},${(h - 2 - (v / max) * (h - 4)).toFixed(1)}`)
+    .join(' ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="text-yellow-600" role="img"
+      aria-label={`Monthly distance: ${months.map((m, i) => `${m} ${values[i]} km`).join(', ')}`}>
+      <title>{months.map((m, i) => `${m}: ${values[i].toLocaleString()} km`).join('\n')}</title>
+      <line x1="0" y1={h - 2} x2={w} y2={h - 2} stroke="currentColor" strokeOpacity="0.2" strokeWidth="1" />
+      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 interface UsageReport {
   month: string;
   grandTotalKm: number;
@@ -826,6 +868,7 @@ function VehicleUsageTab() {
   const [error, setError] = useState('');
   const [open, setOpen] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [trend, setTrend] = useState<TrendReport | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -833,6 +876,9 @@ function VehicleUsageTab() {
     api<UsageReport>(`/cars/usage?month=${encodeURIComponent(month)}`)
       .then((r) => !cancelled && setReport(r))
       .catch((e) => !cancelled && setError(e instanceof Error ? e.message : 'Could not load usage'));
+    api<TrendReport>(`/cars/usage/trend?month=${encodeURIComponent(month)}&months=6`)
+      .then((r) => !cancelled && setTrend(r))
+      .catch(() => !cancelled && setTrend(null));
     return () => {
       cancelled = true;
     };
@@ -937,6 +983,7 @@ function VehicleUsageTab() {
                   <th className="px-3 py-2 font-medium">Trips</th>
                   <th className="px-3 py-2 font-medium">Distance</th>
                   <th className="px-3 py-2 font-medium">Fuel</th>
+                  <th className="px-3 py-2 font-medium">6-month trend</th>
                   <th className="px-3 py-2 font-medium" />
                 </tr>
               </thead>
@@ -963,12 +1010,29 @@ function VehicleUsageTab() {
                           ) : (
                             <span className="text-gray-400">—</span>
                           )}
+                          {trend?.vehicles.find((t) => t.vehicleId === v.vehicleId)?.flagged && (
+                            <div
+                              className="mt-0.5 inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-1.5 text-[10px] font-medium text-red-700"
+                              title={`Above the fleet average${trend?.fleetFuelPerKm ? ` (${trend.fleetFuelPerKm.toLocaleString()} MMK/km)` : ''} — check fuel receipts or the odometer`}
+                            >
+                              ⚠️ high
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {(() => {
+                            const tv = trend?.vehicles.find((t) => t.vehicleId === v.vehicleId);
+                            if (!tv || trend?.months.length === 0) return <span className="text-xs text-gray-300">—</span>;
+                            return (
+                              <Sparkline values={tv.series.map((s) => s.totalKm)} months={trend!.months} />
+                            );
+                          })()}
                         </td>
                         <td className="px-3 py-2 text-right text-xs text-blue-600">{isOpen ? '▾ hide trips' : '▸ trips'}</td>
                       </tr>
                       {isOpen && (
                         <tr key={`${v.vehicleId}-detail`}>
-                          <td colSpan={5} className="px-3 pb-3 bg-gray-50/60">
+                          <td colSpan={6} className="px-3 pb-3 bg-gray-50/60">
                             <table className="w-full text-xs">
                               <thead>
                                 <tr className="text-left text-gray-400 uppercase tracking-wide">
@@ -1017,6 +1081,8 @@ function VehicleUsageTab() {
             </table>
           </div>
           <p className="text-[11px] text-gray-400 mt-3">
+            The trend line covers the six months ending {report.month}; ⚠️ marks a vehicle spending more than 30% above the
+            fleet's MMK per kilometre.{' '}
             A trip counts once both readings exist. Missing readings are entered in the request's Car panel (🛣️ Odometer),
             or by the driver right after the Telegram tap.
           </p>

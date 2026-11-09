@@ -1088,16 +1088,25 @@ export class CarsService {
   }
 
   /** Yangon calendar month → UTC window (the office books in Asia/Yangon). */
-  private monthWindow(month?: string) {
-    const m = /^(\d{4})-(\d{2})$/.exec((month ?? '').trim());
-    const nowY = new Date(Date.now() + 6.5 * 3600 * 1000);
-    const y = m ? Number(m[1]) : nowY.getUTCFullYear();
-    const mo = m ? Number(m[2]) : nowY.getUTCMonth() + 1;
+  private monthBounds(y: number, mo: number) {
     if (mo < 1 || mo > 12) throw new BadRequestException('month must look like 2026-11');
     const start = new Date(Date.UTC(y, mo - 1, 1) - 6.5 * 3600 * 1000);
     const end = new Date(Date.UTC(mo === 12 ? y + 1 : y, mo === 12 ? 0 : mo, 1) - 6.5 * 3600 * 1000);
     return { start, end, label: `${y}-${String(mo).padStart(2, '0')}` };
   }
+
+  private monthWindow(month?: string) {
+    const m = /^(\d{4})-(\d{2})$/.exec((month ?? '').trim());
+    const nowY = new Date(Date.now() + 6.5 * 3600 * 1000);
+    const y = m ? Number(m[1]) : nowY.getUTCFullYear();
+    const mo = m ? Number(m[2]) : nowY.getUTCMonth() + 1;
+    return this.monthBounds(y, mo);
+  }
+
+  /** A vehicle is "expensive to run" this far above the fleet's MMK per km. */
+  private static readonly FUEL_FLAG_RATIO = 1.3;
+  /** …and only once it has actually driven this much in the period. */
+  private static readonly FUEL_FLAG_MIN_KM = 50;
 
   /**
    * Monthly distance per vehicle, built from the odometer readings alone:
@@ -1273,6 +1282,113 @@ export class CarsService {
         .map(esc).join(','),
     );
     return { filename: `vehicle-usage-${r.month}.csv`, csv: `\ufeff${lines.join('\r\n')}\r\n` };
+  }
+
+  /**
+   * Monthly distance history per vehicle (last `months` months ending at the
+   * selected one) with the fuel spent in each month. The Usage tab draws the
+   * trend from this and flags a vehicle whose MMK per km runs well above the
+   * fleet's — the usual signature of a fuel-card problem or a leak.
+   */
+  async vehicleUsageTrend(month?: string, months = 6) {
+    const anchor = this.monthWindow(month);
+    const [ay, am] = anchor.label.split('-').map(Number);
+    const count = Math.min(Math.max(Math.trunc(Number(months)) || 6, 2), 12);
+    const windows: Array<{ label: string; start: Date; end: Date }> = [];
+    for (let i = count - 1; i >= 0; i--) {
+      const d = new Date(Date.UTC(ay, am - 1 - i, 1));
+      windows.push(this.monthBounds(d.getUTCFullYear(), d.getUTCMonth() + 1));
+    }
+    const from = windows[0].start;
+    const to = windows[windows.length - 1].end;
+
+    const rows = await this.prisma.carAssignment.findMany({
+      where: { endOdoAt: { gte: from, lt: to }, startOdoKm: { not: null }, endOdoKm: { not: null } },
+      select: {
+        vehicleId: true,
+        startOdoKm: true,
+        endOdoKm: true,
+        endOdoAt: true,
+        vehicle: { select: { vehicleNo: true, brandModel: true } },
+        carRequest: { select: { sharedTripId: true } },
+      },
+    });
+    const fuelRows = await (async () => {
+      try {
+        return await this.prisma.carExpense.findMany({
+          where: { type: 'FUEL', expenseDate: { gte: from, lt: to } },
+          select: { vehicleId: true, amount: true, expenseDate: true },
+        });
+      } catch {
+        return [] as Array<{ vehicleId: string; amount: unknown; expenseDate: Date }>;
+      }
+    })();
+
+    const monthKey = (d: Date) =>
+      new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Yangon', year: 'numeric', month: '2-digit' }).format(d);
+    const km = new Map<string, Map<string, number>>();
+    const fuel = new Map<string, Map<string, number>>();
+    const meta = new Map<string, { vehicleNo: string; brandModel: string | null }>();
+    const sharedSeen = new Set<string>();
+    const bump = (store: Map<string, Map<string, number>>, vehicleId: string, key: string, value: number) => {
+      const m = store.get(vehicleId) ?? new Map<string, number>();
+      m.set(key, (m.get(key) ?? 0) + value);
+      store.set(vehicleId, m);
+    };
+    for (const r of rows) {
+      if (!r.vehicleId || !r.endOdoAt) continue;
+      const key = monthKey(r.endOdoAt);
+      const group = r.carRequest?.sharedTripId ?? null;
+      if (group) {
+        const gk = `${group}:${key}`;
+        if (sharedSeen.has(gk)) continue;
+        sharedSeen.add(gk);
+      }
+      const distance = (r.endOdoKm as number) - (r.startOdoKm as number);
+      if (!Number.isFinite(distance) || distance < 0) continue;
+      bump(km, r.vehicleId, key, distance);
+      if (r.vehicle) meta.set(r.vehicleId, { vehicleNo: r.vehicle.vehicleNo, brandModel: r.vehicle.brandModel ?? null });
+    }
+    for (const f of fuelRows) {
+      if (!f.vehicleId || !f.expenseDate) continue;
+      bump(fuel, f.vehicleId, monthKey(f.expenseDate), Number(f.amount));
+    }
+
+    const labels = windows.map((w) => w.label);
+    const vehicleIds = [...new Set([...km.keys(), ...fuel.keys()])];
+    const vehicles = vehicleIds.map((vehicleId) => {
+      const series = labels.map((label) => {
+        const totalKm = km.get(vehicleId)?.get(label) ?? 0;
+        const fuelCost = Math.round((fuel.get(vehicleId)?.get(label) ?? 0) * 100) / 100;
+        return { month: label, totalKm, fuelCost, fuelPerKm: totalKm > 0 && fuelCost > 0 ? Math.round((fuelCost / totalKm) * 100) / 100 : null };
+      });
+      const totalKm = series.reduce((n, s) => n + s.totalKm, 0);
+      const fuelCost = Math.round(series.reduce((n, s) => n + s.fuelCost, 0) * 100) / 100;
+      return {
+        vehicleId,
+        vehicleNo: meta.get(vehicleId)?.vehicleNo ?? '—',
+        brandModel: meta.get(vehicleId)?.brandModel ?? null,
+        series,
+        totalKm,
+        fuelCost,
+        fuelPerKm: totalKm > 0 && fuelCost > 0 ? Math.round((fuelCost / totalKm) * 100) / 100 : null,
+      };
+    });
+
+    const fleetKm = vehicles.reduce((n, v) => n + v.totalKm, 0);
+    const fleetFuel = vehicles.reduce((n, v) => n + v.fuelCost, 0);
+    const fleetFuelPerKm = fleetKm > 0 && fleetFuel > 0 ? Math.round((fleetFuel / fleetKm) * 100) / 100 : null;
+    const out = vehicles
+      .map((v) => ({
+        ...v,
+        flagged:
+          !!v.fuelPerKm && !!fleetFuelPerKm &&
+          v.totalKm >= CarsService.FUEL_FLAG_MIN_KM &&
+          v.fuelPerKm > fleetFuelPerKm * CarsService.FUEL_FLAG_RATIO,
+      }))
+      .sort((a, b) => a.vehicleNo.localeCompare(b.vehicleNo));
+
+    return { months: labels, fleetFuelPerKm, vehicles: out };
   }
 
   /** Combined "Back at Office — BOTH trips" for a shared pair (Administration override; mirrors manualAck). */
