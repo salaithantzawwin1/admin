@@ -250,8 +250,26 @@ export class AnnouncementsService {
       data: { status: 'PUBLISHED', publishAt: a.publishAt && a.publishAt <= now ? a.publishAt : now },
     });
 
-    // notify the target audience (in-app + Telegram mirror)
-    const userIds = [...new Set(await this.audienceIds(id))];
+    await this.deliverPublished(updated, { userId: actor.userId, username: actor.username, via: 'publish' });
+    return updated;
+  }
+
+  /**
+   * Deliver a published announcement to its audience — in-app notification,
+   * Telegram mirror, photo album and the announcement card (with the ✓
+   * Acknowledge button on IMPORTANT+).
+   *
+   * Shared by the manual Publish action and the scheduled lifecycle cron: a
+   * scheduled notice must reach people exactly like a hand-published one. The
+   * cron used to flip the status with a bulk updateMany and notify nobody, so a
+   * scheduled URGENT announcement arrived in silence with no acknowledge
+   * button (plan §1 G1 / P0.5 F1).
+   */
+  private async deliverPublished(
+    a: { id: string; code: string; title: string; content: string; priority: string; requiresAck: boolean },
+    actor: { userId?: string; username?: string; via: 'publish' | 'schedule' },
+  ) {
+    const userIds = [...new Set(await this.audienceIds(a.id))];
     const notifBody = htmlToText(a.content).slice(0, 300) || a.title;
     await this.notifications.notifyMany(userIds, {
       type: 'ANNOUNCEMENT',
@@ -261,15 +279,14 @@ export class AnnouncementsService {
       link: '/announcements',
     });
     // photos + card (ack button on IMPORTANT+) ride along for anyone bound to the bot
-    await this.sendPhotosToAudience(id, userIds, {
+    await this.sendPhotosToAudience(a.id, userIds, {
       id: a.id, code: a.code, title: a.title, priority: a.priority, requiresAck: a.requiresAck,
     }, notifBody);
     await this.audit.log({
       userId: actor.userId, username: actor.username,
-      action: 'ANNOUNCEMENT_PUBLISHED', module: 'ANNOUNCEMENT', recordId: id,
-      newValue: { code: a.code, audience: userIds.length },
+      action: 'ANNOUNCEMENT_PUBLISHED', module: 'ANNOUNCEMENT', recordId: a.id,
+      newValue: { code: a.code, audience: userIds.length, via: actor.via },
     });
-    return updated;
   }
 
   /**
@@ -287,18 +304,35 @@ export class AnnouncementsService {
       });
       const files = photos.map((p) => path.join(this.uploadRoot, p.storedName));
       const caption = `🖼 <b>${a.priority === 'NORMAL' ? 'Announcement' : a.priority} — ${escapeTgHtml(a.title)}</b> (${a.code})\n${escapeTgHtml(body.slice(0, 300))}`;
-      const recipients = userIds.slice(0, 100);
+      // EVERY bound recipient gets the card. The old `slice(0, 100)` silently
+      // dropped the card — and with it the ✓ Acknowledge button — for anyone
+      // past the 100th audience member, so acknowledgement stats were wrong on
+      // large audiences (plan §13.1 D3 / P0.5 F10). Batched to stay inside
+      // Telegram's ~30 messages/second global limit.
+      const BATCH = 25;
       let sent = 0;
-      for (const userId of recipients) {
-        const u = await this.prisma.user.findUnique({ where: { id: userId }, select: { telegramChatId: true } });
-        if (!u?.telegramChatId) continue;
-        if (files.length > 0) await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption).catch(() => undefined);
-        await this.telegram.sendAnnouncementCard(u.telegramChatId, a, body).catch(() => undefined);
-        sent += 1;
+      let failed = 0;
+      for (let i = 0; i < userIds.length; i += BATCH) {
+        const chunk = userIds.slice(i, i + BATCH);
+        const bound = await this.prisma.user.findMany({
+          where: { id: { in: chunk }, telegramChatId: { not: null } },
+          select: { telegramChatId: true },
+        });
+        for (const u of bound) {
+          if (!u.telegramChatId) continue;
+          try {
+            if (files.length > 0) await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption);
+            await this.telegram.sendAnnouncementCard(u.telegramChatId, a, body);
+            sent += 1;
+          } catch {
+            failed += 1;
+          }
+        }
+        if (i + BATCH < userIds.length) await new Promise((r) => setTimeout(r, 200));
       }
       await this.audit.log({
         action: 'ANNOUNCEMENT_PHOTOS_TELEGRAM', module: 'ANNOUNCEMENT', recordId: announcementId,
-        newValue: { code: a.code, photos: files.length, recipients: sent, ackButton: a.requiresAck },
+        newValue: { code: a.code, photos: files.length, audience: userIds.length, recipients: sent, failed, ackButton: a.requiresAck },
       });
     } catch {
       /* photos-in-Telegram is a bonus — never fail the publish */
@@ -453,18 +487,48 @@ export class AnnouncementsService {
   // ---------- crons ----------
 
   /** Hourly: SCHEDULED → PUBLISHED when publishAt arrives; PUBLISHED → EXPIRED after endAt. */
-  @Cron('0 5 * * * *')
+  // Every minute, on the minute. This used to be '0 5 * * * *', which is not
+  // "every minute" but "once an hour at :05" — so a notice scheduled for 08:01
+  // went out at 09:05, and the publish time shown to the admin was a lie.
+  @Cron('0 * * * * *')
   async lifecycleCron() {
     const now = new Date();
-    const toPublish = await this.prisma.announcement.updateMany({
+    // Scheduled → published, one row at a time, through the same delivery path
+    // as the Publish button. The bulk updateMany notified nobody, so a
+    // scheduled URGENT notice landed with no Telegram card and no acknowledge
+    // button (plan §1 G1 / P0.5 F1).
+    const due = await this.prisma.announcement.findMany({
       where: { status: 'SCHEDULED', publishAt: { lte: now } },
-      data: { status: 'PUBLISHED' },
+      select: { id: true },
     });
+    let published = 0;
+    for (const { id } of due) {
+      try {
+        // Claim the row first: a slow tick, an overlapping tick or a second
+        // instance must not deliver the same announcement twice.
+        const claimed = await this.prisma.announcement.updateMany({
+          where: { id, status: 'SCHEDULED' },
+          data: { status: 'PUBLISHED' },
+        });
+        if (claimed.count !== 1) continue;
+        const a = await this.prisma.announcement.findUnique({ where: { id } });
+        if (!a) continue;
+        await this.deliverPublished(a, { username: 'scheduler', via: 'schedule' });
+        published += 1;
+      } catch (e) {
+        // Nothing reached anyone: put it back so the next tick retries instead
+        // of leaving an undelivered notice marked published.
+        console.error(`[announcements] scheduled publish failed for ${id}: ${(e as Error).message}`);
+        await this.prisma.announcement
+          .updateMany({ where: { id, status: 'PUBLISHED' }, data: { status: 'SCHEDULED' } })
+          .catch(() => undefined);
+      }
+    }
     const toExpire = await this.prisma.announcement.updateMany({
       where: { status: 'PUBLISHED', endAt: { lte: now } },
       data: { status: 'EXPIRED' },
     });
-    if (toPublish.count > 0) console.log(`[announcements] published ${toPublish.count} scheduled announcement(s)`);
+    if (published > 0) console.log(`[announcements] published ${published} scheduled announcement(s)`);
     if (toExpire.count > 0) console.log(`[announcements] expired ${toExpire.count} announcement(s)`);
   }
 }
