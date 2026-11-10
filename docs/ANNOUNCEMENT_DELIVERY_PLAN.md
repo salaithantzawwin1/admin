@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1–P4 done — 4 of 9 planned phases (P5–P8 remaining, ~45 %)** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1–P5 done — 5 of 9 planned phases (P6–P8 remaining, ~55 %)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -418,13 +418,13 @@ see how much is done.
 | **P2** | `messages.read` permission | `auth/permissions.ts`, `auth/permissions-seed.ts`, `RbacMatrix.tsx` | 5 % | ✅ |
 | **P3** | Outbound card tracking | `telegram.service.ts` (`sendAnnouncementCard`), `announcements.service.ts` (`recordChatSend`) | 10 % | ✅ |
 | **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ✅ |
-| **P5** | Messages API + live event | `messages/*` (new module), `events.service.ts` | 10 % | ⬜ |
+| **P5** | Messages API + live event | `messages/*` (new module), `events.service.ts` | 10 % | ✅ |
 | **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ⬜ |
 | **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ⬜ |
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ⬜ |
 | **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -569,13 +569,53 @@ environment, so the router half is covered by unit tests only.
 
 ### P5 — Messages API (4 h)
 
-- [ ] `messages` module/controller/service with the five routes (§8).
-- [ ] `messages.read` guard on all of them; 403 covered by a test.
-- [ ] `ackAt` join from `announcement_reads`; unread count; read/read-all.
-- [ ] `'message.new'` added to `AmsEventType`.
+- [x] `messages` module/controller/service with the five routes (§8).
+- [x] `messages.read` guard on all of them; 403 covered by a test.
+- [x] `ackAt` join from `announcement_reads`; unread count; read/read-all.
+- [x] `'message.new'` added to `AmsEventType`.
 - **Gate:** all five routes return correct shapes for ADMINISTRATION and 403 for
   an employee-only token.
 - **Verify:** `curl` with both tokens; one duplicate insert attempt stays at one row.
+
+**P5 result (2026-11-10):** new `src/messages/` module (`controller`, `service`,
+no schema change, registered in `AppModule`). Details worth knowing for P6:
+
+- `messages.read` is declared **once on the controller class** — Nest's
+  `getAllAndOverride` walks handler → class, so every present and future route in
+  this controller inherits it; the guard test asserts exactly that.
+- `GET /messages/threads` → `{ general: { total, unread, lastAt }, threads: [{
+  announcementId, code, title, status, publishAt, requiresAck, total, unread,
+  lastAt }] }`, threads ordered by newest reply (a fresh reply lifts its notice).
+  An announcement deleted under its replies still lists — `announcementId` is
+  `SetNull`, so those rows fall back to General (title `Deleted announcement` is
+  only reachable for a row that kept a dangling id, i.e. never in practice).
+- `GET /messages` filters `announcementId=<id>|none` (none = General) `|`
+  `handledBy` `|` `kind` `|` `state`, paged `page`/`pageSize` (default 50, max
+  100), newest first, returns `{ items, total, unread, page, pageSize }`. Each item
+  carries `sender { userId, driverId, name, department, linked }` (department from
+  `employees.department`), `photo { fileId, width, height }`, `handledBy`,
+  `state`, `readAt`, `ackAt`. `ackAt` is joined in **one** `announcement_reads`
+  query per page and is null for General rows and for senders who never acked.
+- BigInt message ids are serialised as strings (`messageId`, `replyToMessageId`) —
+  raw BigInt would 500 in `JSON.stringify`.
+- `POST /messages/:id/read` → `{ ok, id }`, 404 for an unknown id;
+  `POST /messages/read-all?announcementId=` clears a thread, `none` clears
+  General, no param clears everything, and only `state = NEW` rows are touched so
+  an existing read/reader is never overwritten. `GET /messages/unread-count` →
+  `{ count }`.
+- `'message.new'` added to `AmsEventType` **and** to the frontend
+  `LiveEventType`, so the tab's `useLiveReload` subscription type-checks before the
+  UI exists (P6).
+
+Verified with `messages-api` 12/12 (threads, filters, paging clamp, 400 on unknown
+enum, sender/department/ackAt join, markRead, readAll, unread, guard) plus a live
+run against the testing stack: all five routes 200/201 with an
+`ADMINISTRATION` token, **403 on every one** with an `EMPLOYEE`-only token, 401
+anonymous, `kind=VIDEO` → 400, unknown id → 404, and re-running the probe insert
+left the row count unchanged (unique `(chatId, telegramMessageId)`). Probe rows and
+the probe announcement were deleted afterwards; `telegram_inbound_messages` is
+empty again. `tsc` (backend + frontend) clean, baseline suites green, testing +
+prod deployed, prod health 200.
 
 ### P6 — Messages tab UI (1 d)
 
@@ -626,6 +666,7 @@ blast radius.
 ### Progress log (append one line per phase)
 
 | Date | Phase | What landed | Gate result | Commit |
+| 2026-11-10 | P5 | `messages` module: threads (General + per announcement), paged list with sender/department/`ackAt`, unread count, mark-read, read-all; class-level `messages.read`; `message.new` in both event unions | 12/12 unit + live 200/201 vs 403/401/400 on testing | see commit |
 |---|---|---|---|---|
 | 2026-11-10 | P0.5 | `deliverPublished()` shared by publish + cron; cron per-row claim/revert; 100-recipient cap removed (batched, audit counts); cron cadence hourly→every minute; new test file | ✅ testing+prod deploy, 5/5 + 21/21 + 11/11 tests | `fdd5b7d` |
 | 2026-11-10 | P4 | insert-before-routing capture (text/photo/document), reply→announcement link, `/msg`, `/start` masking, dedupe, `markHandled` labels, `message.new` event, `TELEGRAM_INBOUND` flag; 2 new test files | ✅ 12/12 + 10/10, real-Postgres smoke on testing, testing+prod deploy | see commit |

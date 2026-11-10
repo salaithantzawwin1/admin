@@ -21,6 +21,7 @@ import { CarsModule } from './cars/cars.module';
 import { MeetingRoomsModule } from './meeting-rooms/meeting-rooms.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
+import { MessagesModule } from './messages/messages.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { ProcurementModule } from './procurement/procurement.module';
 import { PurchaseOrdersModule } from './procurement/purchase-orders.module';
@@ -57,6 +58,7 @@ import { HealthController } from './health/health.controller';
     MeetingRoomsModule,
     InventoryModule,
     AnnouncementsModule,
+    MessagesModule,
     SuppliersModule,
     ProcurementModule,
     PurchaseOrdersModule,

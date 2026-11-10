@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { getToken } from '../api';
 
-export type LiveEventType = 'assignment.updated' | 'driver.updated' | 'request.updated' | 'notification';
+export type LiveEventType =
+  | 'assignment.updated'
+  | 'driver.updated'
+  | 'request.updated'
+  | 'notification'
+  /** a subscriber messaged the bot — the announcement Messages tab refetches */
+  | 'message.new';
 
 export interface LiveEvent {
   type: LiveEventType;
