@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1 + P2 + P3 done — 3 of 9 planned phases (P4–P8 remaining, ~25 %)** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1–P4 done — 4 of 9 planned phases (P5–P8 remaining, ~45 %)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -417,14 +417,14 @@ see how much is done.
 | **P1** | Schema + migration 73 | `prisma/schema.prisma`, `prisma/migrations/…73…` | 10 % | ✅ |
 | **P2** | `messages.read` permission | `auth/permissions.ts`, `auth/permissions-seed.ts`, `RbacMatrix.tsx` | 5 % | ✅ |
 | **P3** | Outbound card tracking | `telegram.service.ts` (`sendAnnouncementCard`), `announcements.service.ts` (`recordChatSend`) | 10 % | ✅ |
-| **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ⬜ |
+| **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ✅ |
 | **P5** | Messages API + live event | `messages/*` (new module), `events.service.ts` | 10 % | ⬜ |
 | **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ⬜ |
 | **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ⬜ |
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ⬜ |
 | **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 applied on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -534,17 +534,38 @@ manual publish to a test chat (same limitation as P0.5).
 
 ### P4 — Inbound capture + conflict rules (1 d)
 
-- [ ] Extend `TgUpdate` (§6).
-- [ ] Insert-before-routing hook (`capture`), `markHandled()` on every branch,
+- [x] Extend `TgUpdate` (§6).
+- [x] Insert-before-routing hook (`capture`), `markHandled()` on every branch,
       `isAnnouncementReply()` (R1), `/msg` (R4), photo capture (R2), album
       grouping, `/start` masking, dedupe.
-- [ ] Resolve sender + announcement (§4/R5); `events.publish('message.new')`.
-- [ ] Tests: the R1–R7 list in §10.
+- [x] Resolve sender + announcement (§4/R5); `events.publish('message.new')`.
+- [x] Tests: the R1–R7 list in §10.
 - **Gate:** send a text, a photo, an album, `/start <code>`, and a reply to a
   **real** card while an odometer capture is armed — all land in the table with
   the expected `handledBy`, and the odometer flow still completes normally.
 - **Rollback:** set `TELEGRAM_INBOUND=0` env flag (add it) → hook no-ops; no
   behaviour change for existing flows.
+
+**P4 result (2026-11-10):** `TgUpdate.message` gained `message_id`,
+`caption`, `media_group_id`, `reply_to_message.message_id` and `document`;
+`handleUpdate()` now stores the message **before** routing (`captureInbound()`)
+and labels it afterwards through `markHandled()` on every branch. Three notes:
+(1) the planned `isAnnouncementReply()` was folded into `capture()` — it already
+resolves the announcement, so one query serves both R1 and the stored
+`announcementId`, and the router simply returns early when that field is set;
+(2) a duplicate `(chatId, telegramMessageId)` returns the row we already have
+instead of `null`, so a re-delivered card reply is still treated as R1;
+(3) `markHandled()` uses `updateMany where handledBy != 'ANNOUNCEMENT_REPLY'`,
+so no flow can relabel a reply. Verified with `announcement-inbound-capture`
+12/12 and `telegram-inbound-routing` 10/10, plus a **real-Postgres smoke run** on
+the testing DB: text → TEXT/ODOMETER after relabel, photo → PHOTO with file id,
+card reply → `LINKED`/ANNOUNCEMENT_REPLY, `/start USR-…` → masked `/start ••••`,
+duplicate insert → existing row (rows and the temp announcement/chat binding were
+deleted afterwards; both tables are empty again). Baseline 20/70/21/35/11/21 and
+the three earlier announcement suites still green; `tsc` clean; testing + prod
+deployed, prod health 200. **Not verified:** a real Telegram client sending these
+messages through the poll loop — no chat is bound to the bot in either
+environment, so the router half is covered by unit tests only.
 
 ### P5 — Messages API (4 h)
 
@@ -607,6 +628,7 @@ blast radius.
 | Date | Phase | What landed | Gate result | Commit |
 |---|---|---|---|---|
 | 2026-11-10 | P0.5 | `deliverPublished()` shared by publish + cron; cron per-row claim/revert; 100-recipient cap removed (batched, audit counts); cron cadence hourly→every minute; new test file | ✅ testing+prod deploy, 5/5 + 21/21 + 11/11 tests | `fdd5b7d` |
+| 2026-11-10 | P4 | insert-before-routing capture (text/photo/document), reply→announcement link, `/msg`, `/start` masking, dedupe, `markHandled` labels, `message.new` event, `TELEGRAM_INBOUND` flag; 2 new test files | ✅ 12/12 + 10/10, real-Postgres smoke on testing, testing+prod deploy | see commit |
 | 2026-11-10 | P3 | `sendAnnouncementCard` returns its `message_id`; fan-out records card + album ids per chat (`announcement_chat_sends`), best-effort; new test file (6 checks) | ✅ testing+prod deploy, 6/6 + 5/5, tsc clean | see commit |
 | 2026-11-10 | P2 | `messages.read` in the catalog + ADMINISTRATION default grant + matrix group/label | ✅ seeded on testing, gate SQL verified, 21/21 + 11/11 + 5/5 | see commit |
 | 2026-11-10 | P1 | `AnnouncementChatSend` + `TelegramInboundMessage` models, three enums, two back-relations; migration 73 (two tables, 6 indexes, 2 FKs) | ✅ applied on testing, **no drift in the new tables**; baseline 20/70/21/35/12/10/5 + 5 new all green; `tsc --noEmit` clean | see commit |

@@ -39,15 +39,47 @@ const CONFIG_REFRESH_MS = 60_000;
 
 interface TgUpdate {
   update_id: number;
-  message?: {
-    chat: { id: number };
-    text?: string;
-    from?: { id: number; username?: string; first_name?: string };
-    /** the driver's dashboard photo for an armed odometer capture (sizes, largest last) */
-    photo?: { file_id: string; file_size?: number; width?: number; height?: number }[];
-  };
+  message?: TgMessage;
   callback_query?: { id: string; data?: string; from?: { id: number }; message?: { chat: { id: number }; message_id: number } };
 }
+
+/** A Telegram message as the poll loop receives it (only the fields we use). */
+export interface TgMessage {
+  message_id?: number;
+  chat: { id: number };
+  text?: string;
+  /** photo/text the subscriber typed under a photo — treated as message text */
+  caption?: string;
+  /** all photos of one album share this id, so bubbles can be grouped */
+  media_group_id?: string;
+  from?: { id: number; username?: string; first_name?: string };
+  /** Telegram *Reply* — the ONLY reliable link to the message being answered */
+  reply_to_message?: { message_id: number };
+  document?: { file_id: string; file_name?: string };
+  /** the driver's dashboard photo, or any photo a subscriber sends (sizes, largest last) */
+  photo?: { file_id: string; file_size?: number; width?: number; height?: number }[];
+}
+
+/** What the inbound-message log needs from one update (plan §6 / P4). */
+export interface InboundCaptureInput {
+  chatId: string;
+  messageId?: number;
+  replyToMessageId?: number;
+  mediaGroupId?: string;
+  senderName?: string;
+  text?: string;
+  photo?: { fileId: string; width?: number; height?: number };
+  documentName?: string;
+}
+
+export type InboundHandledBy =
+  | 'ANNOUNCEMENT_REPLY'
+  | 'GENERAL'
+  | 'CAR_FORM'
+  | 'REJECT_REASON'
+  | 'ODOMETER'
+  | 'ETA'
+  | 'COMMAND';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -56,6 +88,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   approvals?: { handleAction(data: string, chatId: string, callbackId: string): Promise<boolean> };
   /** Slash-command surface (wired by CarsModule) — returns true when the text was handled. */
   commands?: { handleText(text: string, chatId: string): Promise<boolean> };
+  /**
+   * Subscriber-message log (wired by AnnouncementsModule). Capture never
+   * consumes an update: the update still runs through every flow below, and the
+   * row is labelled with whatever ended up handling it (plan §6 / P4).
+   */
+  inbound?: {
+    capture(input: InboundCaptureInput): Promise<{ id: string; announcementId: string | null } | null>;
+    markHandled(id: string | null | undefined, handledBy: InboundHandledBy): Promise<void>;
+  };
   /** Reject-reason conversation state + handler (wired by CarsModule). */
   rejects?: {
     handleText(text: string, chatId: string): Promise<void>;
@@ -222,6 +263,41 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Store a subscriber message via the wired inbound log. Best-effort and
+   * insert-only: it returns null when capturing is off or the write failed, and
+   * whatever comes back is used to label the message later.
+   */
+  private async captureInbound(
+    chatId: string,
+    m: TgMessage | undefined,
+  ): Promise<{ id: string; announcementId: string | null } | null> {
+    if (!this.inbound) return null;
+    const sizes = m?.photo ?? [];
+    const largest = sizes[sizes.length - 1]; // Telegram sends sizes smallest → largest
+    try {
+      return await this.inbound.capture({
+        chatId,
+        messageId: m?.message_id,
+        replyToMessageId: m?.reply_to_message?.message_id,
+        mediaGroupId: m?.media_group_id,
+        senderName: m?.from?.first_name ?? (m?.from?.username ? `@${m.from.username}` : undefined),
+        text: m?.text ?? m?.caption,
+        photo: largest ? { fileId: largest.file_id, width: largest.width, height: largest.height } : undefined,
+        documentName: m?.document?.file_name,
+      });
+    } catch (e) {
+      this.logger.warn(`inbound capture failed: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Label what actually handled the message (no-op when capturing is off). */
+  private async markInbound(id: string | null | undefined, handledBy: InboundHandledBy) {
+    if (!id || !this.inbound) return;
+    await this.inbound.markHandled(id, handledBy).catch(() => undefined);
+  }
+
   private async handleUpdate(u: TgUpdate) {
     if (u.callback_query?.data && u.callback_query.from?.id) {
       const chatId = String(u.callback_query.message?.chat?.id ?? u.callback_query.from.id);
@@ -245,29 +321,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     const chatId = u.message?.chat?.id != null ? String(u.message.chat.id) : null;
+    if (!chatId) return;
+    const text = (u.message?.text ?? u.message?.caption)?.trim();
+    // 📥 Store every subscriber message FIRST — text and photos, consumed by a
+    // flow or not (plan §6 / P4). Insert-only: it never changes what the update
+    // does next, and it never throws into the poll loop.
+    const rec = await this.captureInbound(chatId, u.message);
+    // R1 — an explicit Reply to one of OUR announcement cards is a subscriber
+    // answer. No armed flow may swallow it, and no "photo first" nag is sent:
+    // the odometer/whatsapp-style prompts would be nonsense for a card reply.
+    if (rec?.announcementId) return;
+    // R4 — /msg <text> files a message in the inbox without touching any flow.
+    if (text && /^\/msg(@\w+)?(\s|$)/i.test(text)) {
+      await this.markInbound(rec?.id, 'GENERAL');
+      await this.call('sendMessage', { chat_id: chatId, text: '✓ မှတ်တမ်းတင်ပြီး' });
+      return;
+    }
     // 🛣️ dashboard photo for an armed Ready / Back-at-office capture
-    if (chatId && u.message?.photo?.length && this.pendingOdo.has(chatId)) {
+    // (the photo was just stored too — R2: consumed ≠ lost)
+    if (u.message?.photo?.length && this.pendingOdo.has(chatId)) {
+      await this.markInbound(rec?.id, 'ODOMETER');
       await this.handleOdoPhoto(chatId, u.message.photo).catch((err) =>
         this.logger.warn(`odometer photo failed: ${(err as Error).message}`),
       );
       return;
     }
-    const text = u.message?.text?.trim();
-    if (!text || !chatId) return;
+    if (!text) return;
     this.logger.log(`TG text update from ${chatId}: "${text}"`);
     // 🛣️ an armed odometer capture — the next number IS the reading (photo first)
     if (this.pendingOdo.has(chatId)) {
       const handled = await this.handleOdoText(chatId, text).catch(() => false);
-      if (handled) return;
+      if (handled) {
+        await this.markInbound(rec?.id, 'ODOMETER');
+        return;
+      }
     }
     // an in-progress reject conversation — the next text IS the reason (or /cancel aborts).
     // Any OTHER slash command aborts the conversation first, then runs normally
     // (so /assign etc. are never swallowed as a "reason").
     if (this.rejects?.hasPending(chatId)) {
       if (text === '/cancel' || !text.startsWith('/')) {
+        await this.markInbound(rec?.id, text === '/cancel' ? 'COMMAND' : 'REJECT_REASON');
         await this.rejects.handleText(text, chatId).catch(() => undefined);
         return;
       }
+      await this.markInbound(rec?.id, 'COMMAND');
       await this.rejects.handleText('/cancel', chatId).catch(() => undefined);
     }
     // an armed ⏰ custom-ETA entry — the next text IS the new expected return time
@@ -276,7 +374,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (text === '/cancel' || !text.startsWith('/')) {
         this.pendingEtaCustom.delete(chatId);
         if (text !== '/cancel' && this.etaRef) {
+          await this.markInbound(rec?.id, 'ETA');
           await this.etaRef.reportEta(armed.assignmentId, text, chatId).catch(() => undefined);
+        } else {
+          await this.markInbound(rec?.id, 'COMMAND');
         }
         return;
       }
@@ -287,13 +388,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     // the form while it is already open, and other commands still abort it.
     if (this.carRequests?.hasPending(chatId)) {
       if (text === '/cancel' || text === '/car' || !text.startsWith('/')) {
+        await this.markInbound(rec?.id, text.startsWith('/') ? 'COMMAND' : 'CAR_FORM');
         await this.carRequests.handleText(text, chatId).catch(() => undefined);
         return;
       }
+      await this.markInbound(rec?.id, 'COMMAND');
       await this.carRequests.handleText('/cancel', chatId).catch(() => undefined);
     }
     // slash commands (except /start — the bind/join flow owns it)
     if (text.startsWith('/') && !text.startsWith('/start')) {
+      await this.markInbound(rec?.id, 'COMMAND');
       const handled = await this.commands
         ?.handleText(text, chatId)
         .catch((err) => {
@@ -304,6 +408,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     if (!text.startsWith('/start')) return;
+    await this.markInbound(rec?.id, 'COMMAND');
     const code = text.replace('/start', '').trim();
     if (code) {
       await this.handleBind(code, chatId, u.message?.from?.username, u.message?.from?.first_name);

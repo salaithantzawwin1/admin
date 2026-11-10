@@ -22,5 +22,12 @@ export class AnnouncementsModule implements OnModuleInit {
 
   onModuleInit() {
     this.telegram.announcementsRef = this.announcements;
+    // Subscriber messages land in `telegram_inbound_messages` before the poll
+    // loop routes them (plan §6 / P4). The hook is insert-only: the update still
+    // runs through every existing flow, and the row is labelled afterwards.
+    this.telegram.inbound = {
+      capture: (input) => this.announcements.captureInbound(input),
+      markHandled: (id, handledBy) => this.announcements.markHandled(id, handledBy),
+    };
   }
 }

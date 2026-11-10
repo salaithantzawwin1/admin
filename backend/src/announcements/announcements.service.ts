@@ -7,7 +7,8 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AuditService } from '../audit/audit.service';
-import { TelegramService } from '../telegram/telegram.service';
+import { InboundCaptureInput, InboundHandledBy, TelegramService } from '../telegram/telegram.service';
+import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
 import { htmlToText, sanitizeHtml } from './sanitize-html';
 
@@ -16,6 +17,18 @@ const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'] as const;
 
 /** Escape a plain string for Telegram's HTML parse mode. */
 const escapeTgHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Never keep a live binding code in the log: `/start USR-ABCDEF` is stored as
+ * `/start ••••` so the Messages tab cannot be used to link someone else's chat
+ * (plan §6).
+ */
+const maskInboundText = (text: string): string => {
+  const t = text.trim();
+  if (!/^\/start(@\w+)?(\s|$)/i.test(t)) return t;
+  const rest = t.replace(/^\/start(@\w+)?/i, '').trim();
+  return rest ? '/start ••••' : '/start';
+};
 
 export interface TargetInput {
   targetType: 'ALL' | 'DEPARTMENT' | 'ROLE' | 'EMPLOYEE' | 'BRANCH';
@@ -32,6 +45,7 @@ export class AnnouncementsService {
     private notifications: NotificationsService,
     private audit: AuditService,
     private telegram: TelegramService,
+    private events?: EventsService,
   ) {}
 
   // ---------- helpers ----------
@@ -360,6 +374,102 @@ export class AnnouncementsService {
       });
     } catch (e) {
       console.warn(`[announcements] could not record telegram message ids for chat ${chatId}: ${(e as Error).message}`);
+    }
+  }
+
+  // ---------- inbound subscriber messages (plan §6 / P4) ----------
+
+  /**
+   * Store one message a subscriber sent the bot — text, photo or document — and
+   * work out who sent it and which announcement (if any) it answers.
+   *
+   * Nothing here may throw into the Telegram poll loop, and nothing here may
+   * consume the update: the caller routes it afterwards exactly as before and
+   * labels the row with `markHandled()`. Set `TELEGRAM_INBOUND=0` to switch the
+   * whole capture path off (the old behaviour, minus a restart only).
+   */
+  async captureInbound(
+    input: InboundCaptureInput,
+  ): Promise<{ id: string; announcementId: string | null } | null> {
+    if (process.env.TELEGRAM_INBOUND === '0') return null;
+    try {
+      const kind = input.photo ? 'PHOTO' : input.documentName ? 'DOCUMENT' : 'TEXT';
+      // sender: a bound AMS user first, then a bound driver (driver-only chat)
+      const user = await this.prisma.user.findFirst({
+        where: { telegramChatId: input.chatId },
+        select: { id: true, fullName: true },
+      });
+      const driver = user
+        ? null
+        : await this.prisma.driver.findFirst({
+            where: { telegramChatId: input.chatId },
+            select: { id: true, name: true },
+          });
+      // R5: only an AMS user's chat can belong to an announcement thread — a
+      // driver-only chat has no announcements audience, so it stays General.
+      let announcementId: string | null = null;
+      if (user && input.replyToMessageId != null) {
+        const sent = await this.prisma.announcementChatSend.findFirst({
+          where: { chatId: input.chatId, messageId: BigInt(input.replyToMessageId) },
+          select: { announcementId: true },
+        });
+        announcementId = sent?.announcementId ?? null;
+      }
+      const row = await this.prisma.telegramInboundMessage.create({
+        data: {
+          chatId: input.chatId,
+          telegramMessageId: input.messageId != null ? BigInt(input.messageId) : null,
+          replyToMessageId: input.replyToMessageId != null ? BigInt(input.replyToMessageId) : null,
+          mediaGroupId: input.mediaGroupId ?? null,
+          userId: user?.id ?? null,
+          driverId: driver?.id ?? null,
+          // unbound chats keep whatever Telegram gave us, so the tab can at least
+          // show who wrote ("Not linked") instead of an empty bubble
+          senderName: user?.fullName ?? driver?.name ?? input.senderName ?? null,
+          kind,
+          text: input.text ? maskInboundText(input.text) : null,
+          photoFileId: input.photo?.fileId ?? null,
+          photoWidth: input.photo?.width ?? null,
+          photoHeight: input.photo?.height ?? null,
+          documentName: input.documentName ?? null,
+          announcementId,
+          handledBy: announcementId ? 'ANNOUNCEMENT_REPLY' : 'GENERAL',
+          state: 'NEW',
+        },
+        select: { id: true, announcementId: true },
+      });
+      // a signal only — the tab refetches through the normal API
+      this.events?.publish('message.new');
+      return row;
+    } catch (e) {
+      // (chatId, telegramMessageId) is unique: Telegram re-delivering an update
+      // after a crash must not duplicate the bubble. Answer with the row we
+      // already have, so a re-delivered card reply still counts as one (R1).
+      if ((e as { code?: string }).code === 'P2002' && input.messageId != null) {
+        const existing = await this.prisma.telegramInboundMessage
+          .findFirst({
+            where: { chatId: input.chatId, telegramMessageId: BigInt(input.messageId) },
+            select: { id: true, announcementId: true },
+          })
+          .catch(() => null);
+        return existing ?? null;
+      }
+      console.warn(`[announcements] inbound capture failed for chat ${input.chatId}: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Label the flow that consumed a captured message (plan §6 / R3). */
+  async markHandled(id: string | null | undefined, handledBy: InboundHandledBy) {
+    if (!id) return;
+    try {
+      await this.prisma.telegramInboundMessage.updateMany({
+        // never rewrite an explicit announcement reply — R1 decides that once
+        where: { id, handledBy: { not: 'ANNOUNCEMENT_REPLY' } },
+        data: { handledBy },
+      });
+    } catch (e) {
+      console.warn(`[announcements] could not label inbound message ${id}: ${(e as Error).message}`);
     }
   }
 

@@ -1,7 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Observable, Subject } from 'rxjs';
 
-export type AmsEventType = 'assignment.updated' | 'driver.updated' | 'request.updated' | 'vehicle.updated' | 'notification';
+export type AmsEventType =
+  | 'assignment.updated'
+  | 'driver.updated'
+  | 'request.updated'
+  | 'vehicle.updated'
+  | 'notification'
+  /** a subscriber message arrived — the announcement Messages tab refetches */
+  | 'message.new';
 
 /** Lightweight push signal — no row data, clients refetch through the normal API. */
 export interface AmsEvent {
