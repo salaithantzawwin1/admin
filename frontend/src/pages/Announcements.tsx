@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api, getToken, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { RichTextEditor } from '../components/RichTextEditor';
@@ -6,6 +7,8 @@ import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
 import { fmtDate as fmtDateYgn, fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
+import { useLiveReload } from '../hooks/useLiveReload';
+import AnnouncementMessages, { ThreadsResponse } from './AnnouncementMessages';
 
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'];
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'];
@@ -236,7 +239,10 @@ function useDeepLink(items: Announcement[], open: (a: Announcement) => void) {
     if (a) {
       done.current = id;
       open(a);
-      history.replaceState(null, '', '/announcements');
+      // drop the consumed ?ann= but keep the rest of the query (?tab=) intact
+      const url = new URL(location.href);
+      url.searchParams.delete('ann');
+      history.replaceState(null, '', url.pathname + url.search);
     }
   }, [items, open]);
 }
@@ -386,7 +392,13 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
 }
 
 /** ============ Administration manage view ============ */
-function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: () => void }) {
+function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
+  items: Announcement[];
+  reload: () => void;
+  /** announcementId → stored subscriber messages (absent = none) */
+  replyCounts: Record<string, number>;
+  onOpenMessages: (announcementId: string) => void;
+}) {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Announcement | null>(null);
   const [deleteFor, setDeleteFor] = useState<Announcement | null>(null);
@@ -681,6 +693,18 @@ function AdminAnnouncements({ items, reload }: { items: Announcement[]; reload: 
                   <Button variant="ghost" onClick={() => unpublish(a)}>Unpublish</Button>
                 )}
                 <div className="flex gap-1 items-center">
+                  {(replyCounts[a.id] ?? 0) > 0 && (
+                    <>
+                      <button
+                        className="text-xs text-blue-600 hover:underline"
+                        onClick={() => onOpenMessages(a.id)}
+                        title={`${replyCounts[a.id]} subscriber message(s) — open the Messages tab`}
+                      >
+                        💬 {replyCounts[a.id]}
+                      </button>
+                      <span className="text-gray-200">·</span>
+                    </>
+                  )}
                   <button
                     className={`text-xs hover:underline ${a.pinnedAt ? 'text-gray-900 font-semibold' : 'text-gray-400 hover:text-gray-700'}`}
                     onClick={() => togglePin(a)}
@@ -889,9 +913,38 @@ interface TargetInput { targetType: string; targetId?: string }
 
 export default function Announcements() {
   const canManage = hasPermission('announcements.manage');
+  const canMessages = hasPermission('messages.read');
+  // the active tab lives in the URL (?tab=messages) so refresh/back/shared links
+  // keep it — and `?ann=` then names the conversation instead of a detail view
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: 'announcements' | 'messages' =
+    canMessages && searchParams.get('tab') === 'messages' ? 'messages' : 'announcements';
+  const showTab = (t: 'announcements' | 'messages') =>
+    setSearchParams(t === 'messages' ? { tab: 'messages' } : {}, { replace: false });
+
   const [items, setItems] = useState<Announcement[]>([]);
   const [mine, setMine] = useState<Announcement[]>([]);
   const [error, setError] = useState('');
+  const [unread, setUnread] = useState(0);
+  const [replyCounts, setReplyCounts] = useState<Record<string, number>>({});
+
+  /** Tab badge + per-notice reply counts (they share one call). */
+  const loadThreads = useCallback(() => {
+    if (!canMessages) return;
+    api<ThreadsResponse>('/messages/threads')
+      .then((r) => {
+        setUnread(r.general.unread + r.threads.reduce((n, t) => n + t.unread, 0));
+        setReplyCounts(Object.fromEntries(r.threads.map((t) => [t.announcementId, t.total])));
+      })
+      .catch(() => { /* the tab still works; the list shows its own error */ });
+  }, [canMessages]);
+  useEffect(loadThreads, [loadThreads]);
+  useLiveReload(['message.new'], loadThreads);
+  useEffect(() => {
+    if (!canMessages) return;
+    const t = setInterval(loadThreads, 15000); // fallback while the stream is down
+    return () => clearInterval(t);
+  }, [canMessages, loadThreads]);
 
   const load = useCallback(() => {
     if (canManage) {
@@ -909,8 +962,52 @@ export default function Announcements() {
   return (
     <div>
       <PageHeader title="Announcements" subtitle="Company and office notices (Plan §18)" />
+
+      {canMessages && (
+        <div className="flex gap-1 border-b border-gray-200 mb-5" role="tablist" aria-label="Announcements sections">
+          <button
+            role="tab"
+            aria-selected={tab === 'announcements'}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+              tab === 'announcements'
+                ? 'border-blue-600 text-blue-700 bg-blue-50/60'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+            onClick={() => showTab('announcements')}
+          >
+            Announcements
+          </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'messages'}
+            className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+              tab === 'messages'
+                ? 'border-blue-600 text-blue-700 bg-blue-50/60'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+            }`}
+            onClick={() => showTab('messages')}
+          >
+            💬 Messages{unread > 0 ? ` (${unread})` : ''}
+          </button>
+          {/* screen readers hear the badge change when a reply arrives */}
+          <span className="sr-only" aria-live="polite">
+            {unread > 0 ? `${unread} unread subscriber message${unread === 1 ? '' : 's'}` : 'No unread subscriber messages'}
+          </span>
+        </div>
+      )}
+
       {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4">{error}</div>}
-      {canManage ? <AdminAnnouncements items={items} reload={load} /> : <EmployeeAnnouncements items={mine} reload={load} />}
+
+      {tab === 'messages' && canMessages ? (
+        <AnnouncementMessages
+          canManage={canManage}
+          onOpenAnnouncement={(id) => setSearchParams({ ann: id }, { replace: false })}
+        />
+      ) : canManage ? (
+        <AdminAnnouncements items={items} reload={load} replyCounts={replyCounts} onOpenMessages={(id) => setSearchParams({ tab: 'messages', ann: id })} />
+      ) : (
+        <EmployeeAnnouncements items={mine} reload={load} />
+      )}
     </div>
   );
 }

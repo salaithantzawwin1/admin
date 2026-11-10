@@ -48,15 +48,25 @@ function makePrisma(opts: {
   reads?: any[];
 }) {
   const calls: { listWhere?: any; listSkip?: any; listTake?: any; updateMany?: any; update?: any; readWhere?: any } = {};
+  const eq = (value: any, cond: any) => {
+    if (cond === null || typeof cond !== 'object') return value === cond;
+    if (cond.not === null) return value !== null;
+    if (cond.not !== undefined) return value !== cond.not;
+    if (cond.in !== undefined) return cond.in.includes(value);
+    if (cond.notIn !== undefined) return value != null && !cond.notIn.includes(value);
+    return true;
+  };
   const matches = (row: any, where: any): boolean => {
     if (!where) return true;
-    if ('announcementId' in where) {
-      if (where.announcementId === null ? row.announcementId !== null : row.announcementId !== where.announcementId) {
-        return false;
-      }
+    if ('AND' in where && !where.AND.every((w: any) => matches(row, w))) return false;
+    if ('OR' in where && !where.OR.some((w: any) => matches(row, w))) return false;
+    if ('id' in where && !eq(row.id, where.id)) return false;
+    if ('announcementId' in where && !(where.announcementId === null ? row.announcementId === null : eq(row.announcementId, where.announcementId))) {
+      return false;
     }
+    if ('userId' in where && !eq(row.userId, where.userId)) return false;
     for (const key of ['handledBy', 'kind', 'state']) {
-      if (where[key] !== undefined && row[key] !== where[key]) return false;
+      if (where[key] !== undefined && !eq(row[key], where[key])) return false;
     }
     return true;
   };
@@ -100,7 +110,9 @@ function makePrisma(opts: {
     },
     announcement: {
       findMany: async (a: any) =>
-        (opts.announcements ?? []).filter((x) => a.where.id.in.includes(x.id)),
+        (opts.announcements ?? []).filter((x) =>
+          a.where.requiresAck ? x.requiresAck === true : (a.where.id?.in ?? []).includes(x.id),
+        ),
     },
     user: {
       findMany: async (a: any) =>
@@ -109,8 +121,14 @@ function makePrisma(opts: {
     announcementRead: {
       findMany: async (a: any) => {
         calls.readWhere = a.where;
-        return (opts.reads ?? []).filter((r: any) =>
-          a.where.OR.some((p: any) => p.announcementId === r.announcementId && p.userId === r.userId),
+        if (a.where.OR) {
+          return (opts.reads ?? []).filter((r: any) =>
+            a.where.OR.some((p: any) => p.announcementId === r.announcementId && p.userId === r.userId),
+          );
+        }
+        // pendingAckFilter: acked rows of the ack-requiring announcements
+        return (opts.reads ?? []).filter(
+          (r: any) => (a.where.announcementId?.in ?? []).includes(r.announcementId) && r.ackAt != null,
         );
       },
     },
@@ -268,6 +286,44 @@ async function main() {
     assert.strictEqual(h.calls.updateMany.data.readById, 'u-9');
     assert.strictEqual((await svc.readAll(ANN_A, 'u-9')).updated, 2);
     assert.strictEqual(h.calls.updateMany.where.announcementId, ANN_A);
+  });
+
+  await test('handledBy=IN_PROGRESS is the flow-took-it filter, not replies or plain chat', async () => {
+    const rows = [
+      row({ id: 'odo', handledBy: 'ODOMETER' }),
+      row({ id: 'car', handledBy: 'CAR_FORM' }),
+      row({ id: 'reply', announcementId: ANN_A, handledBy: 'ANNOUNCEMENT_REPLY' }),
+      row({ id: 'plain', handledBy: 'GENERAL' }),
+    ];
+    const out = await new MessagesService(makePrisma({ rows }).prisma).list({ handledBy: 'IN_PROGRESS' });
+    assert.deepStrictEqual(out.items.map((i: any) => i.id).sort(), ['car', 'odo']);
+  });
+
+  await test('ack=pending lists ack-requiring thread rows whose sender never acked', async () => {
+    const rows = [
+      row({ id: 'a1', announcementId: ANN_A, userId: 'u-1', handledBy: 'ANNOUNCEMENT_REPLY' }),
+      row({ id: 'a3', announcementId: ANN_A, userId: 'u-3' }),
+      row({ id: 'b1', announcementId: ANN_B, userId: 'u-2' }),
+      row({ id: 'g1' }),
+    ];
+    const out = await new MessagesService(
+      makePrisma({
+        rows,
+        announcements: [
+          { id: ANN_A, requiresAck: true },
+          { id: ANN_B, requiresAck: false },
+        ],
+        reads: [{ announcementId: ANN_A, userId: 'u-1', ackAt: new Date() }],
+      }).prisma,
+    ).list({ ack: 'pending' });
+    assert.deepStrictEqual(out.items.map((i: any) => i.id), ['a3'], 'u-1 acked, B needs no ack, General is not chased');
+  });
+
+  await test('ack=pending with no ack-requiring notice matches nothing (not everything)', async () => {
+    const out = await new MessagesService(
+      makePrisma({ rows: baseRows, announcements: [{ id: ANN_A, requiresAck: false }] }).prisma,
+    ).list({ ack: 'pending' });
+    assert.strictEqual(out.total, 0);
   });
 
   await test('unreadCount(): one number for the tab badge', async () => {

@@ -8,6 +8,8 @@ export interface MessageQuery {
   handledBy?: string;
   kind?: string;
   state?: string;
+  /** `pending` = messages in an ack-requiring thread whose sender never acked */
+  ack?: string;
   page?: string;
   pageSize?: string;
 }
@@ -54,6 +56,41 @@ export class MessagesService {
     if (announcementId == null || announcementId === '' || announcementId === 'all') return {};
     if (announcementId === GENERAL) return { announcementId: null };
     return { announcementId };
+  }
+
+  /**
+   * Rows whose sender owes an acknowledgement (the tab's "Not acked" list).
+   *
+   * Ack records point at (announcement, user), so this cannot be a plain column
+   * filter: we read the ack-requiring announcements and their acked senders, then
+   * ask for "this announcement AND not one of those senders" per announcement.
+   * Bounded by the number of ack-requiring notices, which is small by design.
+   */
+  private async pendingAckFilter(): Promise<Prisma.TelegramInboundMessageWhereInput> {
+    const announcements = await this.prisma.announcement.findMany({
+      where: { requiresAck: true },
+      select: { id: true },
+    });
+    if (announcements.length === 0) return { id: { in: [] } }; // matches nothing
+    const reads = await this.prisma.announcementRead.findMany({
+      where: { announcementId: { in: announcements.map((a) => a.id) }, ackAt: { not: null } },
+      select: { announcementId: true, userId: true },
+    });
+    const ackedBy = new Map<string, string[]>();
+    for (const r of reads) {
+      const list = ackedBy.get(r.announcementId);
+      if (list) list.push(r.userId);
+      else ackedBy.set(r.announcementId, [r.userId]);
+    }
+    return {
+      OR: announcements.map((a) => {
+        const acked = ackedBy.get(a.id);
+        // a null sender can never acknowledge, so they are not a chase target
+        return acked
+          ? { announcementId: a.id, userId: { notIn: acked } }
+          : { announcementId: a.id, userId: { not: null } };
+      }),
+    };
   }
 
   // ---------- GET /messages/threads ----------
@@ -129,16 +166,28 @@ export class MessagesService {
    * same sender, so the tab can show "answered + acknowledged" on one row.
    */
   async list(query: MessageQuery) {
-    const handledBy = this.oneOf<InboundMessageHandledBy>(query.handledBy, HANDLED_BY, 'handledBy');
     const kind = this.oneOf<InboundMessageKind>(query.kind, KINDS, 'kind');
     const state = this.oneOf<InboundMessageState>(query.state, STATES, 'state');
+    const ack = this.oneOf(query.ack, ['pending'] as const, 'ack');
     const { page, pageSize, skip } = this.paging(query);
+
+    // `IN_PROGRESS` is the tab's word for "a bot flow already took this one"
+    // (odometer, reject reason, ETA, car form, command) — one alias instead of
+    // five handledBy values in the URL.
+    const handledWhere: Prisma.TelegramInboundMessageWhereInput =
+      query.handledBy === 'IN_PROGRESS'
+        ? { handledBy: { notIn: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } }
+        : (() => {
+            const h = this.oneOf<InboundMessageHandledBy>(query.handledBy, HANDLED_BY, 'handledBy');
+            return h ? { handledBy: h } : {};
+          })();
 
     const where: Prisma.TelegramInboundMessageWhereInput = {
       ...this.threadFilter(query.announcementId),
-      ...(handledBy ? { handledBy } : {}),
+      ...handledWhere,
       ...(kind ? { kind } : {}),
       ...(state ? { state } : {}),
+      ...(ack === 'pending' ? { AND: [await this.pendingAckFilter()] } : {}),
     };
 
     const [total, unread, rows] = await Promise.all([

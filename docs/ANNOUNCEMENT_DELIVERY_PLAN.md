@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1–P5 done — 5 of 9 planned phases (P6–P8 remaining, ~55 %)** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1–P6 done — 6 of 9 planned phases (P7–P8 remaining, ~75 %)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -389,7 +389,7 @@ as a regression.
 | D2 | `publish()` → `notifyMany()` → `telegram.mirrorToUser()` → `sendToChat()` sends a **text notification**, then album, then card = up to **3 messages per chat** per announcement | Plain replies may attach to the mirror or the album. Exact linking covers the messages we record; the rest fall back to the 14-day rule (same announcement, so still correct). `notifyMany` returns `void`, so mirror ids need threading if we want exactness there; recommend **F9** (drop the duplicate mirror) over threading. |
 | D3 | `sendPhotosToAudience()` caps at `userIds.slice(0, 100)` | Audiences >100 users never receive the card or ack button — the ack metric silently becomes meaningless. **F10**, fix inside P7 (or the hotfix). |
 | D4 | `readStats()` returns `readRows: { userId, readAt, ackAt }` — **no names** | F3 needs one extra `user.findMany({ select: { id, fullName, employee.department } })` join, merged client-side or server-side. Scope it in P7. |
-| D5 | Deep link uses raw `location.search` and `history.replaceState(null, '', '/announcements')` (Announcements.tsx L229–242) — it **wipes the query** | Adding `?tab=` will be destroyed when a deep-linked announcement opens. P6 must rewrite this hook to preserve `tab` (and read `ann` on mount regardless of tab). |
+| D5 | Deep link uses raw `location.search` and `history.replaceState(null, '', '/announcements')` (Announcements.tsx L229–242) — it **wipes the query** | Adding `?tab=` will be destroyed when a deep-linked announcement opens. P6 must rewrite this hook to preserve `tab` (and read `ann` on mount regardless of tab). **✅ Fixed in P6:** it now deletes only `ann` and keeps the rest of the query. |
 | D6 | `TgUpdate.message.from` already carries `{ id, username, first_name }`; `message.chat` only `{ id }` | `senderName` is available today; no extra API call needed. Missing fields are only `message_id`, `reply_to_message`, `caption`, `media_group_id`, `document`. |
 | D7 | `lifecycleCron()` is `@Cron('0 5 * * * *')` and only runs two `updateMany` | **Corrected:** cron's 6-field order is `sec min hour dom mon dow`, so this is **once an hour at :05**, not every minute — a notice scheduled for 08:01 published at 09:05. Fixed to `'0 * * * * *'` (every minute) in P0.5 together with `deliverPublished()`. Single container today, so no double-send risk; note it if replicas are ever added. |
 | D8 | `ScheduleModule.forRoot()` is registered once (app.module §41) | The F7 escalation cron is just another `@Cron` on the announcements service — no new module wiring. |
@@ -419,12 +419,12 @@ see how much is done.
 | **P3** | Outbound card tracking | `telegram.service.ts` (`sendAnnouncementCard`), `announcements.service.ts` (`recordChatSend`) | 10 % | ✅ |
 | **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ✅ |
 | **P5** | Messages API + live event | `messages/*` (new module), `events.service.ts` | 10 % | ✅ |
-| **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ⬜ |
+| **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ✅ |
 | **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ⬜ |
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ⬜ |
 | **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -619,16 +619,57 @@ prod deployed, prod health 200.
 
 ### P6 — Messages tab UI (1 d)
 
-- [ ] `?tab=` tabs in `Announcements.tsx` (§9.2), preserve `?ann=`.
-- [ ] `AnnouncementMessages.tsx`: threads, bubbles, filters, mark-read, empty /
+- [x] `?tab=` tabs in `Announcements.tsx` (§9.2), preserve `?ann=`.
+- [x] `AnnouncementMessages.tsx`: threads, bubbles, filters, mark-read, empty /
       loading / error states, photo marker, ack chips, mobile single pane, a11y.
-- [ ] `LiveEventType` + `useLiveReload(['message.new'])`, 15 s polling fallback,
+- [x] `LiveEventType` + `useLiveReload(['message.new'])`, 15 s polling fallback,
       unread badge on the tab.
-- [ ] Admin announcement row gains `💬 n` → Messages tab filtered.
+- [x] Admin announcement row gains `💬 n` → Messages tab filtered.
 - **Gate:** text + photo replies visible within ~1 s of sending; refresh keeps
   state via URL; mobile width 390 px usable; `tsc -b` clean (then
   `git checkout -- frontend/tsconfig.tsbuildinfo`).
 - **Verify:** staging URL `:8030` in the browser, plus a real Telegram reply.
+
+**P6 result (2026-11-10):** new `pages/AnnouncementMessages.tsx`; `Announcements.tsx`
+gained the underline tab list (only rendered when the user holds `messages.read`)
+and the `?tab=messages` route. Implementation notes:
+
+- `Announcements` still owns the tab and passes `?ann=` through: on the
+  announcements tab it is the existing detail deep link, on the messages tab it is
+  the selected conversation (`all` / `none`→General / announcement id). **D5 fixed**
+  — `useDeepLink()` no longer replaces the URL with a bare `/announcements`; it
+  deletes only the consumed `ann` param and keeps the rest of the query.
+- Thread pane: search box, “All messages”, “General”, then one row per
+  announcement (title, `code · n messages · last reply`, `n new` badge, and a
+  “Needs acknowledgement” hint for `requiresAck` threads).
+- Conversation pane: header with title/code/publish time, `Open notice →`
+  (managers), `Mark all read`; filters **All / New / Announcement replies /
+  In progress / Not acked** (the last two use the new server aliases
+  `handledBy=IN_PROGRESS` and `ack=pending`); bubbles oldest→newest, album photos
+  with a shared `mediaGroupId` render as one block, photo/document markers, the
+  bot's label (`odometer`, `car form`, …), `✓ acked` / `! not acked`, `Not linked`
+  for unbound chats, department from the employee record. Clicking an unread
+  bubble marks just that message read; `Mark all read` clears the thread, General
+  or everything. “Load older” pages backwards without losing the visible rows.
+- Live: `useLiveReload(['message.new'])` plus a 15 s poll on both the thread list
+  and the open conversation (refetch, never patch from the event payload).
+- Mobile (390 px verified): thread list and conversation are separate panes, the
+  conversation has a back button, header actions wrap below the title.
+- A11y: `role="tablist"/"tab"` + `aria-selected`, `aria-pressed` on filters,
+  `role="log"` for the message list, `sr-only aria-live="polite"` announcing the
+  unread count, real `<button>`s throughout.
+
+Verified in the browser on the testing stack (`:8030`) against seeded rows: badge
+counted 4, threads split 3 + General, `In progress` showed only the odometer row,
+`Not acked` showed exactly the two unacked senders, selecting a thread set
+`?tab=messages&ann=…`, the admin row `💬 3` jumped to that thread, `Mark all read`
+dropped the badge 5 → 2 and refreshed the thread counts, the 15 s poll picked up a
+row inserted straight into the DB, and the employee-only account rendered no tab
+(and its token gets 403 from `/messages/threads`). Probe rows were deleted
+afterwards. `tsc -b` clean, `messages-api` 15/15, testing + prod deployed (prod
+health 200). **Not verified:** the SSE path with a real Telegram message, and the
+“visible within ~1 s of sending” half of the gate — the event type is wired, but a
+message can only be published by the capture path, which needs a bound chat.
 
 ### P7 — UX fixes F1–F4 (6 h)
 
@@ -666,6 +707,7 @@ blast radius.
 ### Progress log (append one line per phase)
 
 | Date | Phase | What landed | Gate result | Commit |
+| 2026-11-10 | P6 | Messages tab: URL tab, thread list + General, conversation pane with filters (`IN_PROGRESS`, `ack=pending` server aliases), bubble labels/ack chips/photo markers, mark-one/all read, load older, `message.new` + 15 s poll, unread badge, admin row `💬 n`; D5 deep-link fix | browser run on `:8030` (badge 4, filters, deep link, mark-all, poll pickup), 390 px mobile, `tsc -b` clean, `messages-api` 15/15, testing+prod deploy | see commit |
 | 2026-11-10 | P5 | `messages` module: threads (General + per announcement), paged list with sender/department/`ackAt`, unread count, mark-read, read-all; class-level `messages.read`; `message.new` in both event unions | 12/12 unit + live 200/201 vs 403/401/400 on testing | see commit |
 |---|---|---|---|---|
 | 2026-11-10 | P0.5 | `deliverPublished()` shared by publish + cron; cron per-row claim/revert; 100-recipient cap removed (batched, audit counts); cron cadence hourly→every minute; new test file | ✅ testing+prod deploy, 5/5 + 21/21 + 11/11 tests | `fdd5b7d` |
