@@ -321,8 +321,12 @@ export class AnnouncementsService {
         for (const u of bound) {
           if (!u.telegramChatId) continue;
           try {
-            if (files.length > 0) await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption);
-            await this.telegram.sendAnnouncementCard(u.telegramChatId, a, body);
+            const album = files.length > 0 ? await this.telegram.sendPhotoAlbum(u.telegramChatId, files, caption) : null;
+            const card = await this.telegram.sendAnnouncementCard(u.telegramChatId, a, body);
+            await this.recordChatSend(announcementId, u.telegramChatId, [
+              ...(card ? [card.message_id] : []),
+              ...(album ?? []).map((m) => m.message_id),
+            ]);
             sent += 1;
           } catch {
             failed += 1;
@@ -336,6 +340,26 @@ export class AnnouncementsService {
       });
     } catch {
       /* photos-in-Telegram is a bonus — never fail the publish */
+    }
+  }
+
+  /**
+   * Remember the Telegram message ids we sent for this announcement in each chat
+   * (the card and every album photo), so a subscriber's Reply — which carries
+   * reply_to_message.message_id — can be matched to the exact announcement it
+   * answers instead of guessing from the newest card in the chat (plan §5 / P3).
+   * Bookkeeping only: a failure is logged and never breaks delivery.
+   */
+  private async recordChatSend(announcementId: string, chatId: string, messageIds: number[]) {
+    const ids = [...new Set(messageIds.filter((id) => Number.isFinite(id)))];
+    if (ids.length === 0) return;
+    try {
+      await this.prisma.announcementChatSend.createMany({
+        data: ids.map((messageId) => ({ announcementId, chatId, messageId: BigInt(messageId) })),
+        skipDuplicates: true,
+      });
+    } catch (e) {
+      console.warn(`[announcements] could not record telegram message ids for chat ${chatId}: ${(e as Error).message}`);
     }
   }
 

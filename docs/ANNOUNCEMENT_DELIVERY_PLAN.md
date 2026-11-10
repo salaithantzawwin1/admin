@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1 + P2 done — 2 of 9 planned phases (P3–P8 remaining, ~15 %)** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1 + P2 + P3 done — 3 of 9 planned phases (P4–P8 remaining, ~25 %)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -416,7 +416,7 @@ see how much is done.
 | **P0.5** *(conditional)* | Hotfix F1 + F10 (only if scheduled Urgent is in use) | `announcements.service.ts` | — | ⬜ |
 | **P1** | Schema + migration 73 | `prisma/schema.prisma`, `prisma/migrations/…73…` | 10 % | ✅ |
 | **P2** | `messages.read` permission | `auth/permissions.ts`, `auth/permissions-seed.ts`, `RbacMatrix.tsx` | 5 % | ✅ |
-| **P3** | Outbound card tracking | `telegram.service.ts` (`sendAnnouncementCard`), `announcements.service.ts` (`recordChatSend`) | 10 % | ⬜ |
+| **P3** | Outbound card tracking | `telegram.service.ts` (`sendAnnouncementCard`), `announcements.service.ts` (`recordChatSend`) | 10 % | ✅ |
 | **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ⬜ |
 | **P5** | Messages API + live event | `messages/*` (new module), `events.service.ts` | 10 % | ⬜ |
 | **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ⬜ |
@@ -424,7 +424,7 @@ see how much is done.
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ⬜ |
 | **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 applied on testing + prod), P2 ✅ (`messages.read`).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 applied on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -507,14 +507,30 @@ gets every code dynamically). `rbac-deny-memory` 21/21, `security` 11/11,
 
 ### P3 — Outbound card tracking (2 h)
 
-- [ ] `sendAnnouncementCard()` returns `{ message_id } | null` (C1).
-- [ ] `recordChatSend()` upsert on `(announcementId, chatId)`; called from the
-      audience fan-out right after each send; failures logged, never thrown.
-- [ ] Unit test: mocked `call` returning `{ message_id: 42 }` → row created;
+- [x] `sendAnnouncementCard()` returns `{ message_id } | null` (C1).
+- [x] `recordChatSend()` on `(chatId, messageId)`; called from the audience
+      fan-out right after each send; failures logged, never thrown.
+      **Changed from the first draft:** the row key is the Telegram message id,
+      not `(announcementId, chatId)` — an announcement with photos produces up to
+      eleven messages per chat (album + card) and any of them can be replied to,
+      so every id is stored (`createMany … skipDuplicates`).
+- [x] Unit test: mocked `call` returning `{ message_id: 42 }` → row created;
       `null` → no row, no throw.
 - **Gate:** publish a test announcement to one test chat → exactly one
   `announcement_chat_sends` row with the real id.
 - **Verify:** DB query + Telegram shows the card.
+
+**P3 result (2026-11-10):** `sendAnnouncementCard()` now returns
+`{ message_id } | null` (a reply without `message_id`, a disabled bot and an API
+failure all yield `null`); the fan-out stores card + album ids per chat through
+`recordChatSend()` (`BigInt(messageId)`, `skipDuplicates`, `try/catch` +
+`console.warn`). `test/announcement-chat-sends.test.ts` 6/6 (id returned, null on
+failure, missing id tolerated, three ids recorded card-first, refused card stores
+nothing, insert failure does not break the publish). `announcement-scheduled-publish`
+still 5/5, baseline 20/70/21/35/11/21 all green, `tsc` clean, testing + prod
+deployed. **Not verified end-to-end:** no bound Telegram chat in either
+environment, so the “real id in a real chat” half of the gate still needs one
+manual publish to a test chat (same limitation as P0.5).
 
 ### P4 — Inbound capture + conflict rules (1 d)
 
@@ -591,6 +607,7 @@ blast radius.
 | Date | Phase | What landed | Gate result | Commit |
 |---|---|---|---|---|
 | 2026-11-10 | P0.5 | `deliverPublished()` shared by publish + cron; cron per-row claim/revert; 100-recipient cap removed (batched, audit counts); cron cadence hourly→every minute; new test file | ✅ testing+prod deploy, 5/5 + 21/21 + 11/11 tests | `fdd5b7d` |
+| 2026-11-10 | P3 | `sendAnnouncementCard` returns its `message_id`; fan-out records card + album ids per chat (`announcement_chat_sends`), best-effort; new test file (6 checks) | ✅ testing+prod deploy, 6/6 + 5/5, tsc clean | see commit |
 | 2026-11-10 | P2 | `messages.read` in the catalog + ADMINISTRATION default grant + matrix group/label | ✅ seeded on testing, gate SQL verified, 21/21 + 11/11 + 5/5 | see commit |
 | 2026-11-10 | P1 | `AnnouncementChatSend` + `TelegramInboundMessage` models, three enums, two back-relations; migration 73 (two tables, 6 indexes, 2 FKs) | ✅ applied on testing, **no drift in the new tables**; baseline 20/70/21/35/12/10/5 + 5 new all green; `tsc --noEmit` clean | see commit |
 

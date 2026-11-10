@@ -100,6 +100,8 @@ function makeService(opts: {
       },
     },
     announcementTarget: { findMany: async () => [{ targetType: 'ALL', targetId: null }] },
+    // message-id bookkeeping (P3) — not what this suite is about
+    announcementChatSend: { createMany: async () => ({ count: 0 }) },
     attachment: { findMany: async () => [] },
     user: {
       findMany: async (a: any) => {

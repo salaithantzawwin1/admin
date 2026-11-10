@@ -1901,7 +1901,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * the chat (callback `anack:<id>`); NORMAL ones just get the album + text.
    * Only called for users in the audience, after the photo album.
    */
-  async sendAnnouncementCard(chatId: string, a: { id: string; code: string; title: string; priority: string; requiresAck: boolean }, body: string) {
+  async sendAnnouncementCard(
+    chatId: string,
+    a: { id: string; code: string; title: string; priority: string; requiresAck: boolean },
+    body: string,
+  ): Promise<{ message_id: number } | null> {
     const lines = [
       `${a.priority === 'NORMAL' ? '📢' : '🚨'} <b>${escapeHtml(a.priority === 'NORMAL' ? 'Announcement' : a.priority)} — ${escapeHtml(a.title)}</b>`,
       `🏷 ${escapeHtml(a.code)}`,
@@ -1912,13 +1916,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const rows = a.requiresAck
       ? [[{ text: '✓ Acknowledge', callback_data: `anack:${a.id}` }], openRow]
       : [openRow];
-    await this.call('sendMessage', {
+    const res = await this.call<{ message_id?: number }>('sendMessage', {
       chat_id: chatId,
       text: lines.join('\n'),
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
       reply_markup: { inline_keyboard: rows.filter((r) => r.length > 0) },
     });
+    // the id lets a Reply in the chat be matched back to this exact announcement
+    // (plan §5 / P3) — null means Telegram did not accept the message
+    return res && typeof res.message_id === 'number' ? { message_id: res.message_id } : null;
   }
 
   /** Upload one local file as a photo/document via multipart — never throws. */
