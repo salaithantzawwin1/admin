@@ -38,6 +38,8 @@ interface Announcement {
   readCount?: number;
   /** admin list enrichment */
   audienceCount?: number;
+  /** how many of the audience explicitly acknowledged (IMPORTANT+) */
+  ackCount?: number;
   targetsWithCounts?: Target[];
   /** photo thumbnails included in /mine responses (first 4) */
   photos?: Attachment[];
@@ -45,7 +47,13 @@ interface Announcement {
 }
 interface Attachment { id: string; filename: string; size: number; mimeType: string }
 interface DeptReadRow { departmentId: string | null; name: string; target: number; read: number; acked: number }
-interface ReadStats { target: number; read: number; unread: number; acked: number; requiresAck: boolean; departments?: DeptReadRow[] }
+interface ReadPerson { userId: string; name: string; username: string; department: string | null; readAt: string | null; ackAt: string | null }
+interface ReadStats {
+  target: number; read: number; unread: number; acked: number; requiresAck: boolean;
+  departments?: DeptReadRow[];
+  /** every target with their own read/ack time — the chase list (F3) */
+  people?: ReadPerson[];
+}
 
 const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
@@ -402,8 +410,10 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Announcement | null>(null);
   const [deleteFor, setDeleteFor] = useState<Announcement | null>(null);
+  const [publishFor, setPublishFor] = useState<Announcement | null>(null);
   const [statsFor, setStatsFor] = useState<Announcement | null>(null);
   const [stats, setStats] = useState<ReadStats | null>(null);
+  const [peopleFilter, setPeopleFilter] = useState<'ALL' | 'NOT_ACKED' | 'UNREAD'>('ALL');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   // list controls — status chips, priority filter, search
@@ -532,14 +542,12 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     }
   };
 
+  /** Publish is irreversible for the audience — always confirm first (F4). */
   const publish = async (a: Announcement) => {
-    try {
-      await api(`/announcements/${a.id}/publish`, { method: 'POST' });
-      toast(`Published — audience notified`);
-      reload();
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Failed');
-    }
+    await api(`/announcements/${a.id}/publish`, { method: 'POST' });
+    toast(`Published — audience notified`);
+    setPublishFor(null);
+    reload();
   };
 
   const unpublish = async (a: Announcement) => {
@@ -568,6 +576,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   const showStats = async (a: Announcement) => {
     setStatsFor(a);
     setStats(null);
+    setPeopleFilter('ALL');
     try {
       setStats(await api<ReadStats>(`/announcements/${a.id}/read-stats`));
     } catch { /* modal shows null state */ }
@@ -592,6 +601,11 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     }
     return true;
   });
+
+  // the chase list in the stats modal: everyone / never opened / never acked
+  const visiblePeople = (stats?.people ?? []).filter((p) =>
+    peopleFilter === 'ALL' ? true : peopleFilter === 'UNREAD' ? !p.readAt : !p.ackAt,
+  );
 
   const statusChips: { key: typeof statusFilter; label: string; count: number }[] = [
     { key: 'ALL', label: 'All', count: items.length },
@@ -686,9 +700,27 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                     </span>
                   </button>
                 )}
+                {/* F2 — acknowledgement is the number that matters for IMPORTANT+ */}
+                {a.requiresAck && audience > 0 && (
+                  <button
+                    className="flex items-center gap-2 mt-1 group/ack"
+                    onClick={() => showStats(a)}
+                    title="Open who acknowledged"
+                  >
+                    <div className="w-28 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${(a.ackCount ?? 0) >= audience ? 'bg-green-500' : 'bg-amber-400'}`}
+                        style={{ width: `${Math.min(100, Math.round(((a.ackCount ?? 0) / audience) * 100))}%` }}
+                      />
+                    </div>
+                    <span className={`text-xs group-hover/ack:underline ${(a.ackCount ?? 0) >= audience ? 'text-green-600' : 'text-amber-600'}`}>
+                      Acked {a.ackCount ?? 0}/{audience}
+                    </span>
+                  </button>
+                )}
               </div>
               <div className="flex flex-col gap-1 items-end shrink-0">
-                {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && <Button onClick={() => publish(a)}>Publish</Button>}
+                {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && <Button onClick={() => setPublishFor(a)}>Publish</Button>}
                 {a.status === 'PUBLISHED' && (
                   <Button variant="ghost" onClick={() => unpublish(a)}>Unpublish</Button>
                 )}
@@ -865,6 +897,87 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                 <div><div className="text-2xl font-bold text-gray-500">{stats.unread}</div><div className="text-xs text-gray-400">Unread</div></div>
                 <div><div className="text-2xl font-bold text-green-600">{stats.acked}</div><div className="text-xs text-gray-400">Acked</div></div>
               </div>
+              {(stats.people?.length ?? 0) > 0 && (
+                <div className="mt-4 border-t border-gray-100 pt-3">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
+                    <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">People</div>
+                    <div className="ml-auto flex gap-1">
+                      {(['ALL', 'UNREAD', 'NOT_ACKED'] as const)
+                        .filter((f) => f !== 'NOT_ACKED' || stats.requiresAck)
+                        .map((f) => (
+                          <button
+                            key={f}
+                            onClick={() => setPeopleFilter(f)}
+                            aria-pressed={peopleFilter === f}
+                            className={`px-2 py-0.5 rounded-full text-[11px] font-medium transition-colors ${
+                              peopleFilter === f ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                            }`}
+                          >
+                            {f === 'ALL' ? `All (${stats.people!.length})` : f === 'UNREAD' ? `Unread (${stats.unread})` : `Not acked (${Math.max(0, stats.target - stats.acked)})`}
+                          </button>
+                        ))}
+                      <button
+                        className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50"
+                        onClick={() => {
+                          const names = visiblePeople.map((p) => `${p.name}${p.department ? ` (${p.department})` : ''}`).join('\n');
+                          const done = () => toast(`${visiblePeople.length} name${visiblePeople.length === 1 ? '' : 's'} copied`);
+                          // the app is served over plain HTTP on the LAN, where
+                          // navigator.clipboard is undefined (secure context only)
+                          const fallback = () => {
+                            const ta = document.createElement('textarea');
+                            ta.value = names;
+                            ta.setAttribute('readonly', '');
+                            ta.style.position = 'fixed';
+                            ta.style.opacity = '0';
+                            document.body.appendChild(ta);
+                            ta.select();
+                            let ok = false;
+                            try { ok = document.execCommand('copy'); } catch { ok = false; }
+                            document.body.removeChild(ta);
+                            if (ok) done();
+                            else toast('Could not copy — the list is selectable');
+                          };
+                          if (!navigator.clipboard?.writeText) return fallback();
+                          navigator.clipboard.writeText(names).then(done, fallback);
+                        }}
+                        title="Copy the visible names, one per line"
+                      >
+                        Copy list
+                      </button>
+                    </div>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto -mx-1">
+                    <table className="w-full text-xs">
+                      <thead className="text-gray-400 sticky top-0 bg-white">
+                        <tr>
+                          <th className="text-left font-medium px-1 py-1">Name</th>
+                          <th className="text-left font-medium px-1 py-1">Department</th>
+                          <th className="text-left font-medium px-1 py-1">Read</th>
+                          {stats.requiresAck && <th className="text-left font-medium px-1 py-1">Acked</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visiblePeople.map((p) => (
+                          <tr key={p.userId} className="border-t border-gray-50">
+                            <td className="px-1 py-1 text-gray-800">{p.name}</td>
+                            <td className="px-1 py-1 text-gray-500">{p.department ?? '—'}</td>
+                            <td className="px-1 py-1 text-gray-500">{p.readAt ? fmtDate(p.readAt) : <span className="text-gray-300">not read</span>}</td>
+                            {stats.requiresAck && (
+                              <td className={`px-1 py-1 ${p.ackAt ? 'text-green-600' : 'text-amber-600'}`}>
+                                {p.ackAt ? fmtDate(p.ackAt) : 'not acked'}
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                        {visiblePeople.length === 0 && (
+                          <tr><td colSpan={stats.requiresAck ? 4 : 3} className="px-1 py-3 text-center text-gray-400">Nobody in this filter</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
               {(stats.departments?.length ?? 0) > 0 && (
                 <div className="mt-4 border-t border-gray-100 pt-3">
                   <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">By department</div>
@@ -894,6 +1007,38 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             <div className="text-sm text-gray-400">Loading…</div>
           )}
         </Modal>
+      )}
+
+      {/* publish is one click away from reaching everyone — show what it will do (F4) */}
+      {publishFor && (
+        <ConfirmDialog
+          title={publishFor.status === 'SCHEDULED' ? `Publish ${publishFor.code} now?` : `Publish ${publishFor.code}?`}
+          description={
+            <div className="space-y-2">
+              <div className="font-medium text-gray-800">{publishFor.title}</div>
+              <div>
+                Goes to <strong>{publishFor.audienceCount ?? 0}</strong> {
+                  (publishFor.audienceCount ?? 0) === 1 ? 'person' : 'people'
+                }{' '}
+                ({(publishFor.targets ?? []).map((t) => t.targetLabel).join(', ') || 'no target'}) — in-app notification
+                plus a Telegram card to every bound chat.
+              </div>
+              {publishFor.requiresAck ? (
+                <div className="text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                  Subscribers must <strong>acknowledge</strong> this notice ({nice(publishFor.priority)}).
+                </div>
+              ) : (
+                <div className="text-gray-500">Everyone can read it; no acknowledgement is asked for.</div>
+              )}
+              {publishFor.status === 'SCHEDULED' && (
+                <div className="text-gray-500">It was scheduled for {fmtDate(publishFor.publishAt)} — publishing now sends it immediately.</div>
+              )}
+            </div>
+          }
+          confirmLabel="Publish now"
+          onConfirm={async () => { await publish(publishFor); }}
+          onClose={() => setPublishFor(null)}
+        />
       )}
 
       {deleteFor && (

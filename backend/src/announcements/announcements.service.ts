@@ -481,6 +481,16 @@ export class AnnouncementsService {
       orderBy: [{ pinnedAt: 'desc' }, { createdAt: 'desc' }],
       include: { targets: true, createdBy: { select: { fullName: true } }, _count: { select: { reads: true } } },
     });
+    // acked count per row in ONE query — the admin list shows "Acked 31/128" (F2)
+    const ids = rows.map((r) => r.id);
+    const ackGroups = ids.length
+      ? await this.prisma.announcementRead.groupBy({
+          by: ['announcementId'],
+          where: { announcementId: { in: ids }, ackAt: { not: null } },
+          _count: { _all: true },
+        })
+      : [];
+    const ackMap = new Map(ackGroups.map((g) => [g.announcementId, g._count._all]));
     const deptCounts = await this.prisma.$queryRaw<{ departmentId: string; memberCount: number }[]>`
       SELECT "departmentId", "memberCount" FROM "department_member_counts"`;
     const countMap = new Map(deptCounts.map((d) => [d.departmentId, d.memberCount]));
@@ -489,6 +499,7 @@ export class AnnouncementsService {
       return {
         ...a,
         audienceCount: audience.length,
+        ackCount: ackMap.get(a.id) ?? 0,
         targetsWithCounts: a.targets.map((t) => ({
           ...t,
           memberCount: t.targetType === 'DEPARTMENT' && t.targetId ? (countMap.get(t.targetId) ?? null) : null,
@@ -510,7 +521,12 @@ export class AnnouncementsService {
     // per-department breakdown (users without a department ride under "—")
     const members = await this.prisma.user.findMany({
       where: { id: { in: audience }, status: 'ACTIVE' },
-      select: { id: true, employee: { select: { department: { select: { id: true, name: true } } } } },
+      select: {
+        id: true,
+        fullName: true,
+        username: true,
+        employee: { select: { department: { select: { id: true, name: true } } } },
+      },
     });
     const byDept = new Map<string, { departmentId: string | null; name: string; target: number; read: number; acked: number }>();
     for (const m of members) {
@@ -536,6 +552,28 @@ export class AnnouncementsService {
       requiresAck: a.requiresAck,
       departments: [...byDept.values()].sort((x, y) => y.target - x.target),
       readRows: reads.map((r) => ({ userId: r.userId, readAt: r.readAt, ackAt: r.ackAt })),
+      // the chase list (F3): every target with their own read/ack timestamps,
+      // including the ones who never opened it — those are the ones to chase
+      people: members
+        .map((m) => {
+          const r = reads.find((x) => x.userId === m.id);
+          return {
+            userId: m.id,
+            name: m.fullName,
+            username: m.username,
+            department: m.employee?.department?.name ?? null,
+            readAt: r?.readAt ?? null,
+            ackAt: r?.ackAt ?? null,
+          };
+        })
+        .sort(
+          (x, y) =>
+            // unacked first (the chase list), then department (no department last),
+            // then name — so "who still owes me" is always at the top
+            Number(!!x.ackAt) - Number(!!y.ackAt) ||
+            (x.department ?? '\uffff').localeCompare(y.department ?? '\uffff') ||
+            x.name.localeCompare(y.name),
+        ),
     };
   }
 

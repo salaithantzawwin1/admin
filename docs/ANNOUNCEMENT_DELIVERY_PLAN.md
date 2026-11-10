@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1–P6 done — 6 of 9 planned phases (P7–P8 remaining, ~75 %)** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1–P7 done — 7 of 8 planned phases (P8 remaining, ~90 %; P9 optional)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -420,11 +420,11 @@ see how much is done.
 | **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ✅ |
 | **P5** | Messages API + live event | `messages/*` (new module), `events.service.ts` | 10 % | ✅ |
 | **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ✅ |
-| **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ⬜ |
+| **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ✅ |
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ⬜ |
 | **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI), P7 ✅ (F2 ack progress, F3 per-person chase list, F4 publish confirm; F1 was done in P0.5).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -673,17 +673,47 @@ message can only be published by the capture path, which needs a bound chat.
 
 ### P7 — UX fixes F1–F4 (6 h)
 
-- [ ] F1: extract `deliverPublished()`, call from `publish()` **and**
+- [x] F1: extract `deliverPublished()`, call from `publish()` **and**
       `lifecycleCron()`; test that the cron path notifies + sends the card + ack
       button.
-- [ ] F2: ack progress on admin cards.
-- [ ] F3: per-person list in the read-stats modal (+ Not acked filter).
-- [ ] F4: publish confirmation dialog.
+- [x] F2: ack progress on admin cards.
+- [x] F3: per-person list in the read-stats modal (+ Not acked filter).
+- [x] F4: publish confirmation dialog.
 - **Gate:** schedule an Urgent announcement 3 min ahead with `NO_PULL=1` on
   testing → at publish time the Telegram card with **✓ Acknowledge** arrives,
   in-app notification exists, and acking from Telegram updates admin stats.
 - **Verify:** the ack-progress numbers change on reload; the confirm dialog
   blocks a mis-click.
+
+**P7 result (2026-11-10).** F1 shipped earlier in P0.5, so this phase was F2–F4:
+
+- **F2:** `listAll()` adds `ackCount` from one grouped `announcement_reads` query
+  for the whole page (no per-row call). Requires-ack cards now carry a second
+  progress row `Acked 3/7` — amber until everyone has acked, green at 100 %.
+- **F3:** `readStats()` returns `people` — every **target**, not just the readers
+  (`fullName`, `username`, department, `readAt`, `ackAt`), sorted unacked first,
+  then department (no department last), then name, so the chase list is on top.
+  The modal lists them with All / Unread / Not acked filters and a **Copy list**
+  button. Copy uses the async clipboard when available and falls back to a hidden
+  textarea + `execCommand` — the app is served over plain HTTP on the LAN, where
+  `navigator.clipboard` does not exist; the first version threw there.
+- **F4:** `Publish` now opens a confirmation dialog showing the title, the
+  **audience count and targets**, that it sends in-app + a Telegram card, whether
+  subscribers must acknowledge (IMPORTANT+, from `requiresAck`), and — for a
+  scheduled notice — that publishing now overrides the schedule. Cancel leaves the
+  draft untouched; the dialog keeps itself open and shows the error if the call
+  fails (existing ConfirmDialog behaviour).
+
+Verified in the browser on `:8030` with probe notices: card showed `Acked 1/7`
+and `Acked 0/7`; the stats modal listed all 7 targets including non-readers,
+`Not acked` filtered to 6, `Copy list` reported “6 names copied”; `Cancel` left
+`Drafts · 1`, and confirming moved the row to `Published · 2` / `Drafts · 0`.
+New `announcement-read-stats` 5/5, `announcement-chat-sends` 6/6,
+`announcement-scheduled-publish` 5/5, `messages-api` 15/15, `tsc` (backend +
+frontend) clean, testing + prod deployed, prod health 200. Probe announcements,
+their reads/targets and the 7 notifications were deleted afterwards.
+**Not re-run:** the P0.5 telegram-card gate (F1) — no chat is bound to the bot,
+so the card/ack half stays unit-tested only.
 
 ### P8 — Full gates & deploy (4 h)
 
@@ -707,6 +737,7 @@ blast radius.
 ### Progress log (append one line per phase)
 
 | Date | Phase | What landed | Gate result | Commit |
+| 2026-11-10 | P7 | F2 `ackCount` + `Acked n/m` progress on admin cards; F3 `readStats().people` (whole audience, unacked-first) with All/Unread/Not acked filters + Copy list (HTTP-safe fallback); F4 publish confirmation with audience/ack/schedule summary | browser run on `:8030` (1/7 → confirm/publish → Published), `announcement-read-stats` 5/5, tsc clean, testing+prod deploy | see commit |
 | 2026-11-10 | P6 | Messages tab: URL tab, thread list + General, conversation pane with filters (`IN_PROGRESS`, `ack=pending` server aliases), bubble labels/ack chips/photo markers, mark-one/all read, load older, `message.new` + 15 s poll, unread badge, admin row `💬 n`; D5 deep-link fix | browser run on `:8030` (badge 4, filters, deep link, mark-all, poll pickup), 390 px mobile, `tsc -b` clean, `messages-api` 15/15, testing+prod deploy | see commit |
 | 2026-11-10 | P5 | `messages` module: threads (General + per announcement), paged list with sender/department/`ackAt`, unread count, mark-read, read-all; class-level `messages.read`; `message.new` in both event unions | 12/12 unit + live 200/201 vs 403/401/400 on testing | see commit |
 |---|---|---|---|---|
