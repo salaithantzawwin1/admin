@@ -36,6 +36,7 @@ export const PERMISSIONS = {
   PAYMENTS_MANAGE: 'payments.manage',
   ANNOUNCEMENTS_READ: 'announcements.read',
   ANNOUNCEMENTS_MANAGE: 'announcements.manage',
+  MESSAGES_READ: 'messages.read',
   AUDIT_READ: 'audit.read',
   ATTACHMENTS_USE: 'attachments.use',
 } as const;

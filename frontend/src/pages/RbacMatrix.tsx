@@ -22,6 +22,7 @@ const GROUPS: { name: string; prefix: string; description: string }[] = [
   { name: 'Suppliers', prefix: 'suppliers.', description: 'Vendor master data and purchase history' },
   { name: 'Procurement', prefix: 'procurement.', description: 'Purchase requests, orders, GRN, accounts, assets' },
   { name: 'Announcements', prefix: 'announcements.', description: 'Company notices, publishing, read stats' },
+  { name: 'Messages', prefix: 'messages.', description: 'Telegram subscriber messages and photos' },
   { name: 'System', prefix: 'workflow.', description: 'Workflow configuration' },
   { name: 'System', prefix: 'audit.', description: 'Audit trail' },
   { name: 'System', prefix: 'attachments.', description: 'File uploads' },
@@ -61,6 +62,7 @@ const PERM_LABELS: Record<string, string> = {
   'pettycash.manage': 'Record petty cash top-ups & expenses',
   'announcements.read': 'View announcements',
   'announcements.manage': 'Create & publish announcements',
+  'messages.read': 'View subscriber messages (Text & Photo)',
   'audit.read': 'View audit logs',
   'attachments.use': 'Use attachments',
 };
