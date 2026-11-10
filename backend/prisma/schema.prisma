@@ -698,11 +698,90 @@ model Announcement {
   targets     AnnouncementTarget[]
   reads       AnnouncementRead[]
   attachments Attachment[]
+  chatSends   AnnouncementChatSend[]
+  replies     TelegramInboundMessage[]
 
   @@index([status, publishAt])
   @@index([category])
   @@index([pinnedAt])
   @@map("announcements")
+}
+
+// ---------- Telegram message log (announcement delivery plan §5) ----------
+
+enum InboundMessageState {
+  NEW
+  READ
+}
+
+enum InboundMessageKind {
+  TEXT
+  PHOTO
+  DOCUMENT
+}
+
+enum InboundMessageHandledBy {
+  ANNOUNCEMENT_REPLY
+  GENERAL
+  CAR_FORM
+  REJECT_REASON
+  ODOMETER
+  ETA
+  COMMAND
+}
+
+/// One row per Telegram message we actually sent to a chat for an announcement
+/// (the announcement card, and each album photo). A subscriber's Telegram
+/// *Reply* is linked to an announcement by matching reply_to_message.message_id
+/// against messageId here — without this the link could only be guessed from
+/// "newest card in this chat".
+model AnnouncementChatSend {
+  id             String   @id @default(uuid()) @db.Uuid
+  announcementId String   @db.Uuid
+  chatId         String
+  messageId      BigInt
+  sentAt         DateTime @default(now())
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  @@unique([chatId, messageId])
+  @@index([announcementId])
+  @@index([chatId, sentAt])
+  @@map("announcement_chat_sends")
+}
+
+/// Everything the audience sends the bot is kept here — text and photos, even
+/// when a vehicle-trip conversation (odometer / reject reason / ETA / /car
+/// form) consumed it, so nothing a subscriber writes is lost.
+model TelegramInboundMessage {
+  id                String                  @id @default(uuid()) @db.Uuid
+  chatId            String
+  telegramMessageId BigInt?
+  replyToMessageId  BigInt?
+  mediaGroupId      String?
+  userId            String?                 @db.Uuid // bound AMS user (null for driver-only chats)
+  driverId          String?                 @db.Uuid
+  senderName        String?
+  kind              InboundMessageKind      @default(TEXT)
+  text              String?                 @db.Text // "/start <code>" is stored masked
+  photoFileId       String? // largest size; bytes are not downloaded
+  photoWidth        Int?
+  photoHeight       Int?
+  documentName      String?
+  announcementId    String?                 @db.Uuid // null = general (not linked)
+  handledBy         InboundMessageHandledBy @default(GENERAL)
+  state             InboundMessageState     @default(NEW)
+  readById          String?                 @db.Uuid
+  readAt            DateTime?
+  receivedAt        DateTime                @default(now())
+
+  announcement Announcement? @relation(fields: [announcementId], references: [id], onDelete: SetNull)
+
+  @@unique([chatId, telegramMessageId])
+  @@index([announcementId, receivedAt])
+  @@index([chatId, receivedAt])
+  @@index([state, receivedAt])
+  @@map("telegram_inbound_messages")
 }
 
 model AnnouncementTarget {

@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 hotfix landed — 0 of 9 planned phases (P1–P8) done** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1 done — 1 of 9 planned phases (P2–P8 remaining, ~10 %)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -414,7 +414,7 @@ see how much is done.
 |---|---|---|---|---|
 | **P0** | Branch + baseline | branch `feat/announcement-messages` | 5 % | ⬜ |
 | **P0.5** *(conditional)* | Hotfix F1 + F10 (only if scheduled Urgent is in use) | `announcements.service.ts` | — | ⬜ |
-| **P1** | Schema + migration 73 | `prisma/schema.prisma`, `prisma/migrations/…73…` | 10 % | ⬜ |
+| **P1** | Schema + migration 73 | `prisma/schema.prisma`, `prisma/migrations/…73…` | 10 % | ✅ |
 | **P2** | `messages.read` permission | `auth/permissions.ts`, `auth/permissions-seed.ts`, `RbacMatrix.tsx` | 5 % | ⬜ |
 | **P3** | Outbound card tracking | `telegram.service.ts` (`sendAnnouncementCard`), `announcements.service.ts` (`recordChatSend`) | 10 % | ⬜ |
 | **P4** | Inbound capture + conflict rules | `telegram.service.ts`, `announcements.service.ts` (`captureInbound`) | 20 % | ⬜ |
@@ -424,7 +424,7 @@ see how much is done.
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ⬜ |
 | **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), 0/9 of the planned phases.** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 applied on testing).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -470,6 +470,14 @@ the card payload itself is unchanged code.
 - [ ] `npx prisma generate`; confirm `TelegramInboundMessage` types exist.
 - **Gate:** migration applies on an empty DB **and** on a copy of prod data
   without touching existing tables.
+
+  **P1 result (2026-11-10):** applied on the testing DB; `prisma migrate diff
+  --from-url … --to-schema-datamodel` shows **no drift for the two new tables**
+  (exit 2 only because 24 unrelated legacy tables already carry pre-existing
+  drift — `vehicle_documents` default, `vehicle_photos` PK, etc.; recorded here
+  so nobody blames this change). Prod gets migration 73 on the next deploy
+  (the container runs `prisma migrate deploy` at start); it is additive and
+  nothing reads the tables yet.
 - **Verify:** `\d telegram_inbound_messages`, `\d announcement_chat_sends`,
   `SELECT count(*)` = 0.
 - **Rollback:** drop both tables/enums; no other code references them yet.
@@ -572,7 +580,8 @@ blast radius.
 
 | Date | Phase | What landed | Gate result | Commit |
 |---|---|---|---|---|
-| 2026-11-10 | P0.5 | `deliverPublished()` shared by publish + cron; cron per-row claim/revert; 100-recipient cap removed (batched, audit counts); cron cadence hourly→every minute; new test file | ✅ testing+prod deploy, 5/5 + 21/21 + 11/11 tests | `(hotfix commit)` |
+| 2026-11-10 | P0.5 | `deliverPublished()` shared by publish + cron; cron per-row claim/revert; 100-recipient cap removed (batched, audit counts); cron cadence hourly→every minute; new test file | ✅ testing+prod deploy, 5/5 + 21/21 + 11/11 tests | `fdd5b7d` |
+| 2026-11-10 | P1 | `AnnouncementChatSend` + `TelegramInboundMessage` models, three enums, two back-relations; migration 73 (two tables, 6 indexes, 2 FKs) | ✅ applied on testing, **no drift in the new tables**; baseline 20/70/21/35/12/10/5 + 5 new all green; `tsc --noEmit` clean | see commit |
 
 **How to read progress quickly:** header line (`Progress: n % — x/9 phases`),
 the status column above, and the last row of this log. A phase counts as done
