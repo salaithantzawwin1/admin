@@ -1175,25 +1175,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ ကြီးလွန်းသည် (အများဆုံး 5 MB) — သေးငယ်သော ဓာတ်ပုံ ပြန်ပို့ပါ' });
       return;
     }
-    const { token } = await this.config();
-    if (!token) return;
-    const file = await this.call<{ file_path?: string }>('getFile', { file_id: best.file_id });
-    if (!file?.file_path) {
+    const photo = await this.fetchPhoto(best.file_id).catch(() => null);
+    if (!photo) {
       await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ မရယူနိုင်ပါ — ထပ်ပို့ပါ' });
-      return;
-    }
-    const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
-    if (!res.ok) {
-      await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ မရယူနိုင်ပါ — ထပ်ပို့ပါ' });
-      return;
-    }
-    const buffer = Buffer.from(await res.arrayBuffer());
-    if (!buffer.length || buffer.length > 5 * 1024 * 1024) {
-      await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ ကြီးလွန်းသည် (အများဆုံး 5 MB) — သေးငယ်သော ဓာတ်ပုံ ပြန်ပို့ပါ' });
       return;
     }
     const at = Date.now();
-    this.pendingOdo.set(chatId, { ...pending, photo: { buffer, size: buffer.length }, at });
+    this.pendingOdo.set(chatId, { ...pending, photo, at });
     // the photo refreshed the capture — re-arm the abandon timeout on the new stamp
     setTimeout(() => {
       const p = this.pendingOdo.get(chatId);
@@ -1203,6 +1191,43 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       chat_id: chatId,
       text: '✅ ဓာတ်ပုံ ရပါပြီ — ယခု odometer ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)',
     });
+  }
+
+  /** One photo from the bot's file API, size-checked. null = retry / too big / no token. */
+  private async fetchPhoto(fileId: string): Promise<{ buffer: Buffer; size: number } | null> {
+    const { token } = await this.config();
+    if (!token) return null;
+    const file = await this.call<{ file_path?: string }>('getFile', { file_id: fileId });
+    if (!file?.file_path) return null;
+    const res = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`);
+    if (!res.ok) return null;
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (!buffer.length || buffer.length > 5 * 1024 * 1024) return null;
+    return { buffer, size: buffer.length };
+  }
+
+  /**
+   * The newest dashboard photo this chat already sent, from the inbound log.
+   *
+   * Drivers routinely send the photo a few seconds BEFORE they tap Ready / Back
+   * (or send it twice and type the number later). That photo was stored (P4) but
+   * the armed capture answered "send the photo first" — so the reading never made
+   * it to the trip and the trip showed no kilo photo at all. Look the evidence up
+   * instead of asking again. Never reaches past the assignment's own start (an
+   * earlier trip's photo must not become this trip's evidence).
+   */
+  private async recentOdoPhoto(chatId: string, assignmentId: string): Promise<{ buffer: Buffer; size: number } | null> {
+    const a = await this.prisma.carAssignment.findUnique({ where: { id: assignmentId }, select: { assignedAt: true } });
+    if (!a) return null;
+    const windowStart = new Date(Date.now() - 6 * 60 * 60_000);
+    const since = a.assignedAt && a.assignedAt > windowStart ? a.assignedAt : windowStart;
+    const row = await this.prisma.telegramInboundMessage.findFirst({
+      where: { chatId, kind: 'PHOTO', photoFileId: { not: null }, announcementId: null, receivedAt: { gte: since } },
+      orderBy: { receivedAt: 'desc' },
+      select: { photoFileId: true },
+    });
+    if (!row?.photoFileId) return null;
+    return this.fetchPhoto(row.photoFileId).catch(() => null);
   }
 
   /** Driver sent text while a capture is armed: the number (or /cancel). true = consumed. */
@@ -1219,7 +1244,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.pendingOdo.delete(chatId);
       return false;
     }
-    if (!pending.photo) {
+    // the photo may have arrived BEFORE the tap armed this capture (or before a
+    // re-arm) — it is already in the inbound log, so use it rather than nagging
+    let photo: { buffer: Buffer; size: number } | undefined = pending.photo;
+    if (!photo) {
+      photo = (await this.recentOdoPhoto(chatId, pending.assignmentId).catch(() => null)) ?? undefined;
+      if (photo) this.pendingOdo.set(chatId, { ...pending, photo, at: Date.now() });
+    }
+    if (!photo) {
       await this.call('sendMessage', { chat_id: chatId, text: '📷 အရင်ဆုံး odometer ဓာတ်ပုံကို ပို့ပါ (/cancel ဖြင့် ပယ်ဖျက်)' });
       return true;
     }
@@ -1234,7 +1266,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (!this.odoRef) throw new Error('Odometer handler not ready');
       await this.odoRef.capture(
         pending.assignmentId,
-        { stage: pending.stage, km, photo: pending.photo },
+        { stage: pending.stage, km, photo },
         { username: 'driver-telegram' },
       );
       await this.call('sendMessage', {
