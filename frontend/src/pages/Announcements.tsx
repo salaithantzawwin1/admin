@@ -340,10 +340,13 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
         ))}
       </div>
       {shown.length === 0 && <Empty label={tab === 'ACK' ? 'Nothing waiting for acknowledgement 🎉' : 'Nothing here'} />}
+      {/* F8 — an unread notice is marked in EVERY priority: NORMAL gets the blue
+          left border, the accent-coloured ones keep their colour and get a ring
+          (the border is already spoken for by the priority). */}
       {shown.map((a) => (
         <Card
           key={a.id}
-          className={`p-4 ${!a.read && a.priority === 'NORMAL' ? 'border-l-4 border-l-blue-500' : ''} ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.acked ? 'opacity-75' : ''}`}
+          className={`p-4 ${!a.read && a.priority === 'NORMAL' ? 'border-l-4 border-l-blue-500' : ''} ${!a.read && a.priority !== 'NORMAL' ? 'ring-1 ring-inset ring-blue-300' : ''} ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.acked ? 'opacity-75' : ''}`}
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
@@ -370,7 +373,10 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
               {!a.read && <Badge color="blue">NEW</Badge>}
               {a.requiresAck && (a.acked
                 ? <Badge color="green">✓ Acked</Badge>
-                : <Button onClick={() => ack(a)}>Acknowledge</Button>)}
+                // F6 — acknowledging is recorded against the reader's name and cannot
+                // be taken back, so the card opens the notice first; the confirm lives
+                // in the detail view ("I acknowledge this notice").
+                : <Button onClick={() => openDetail(a)} title="Read the notice, then acknowledge it">Acknowledge…</Button>)}
             </div>
           </div>
           <p className={`text-sm text-gray-600 mt-2 ${a.read ? 'line-clamp-2' : 'line-clamp-3'}`}>{plain(a.content)}</p>
@@ -389,8 +395,11 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
           <div className="text-sm text-gray-700 whitespace-pre-wrap rich-content" dangerouslySetInnerHTML={{ __html: open.content }} />
           <AttachmentSections files={files} />
           {open.requiresAck && !open.acked && (
-            <div className="mt-4 flex justify-end">
-              <Button onClick={() => ack(open)}>I acknowledge this notice</Button>
+            <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-3">
+              <span className="text-xs text-gray-500 mr-auto">
+                Acknowledging is recorded against your name and cannot be undone.
+              </span>
+              <Button onClick={() => ack(open)}>✓ I acknowledge this notice</Button>
             </div>
           )}
         </Modal>

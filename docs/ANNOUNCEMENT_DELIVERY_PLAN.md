@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1–P9 done (~100 %) — only F6 and F8 of the optional P9 list remain open** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1–P9 done — every planned item complete (F1–F10, ~100 %)** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -422,9 +422,9 @@ see how much is done.
 | **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ✅ |
 | **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ✅ |
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ✅ |
-| **P9** *(optional)* | F5, F7, F9 + retention cron (F6, F8 open) | `announcements.service.ts`, `notifications.service.ts`, `messages.service.ts` | +15 % | ✅ |
+| **P9** *(optional)* | F5–F9 + retention cron (all landed) | `announcements.service.ts`, `notifications.service.ts`, `messages.service.ts` | +15 % | ✅ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI), P7 ✅ (F2 ack progress, F3 per-person chase list, F4 publish confirm; F1 was done in P0.5), P8 ✅ (34/37 suites green, 5 pre-existing failures + tsc + prod gate), P9 ✅ (F5 re-notify, F7 digest, F9 no duplicate mirror, message retention; F6 + F8 not taken).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI), P7 ✅ (F2 ack progress, F3 per-person chase list, F4 publish confirm; F1 was done in P0.5), P8 ✅ (34/37 suites green, 5 pre-existing failures + tsc + prod gate), P9 ✅ (F5 re-notify, F6 ack opens the detail, F7 digest, F8 unread marker + needs-ack ordering, F9 no duplicate mirror, message retention).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -776,8 +776,19 @@ F5 (re-notify on priority raise), F6 (open before ack), F7 (24 h escalation
 digest), F8 (unread marker + sort), retention cron. Same gates as P8, smaller
 blast radius.
 
-**P9 result (2026-11-11).** Shipped **F5, F7, F9 and the retention cron**. F6 and
-F8 were not taken, so they are the only open items left in this plan (§14).
+**P9 result (2026-11-11).** Shipped **F5, F6, F7, F8, F9 and the retention cron**
+— the plan has no open items left.
+
+- **F6 (ack opens the notice first):** the subscriber card's button now reads
+  `Acknowledge…` and opens the detail view; the irreversible ack happens there
+  with an explicit `✓ I acknowledge this notice` and a line saying it is recorded
+  against their name. One stray tap can no longer acknowledge an unread notice.
+- **F8 (unread marker + order):** unread is marked in **every** priority — the
+  blue left border for NORMAL, a blue ring for the accent-coloured ones (the
+  border is already the priority's) — and `listMine()` now sorts inside a pin
+  group: **needs ack → unread → read**, newest first in each rank, with
+  `pinnedAt` returned so the pin groups the UI draws stay intact. A newer normal
+  notice can no longer bury an older unacknowledged Urgent one.
 
 - **F9 (duplicate DM):** `NotificationsService.notifyMany()` takes
   `skipTelegram`; `deliverPublished()` passes it, so the announcement card is the
@@ -817,6 +828,7 @@ Telegram card → ✓ Acknowledge tap still has no bound chat (as in P8).
 ### Progress log (append one line per phase)
 
 | Date | Phase | What landed | Gate result | Commit |
+| 2026-11-11 | P9 (F6/F8) | Subscriber card `Acknowledge…` opens the detail first with an explicit confirm (F6); unread marked in every priority + `listMine()` sorts needs-ack → unread → read inside each pin group, `pinnedAt` returned (F8) | `announcement-list-order` 5/5, backend+frontend tsc clean, testing+prod deploy, `/api/announcements/mine` order verified on prod and the new bundle strings confirmed in the deployed chunk | see commit |
 | 2026-11-11 | P9 | F5 priority-raise re-notify (unacked only, audit, failure-safe), F7 24 h unacked digest cron (creator + `announcements.manage`, dedupeKey throttle), F9 publish no longer double-DMs (card only, text fallback), 180-day inbound retention cron; new `announcement-escalation` test file | 16/16 + 6 affected suites green, `tsc --noEmit` clean, testing+prod deploy, live raise on testing produced the re-notify and no duplicate | see commit |
 | 2026-11-10 | P8 | Full gate: 34/37 suites green file-by-file (5 failures pre-existing, reproduced on `73947f2`), tsc clean both sides, testing+prod deployed, migrations up to date on both, prod gate on real data (Acked 1/11, real inbound thread, ack from Telegram already recorded) | prod `/announcements` 200, no container restarts/errors; Telegram card→ack tap still untested (no bound chat) | see commit |
 | 2026-11-10 | P7 | F2 `ackCount` + `Acked n/m` progress on admin cards; F3 `readStats().people` (whole audience, unacked-first) with All/Unread/Not acked filters + Copy list (HTTP-safe fallback); F4 publish confirmation with audience/ack/schedule summary | browser run on `:8030` (1/7 → confirm/publish → Published), `announcement-read-stats` 5/5, tsc clean, testing+prod deploy | see commit |

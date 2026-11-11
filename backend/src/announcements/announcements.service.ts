@@ -640,13 +640,34 @@ export class AnnouncementsService {
       },
       take: 50,
     });
-    return (rows as unknown as Array<Prisma.AnnouncementGetPayload<{ include: { targets: true; reads: { where: { userId: string }; select: { readAt: true; ackAt: true } }; createdBy: { select: { fullName: true } }; attachments: { select: { id: true; filename: true; mimeType: true; size: true } } } }>>).map((a) => ({
+    const mine = (rows as unknown as Array<Prisma.AnnouncementGetPayload<{ include: { targets: true; reads: { where: { userId: string }; select: { readAt: true; ackAt: true } }; createdBy: { select: { fullName: true } }; attachments: { select: { id: true; filename: true; mimeType: true; size: true } } } }>>).map((a) => ({
       id: a.id, code: a.code, title: a.title, content: a.content, category: a.category,
       priority: a.priority, publishAt: a.publishAt, startAt: a.startAt, endAt: a.endAt,
       requiresAck: a.requiresAck, createdBy: a.createdBy.fullName,
+      // pinnedAt travels with the row so the UI can keep the pin groups it renders
+      pinnedAt: a.pinnedAt,
       read: a.reads.length > 0, acked: a.reads[0]?.ackAt ?? null,
       photos: a.attachments.filter((f) => f.mimeType.startsWith('image/')),
     }));
+
+    // F8 — inside a pin group, a notice still waiting for acknowledgement must not
+    // be buried under a newer normal one the reader has already opened:
+    // needs ack → unread → read, newest first within each rank.
+    const rank = (a: (typeof mine)[number]) => (a.requiresAck && !a.acked ? 0 : a.read ? 2 : 1);
+    const at = (s: string | Date | null) => (s ? new Date(s).getTime() : 0);
+    return mine.sort((x, y) => {
+      const px = x.pinnedAt ? 1 : 0;
+      const py = y.pinnedAt ? 1 : 0;
+      if (px !== py) return py - px;
+      if (px && py) {
+        const pin = at(y.pinnedAt) - at(x.pinnedAt);
+        if (pin) return pin;
+      }
+      const rx = rank(x);
+      const ry = rank(y);
+      if (rx !== ry) return rx - ry;
+      return at(y.publishAt) - at(x.publishAt);
+    });
   }
 
   /** Mark read on open; returns the announcement if visible to the user. */
