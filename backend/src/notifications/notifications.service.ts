@@ -34,12 +34,28 @@ export class NotificationsService {
     return created;
   }
 
-  async notifyMany(userIds: string[], data: { type: NotificationType; title: string; body?: string; link?: string; requestId?: string }) {
+  async notifyMany(userIds: string[], data: {
+    type: NotificationType;
+    title: string;
+    body?: string;
+    link?: string;
+    requestId?: string;
+    /**
+     * The caller delivers its own Telegram message (an announcement card with
+     * the ✓ Acknowledge button). Skipping the plain text mirror here is what
+     * stops every subscriber getting two Telegram messages per notice — the
+     * mirror *and* the card (plan §9.4 F9). Never set it when the caller has no
+     * Telegram delivery of its own.
+     */
+    skipTelegram?: boolean;
+  }) {
     if (userIds.length === 0) return;
+    const { skipTelegram, ...row } = data;
     await this.prisma.notification.createMany({
-      data: userIds.map((userId) => ({ userId, ...data })),
+      data: userIds.map((userId) => ({ userId, ...row })),
     });
     this.events.publish('notification', { userIds, requestId: data.requestId });
+    if (skipTelegram) return;
     for (const userId of userIds) {
       this.telegram.mirrorToUser(userId, data.title, data.body, data.link)
         .catch((e) => this.logger.warn(`telegram mirror failed: ${(e as Error).message}`));

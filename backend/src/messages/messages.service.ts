@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { InboundMessageHandledBy, InboundMessageKind, InboundMessageState, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.module';
 
@@ -30,9 +31,39 @@ const PAGE_SIZE_MAX = 100;
  * append-only from the bot's point of view: this service only lists it and marks
  * rows read, so a message can be re-read but never silently vanish.
  */
+/**
+ * How long a subscriber message is kept. Photos are never downloaded (only the
+ * Telegram file_id is stored), so retention is the row itself; 180 days is long
+ * enough to answer "who said this, and when", short enough that the table does
+ * not grow forever. `TELEGRAM_INBOUND_RETENTION_DAYS=0` turns the purge off.
+ */
+const RETENTION_DEFAULT_DAYS = 180;
+
 @Injectable()
 export class MessagesService {
+  private readonly logger = new Logger(MessagesService.name);
+
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Daily retention purge (plan P9). Announcement replies are historical
+   * evidence, so the window is generous; once a message is past it, its link to
+   * a notice was already resolved and it can go.
+   */
+  @Cron('0 30 3 * * *')
+  async retentionCron() {
+    const raw = process.env.TELEGRAM_INBOUND_RETENTION_DAYS;
+    const days = raw == null || raw === '' ? RETENTION_DEFAULT_DAYS : Number(raw);
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const res = await this.prisma.telegramInboundMessage.deleteMany({
+      where: { receivedAt: { lt: cutoff } },
+    });
+    if (res.count > 0) {
+      this.logger.log(`purged ${res.count} subscriber message(s) older than ${days} day(s)`);
+    }
+    return res.count;
+  }
 
   // ---------- validation ----------
 

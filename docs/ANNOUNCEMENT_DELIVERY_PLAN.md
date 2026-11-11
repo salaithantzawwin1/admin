@@ -7,7 +7,7 @@ announcements page also gets a UX pass so acknowledgement (ack) for Urgent
 notices is visible and chased.
 
 **Status:** plan only — nothing implemented.
-**Progress: P0.5 + P1–P8 done — every planned phase complete (~100 %; P9 optional)** (update the tracker in §14 after each phase).
+**Progress: P0.5 + P1–P9 done (~100 %) — only F6 and F8 of the optional P9 list remain open** (update the tracker in §14 after each phase).
 **Estimate:** ~4.5 working days (P1–P8), +0.75d optional F5–F8.
 
 ## Settled decisions
@@ -422,9 +422,9 @@ see how much is done.
 | **P6** | Messages tab UI | `AnnouncementMessages.tsx` (new), `Announcements.tsx`, `api.ts`, `useLiveReload.ts` | 20 % | ✅ |
 | **P7** | UX fixes F1–F4 | `announcements.service.ts`, `Announcements.tsx` | 15 % | ✅ |
 | **P8** | Tests + staging/prod gates | `backend/test/*`, deploy scripts | 5 % | ✅ |
-| **P9** *(optional)* | F5–F8 + retention cron | as above | +15 % | ⬜ |
+| **P9** *(optional)* | F5, F7, F9 + retention cron (F6, F8 open) | `announcements.service.ts`, `notifications.service.ts`, `messages.service.ts` | +15 % | ✅ |
 
-**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI), P7 ✅ (F2 ack progress, F3 per-person chase list, F4 publish confirm; F1 was done in P0.5), P8 ✅ (34/37 suites green, 5 pre-existing failures + tsc + prod gate).** Replace ⬜ with 🟨 when started and ✅ only when the
+**Done so far: P0.5 ✅ (F1 + F10 + cron cadence), P1 ✅ (schema + migration 73 on testing + prod), P2 ✅ (`messages.read`), P3 ✅ (card id tracking), P4 ✅ (inbound capture + R1–R7), P5 ✅ (Messages API + `message.new`), P6 ✅ (Messages tab UI), P7 ✅ (F2 ack progress, F3 per-person chase list, F4 publish confirm; F1 was done in P0.5), P8 ✅ (34/37 suites green, 5 pre-existing failures + tsc + prod gate), P9 ✅ (F5 re-notify, F7 digest, F9 no duplicate mirror, message retention; F6 + F8 not taken).** Replace ⬜ with 🟨 when started and ✅ only when the
 phase's gate has passed; recompute the header line.
 
 ### P0 — Branch & baseline (0.5 h)
@@ -776,9 +776,48 @@ F5 (re-notify on priority raise), F6 (open before ack), F7 (24 h escalation
 digest), F8 (unread marker + sort), retention cron. Same gates as P8, smaller
 blast radius.
 
+**P9 result (2026-11-11).** Shipped **F5, F7, F9 and the retention cron**. F6 and
+F8 were not taken, so they are the only open items left in this plan (§14).
+
+- **F9 (duplicate DM):** `NotificationsService.notifyMany()` takes
+  `skipTelegram`; `deliverPublished()` passes it, so the announcement card is the
+  only Telegram message a publish produces. If the card fails, the plain-text
+  mirror is sent instead — the chat is never left silent.
+- **F5 (priority raise):** `update()` compares `PRIORITY_RANK`
+  (NORMAL → IMPORTANT → URGENT → EMERGENCY); only a **raise** on a `PUBLISHED`
+  notice re-notifies, skips everyone already acked, sends the card only (no album
+  re-send), audits `ANNOUNCEMENT_RENOTIFIED`, and a failed re-notify never fails
+  the edit itself.
+- **F7 (24 h digest):** `@Cron('0 0 8 * * *')` → LIVE `requiresAck`
+  IMPORTANT/URGENT/EMERGENCY notices published ≥ 24 h ago; recipients = the
+  creator + every ACTIVE user holding `announcements.manage`; one notification
+  per notice per person per day, throttled by `Notification.dedupeKey`
+  (`ann:<id>:digest:<YYYY-MM-DD>:<userId>`, P2002 = already sent). One bad notice
+  never stops the rest.
+- **Retention:** `MessagesService.retentionCron()` (`@Cron('0 30 3 * * *')`)
+  deletes `telegram_inbound_messages` older than
+  `TELEGRAM_INBOUND_RETENTION_DAYS` (default 180; `<= 0` disables) and logs the
+  purged count.
+
+Tests: new `announcement-escalation.test.ts` **16/16** (F5 ×7, F9 ×2, F7 ×5,
+retention ×2); the affected suites stayed green — `announcement-chat-sends` 6,
+`announcement-read-stats` 5, `announcement-scheduled-publish` 5,
+`announcement-inbound-capture` 12, `messages-api` 15,
+`telegram-inbound-routing` 10; backend `tsc --noEmit` clean.
+
+Testing environment: publish then raise NORMAL → URGENT as `sysadmin` produced
+`🔺 Priority raised to URGENT — …` for the audience (and flipped `requiresAck`
+on); the DB shows a single announcement notification, i.e. no duplicate mirror.
+
+**Not run:** the digest cron has no manual trigger and its 08:00 local slot fell
+before the containers were rebuilt on deploy day, so its first live run is the
+next 08:00 — it is unit-tested and its query/recipients were verified here. The
+Telegram card → ✓ Acknowledge tap still has no bound chat (as in P8).
+
 ### Progress log (append one line per phase)
 
 | Date | Phase | What landed | Gate result | Commit |
+| 2026-11-11 | P9 | F5 priority-raise re-notify (unacked only, audit, failure-safe), F7 24 h unacked digest cron (creator + `announcements.manage`, dedupeKey throttle), F9 publish no longer double-DMs (card only, text fallback), 180-day inbound retention cron; new `announcement-escalation` test file | 16/16 + 6 affected suites green, `tsc --noEmit` clean, testing+prod deploy, live raise on testing produced the re-notify and no duplicate | see commit |
 | 2026-11-10 | P8 | Full gate: 34/37 suites green file-by-file (5 failures pre-existing, reproduced on `73947f2`), tsc clean both sides, testing+prod deployed, migrations up to date on both, prod gate on real data (Acked 1/11, real inbound thread, ack from Telegram already recorded) | prod `/announcements` 200, no container restarts/errors; Telegram card→ack tap still untested (no bound chat) | see commit |
 | 2026-11-10 | P7 | F2 `ackCount` + `Acked n/m` progress on admin cards; F3 `readStats().people` (whole audience, unacked-first) with All/Unread/Not acked filters + Copy list (HTTP-safe fallback); F4 publish confirmation with audience/ack/schedule summary | browser run on `:8030` (1/7 → confirm/publish → Published), `announcement-read-stats` 5/5, tsc clean, testing+prod deploy | see commit |
 | 2026-11-10 | P6 | Messages tab: URL tab, thread list + General, conversation pane with filters (`IN_PROGRESS`, `ack=pending` server aliases), bubble labels/ack chips/photo markers, mark-one/all read, load older, `message.new` + 15 s poll, unread badge, admin row `💬 n`; D5 deep-link fix | browser run on `:8030` (badge 4, filters, deep link, mark-all, poll pickup), 390 px mobile, `tsc -b` clean, `messages-api` 15/15, testing+prod deploy | see commit |

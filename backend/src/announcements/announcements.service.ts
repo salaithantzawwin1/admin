@@ -15,6 +15,9 @@ import { htmlToText, sanitizeHtml } from './sanitize-html';
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'] as const;
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'] as const;
 
+/** Only a raise counts as news (F5) — lowering a priority re-notifies nobody. */
+const PRIORITY_RANK: Record<string, number> = { NORMAL: 0, IMPORTANT: 1, URGENT: 2, EMERGENCY: 3 };
+
 /** Escape a plain string for Telegram's HTML parse mode. */
 const escapeTgHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -193,6 +196,16 @@ export class AnnouncementsService {
       oldValue: { title: a.title, priority: a.priority, endAt: a.endAt, status: a.status },
       newValue: data,
     });
+    // F5: raising the priority of a live notice is the admin saying "this got
+    // serious". People who already scrolled past it never look again, so the
+    // ack prompt goes out once more — to those who have not acked, because a
+    // second card for someone who already did is pure noise (plan §9.4 F5).
+    const raised = a.status === 'PUBLISHED'
+      && (PRIORITY_RANK[updated.priority] ?? 0) > (PRIORITY_RANK[a.priority] ?? 0);
+    if (raised) {
+      await this.reNotifyPriorityRaise(updated, a.priority, actor).catch((e) =>
+        console.warn(`[announcements] priority re-notify failed for ${id}: ${(e as Error).message}`));
+    }
     return updated;
   }
 
@@ -291,6 +304,10 @@ export class AnnouncementsService {
       // Telegram/notification channels take plain text — strip the rich-text markup
       body: notifBody,
       link: '/announcements',
+      // F9: the announcement card below *is* the Telegram message. The mirror
+      // used to send a second, plainer message to the same chat for every
+      // publish, so each subscriber got two notifications for one notice.
+      skipTelegram: true,
     });
     // photos + card (ack button on IMPORTANT+) ride along for anyone bound to the bot
     await this.sendPhotosToAudience(a.id, userIds, {
@@ -309,9 +326,10 @@ export class AnnouncementsService {
    * a ✓ Acknowledge button (callback anack:<id>) that records the ack without
    * opening AMS. Best-effort, never blocks the publish.
    */
-  private async sendPhotosToAudience(announcementId: string, userIds: string[], a: { id: string; code: string; title: string; priority: string; requiresAck: boolean }, body: string) {
+  private async sendPhotosToAudience(announcementId: string, userIds: string[], a: { id: string; code: string; title: string; priority: string; requiresAck: boolean }, body: string, opts: { album?: boolean } = {}) {
     try {
-      const photos = await this.prisma.attachment.findMany({
+      // a re-notify sends only the card — the photos were already seen (F5)
+      const photos = opts.album === false ? [] : await this.prisma.attachment.findMany({
         where: { announcementId, mimeType: { startsWith: 'image/' } },
         orderBy: { createdAt: 'asc' },
         take: 10,
@@ -330,7 +348,7 @@ export class AnnouncementsService {
         const chunk = userIds.slice(i, i + BATCH);
         const bound = await this.prisma.user.findMany({
           where: { id: { in: chunk }, telegramChatId: { not: null } },
-          select: { telegramChatId: true },
+          select: { id: true, telegramChatId: true },
         });
         for (const u of bound) {
           if (!u.telegramChatId) continue;
@@ -344,6 +362,11 @@ export class AnnouncementsService {
             sent += 1;
           } catch {
             failed += 1;
+            // F9 dropped the text mirror, so the card is the only Telegram copy
+            // of this notice: if it fails, fall back to plain text rather than
+            // leaving that chat with nothing at all.
+            await this.telegram.mirrorToUser(u.id, `📢 ${a.title}`, body.slice(0, 300), '/announcements')
+              .catch(() => undefined);
           }
         }
         if (i + BATCH < userIds.length) await new Promise((r) => setTimeout(r, 200));
@@ -657,6 +680,131 @@ export class AnnouncementsService {
   }
 
   // ---------- crons ----------
+
+  /**
+   * The priority of a published notice went up (F5). Send the ack prompt once
+   * more — only to the people who still owe an acknowledgement, and without the
+   * photo album they have already seen.
+   */
+  private async reNotifyPriorityRaise(
+    a: { id: string; code: string; title: string; content: string; priority: string; requiresAck: boolean },
+    oldPriority: string,
+    actor: Actor,
+  ) {
+    const audience = [...new Set(await this.audienceIds(a.id))];
+    const acked = new Set(
+      (await this.prisma.announcementRead.findMany({
+        where: { announcementId: a.id, ackAt: { not: null } },
+        select: { userId: true },
+      })).map((r) => r.userId),
+    );
+    const pending = audience.filter((id) => !acked.has(id));
+    // everyone already acked — there is nobody left to chase
+    if (pending.length === 0) return;
+    const body = htmlToText(a.content).slice(0, 300) || a.title;
+    await this.notifications.notifyMany(pending, {
+      type: 'ANNOUNCEMENT',
+      title: `🔺 Priority raised to ${a.priority} — ${a.title}`,
+      body,
+      link: '/announcements',
+      // the card below is the Telegram message (F9)
+      skipTelegram: true,
+    });
+    await this.sendPhotosToAudience(a.id, pending, a, body, { album: false });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ANNOUNCEMENT_RENOTIFIED', module: 'ANNOUNCEMENT', recordId: a.id,
+      oldValue: { priority: oldPriority },
+      newValue: { priority: a.priority, renotified: pending.length, alreadyAcked: acked.size },
+    });
+  }
+
+  /**
+   * Daily escalation digest (F7): an IMPORTANT/URGENT notice that nobody has
+   * acknowledged 24 h after publishing is not "sent", it is stuck. Send the
+   * creator and everyone holding `announcements.manage` one digest per notice
+   * per day that names how many people still have not acked.
+   *
+   * Throttling rides on `Notification.dedupeKey` (unique), so a restart, a
+   * second instance or an overlapping tick cannot send the same day twice.
+   */
+  @Cron('0 0 8 * * *')
+  async unackedDigestCron() {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const rows = await this.prisma.announcement.findMany({
+      where: {
+        status: 'PUBLISHED',
+        requiresAck: true,
+        priority: { in: ['IMPORTANT', 'URGENT', 'EMERGENCY'] },
+        publishAt: { lte: cutoff },
+      },
+      select: { id: true, code: true, title: true, priority: true, createdById: true },
+    });
+    if (rows.length === 0) return;
+
+    // creator + every active holder of announcements.manage (plan §13.1 D10)
+    const managers = await this.prisma.user
+      .findMany({
+        where: {
+          status: 'ACTIVE',
+          userRoles: {
+            some: { role: { permissions: { some: { permission: { code: 'announcements.manage' } } } } },
+          },
+        },
+        select: { id: true },
+      })
+      .catch(() => [] as { id: string }[]);
+    const day = new Date().toISOString().slice(0, 10);
+    let sent = 0;
+
+    for (const a of rows) {
+      const audience = [...new Set(await this.audienceIds(a.id))];
+      if (audience.length === 0) continue;
+      const acked = new Set(
+        (await this.prisma.announcementRead.findMany({
+          where: { announcementId: a.id, ackAt: { not: null } },
+          select: { userId: true },
+        })).map((r) => r.userId),
+      );
+      const pending = audience.filter((id) => !acked.has(id));
+      if (pending.length === 0) continue;
+
+      const names = await this.prisma.user.findMany({
+        where: { id: { in: pending.slice(0, 5) } },
+        select: { id: true, fullName: true },
+      });
+      const who = names.map((n) => n.fullName).join(', ');
+      const title = `⏰ ${pending.length} still unacked — ${a.title}`;
+      const body = [
+        `${a.code} · ${a.priority} · published over 24 h ago`,
+        `${pending.length} of ${audience.length} have not acknowledged`,
+        who ? `${who}${pending.length > names.length ? ' …' : ''}` : '',
+      ].filter(Boolean).join('\n');
+      const recipients = [...new Set([a.createdById, ...managers.map((m) => m.id)])];
+
+      for (const userId of recipients) {
+        try {
+          await this.notifications.notify({
+            userId,
+            type: 'ANNOUNCEMENT',
+            title,
+            body,
+            link: `/announcements?ann=${a.id}`,
+            // one digest per notice per person per day
+            dedupeKey: `ann:${a.id}:digest:${day}:${userId}`,
+          });
+          sent += 1;
+        } catch (e) {
+          // P2002 = this person already got today's digest
+          if ((e as { code?: string }).code !== 'P2002') {
+            console.warn(`[announcements] digest failed for ${a.id} → ${userId}: ${(e as Error).message}`);
+          }
+        }
+      }
+    }
+    if (sent > 0) console.log(`[announcements] unacked digest sent to ${sent} recipient(s)`);
+    return sent;
+  }
 
   /** Hourly: SCHEDULED → PUBLISHED when publishAt arrives; PUBLISHED → EXPIRED after endAt. */
   // Every minute, on the minute. This used to be '0 5 * * * *', which is not
