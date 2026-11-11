@@ -346,6 +346,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
       return;
     }
+    // 🛣️ A dashboard photo can arrive with NO capture armed: the window expired,
+    // a deploy cleared the in-memory map, or the driver sent it just before the
+    // tap. Storing it silently left the bot mute and the trip without its kilo, so
+    // re-arm from the taps that already happened and take this photo as evidence.
+    if (u.message?.photo?.length) {
+      const resumed = await this.resumeOdometerCapture(chatId).catch(() => null);
+      if (resumed) {
+        this.armOdo(chatId, resumed.assignmentId, resumed.stage);
+        await this.markInbound(rec?.id, 'ODOMETER');
+        await this.handleOdoPhoto(chatId, u.message.photo).catch((err) =>
+          this.logger.warn(`odometer photo failed: ${(err as Error).message}`),
+        );
+        return;
+      }
+    }
     if (!text) return;
     this.logger.log(`TG text update from ${chatId}: "${text}"`);
     // 🛣️ an armed odometer capture — the next number IS the reading (photo first)
@@ -1149,12 +1164,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const chatId = a?.driver?.telegramChatId;
     if (!a || !chatId) return;
     if (stage === 'READY' ? a.startOdoKm != null : a.endOdoKm != null) return; // already captured
-    const at = Date.now();
-    this.pendingOdo.set(chatId, { assignmentId, stage, at });
-    setTimeout(() => {
-      const p = this.pendingOdo.get(chatId);
-      if (p && p.assignmentId === assignmentId && p.at === at) this.pendingOdo.delete(chatId);
-    }, 30 * 60_000).unref?.();
+    this.armOdo(chatId, assignmentId, stage);
     const head =
       stage === 'READY'
         ? `🚦 Ready ✓ — ${a.request.docNumber}\nကားမထွက်ခွာမီ odometer (ကီလိုမီတာ) ဓာတ်ပုံကို ဒီ chat ထဲ ပို့ပါ 📷`
@@ -1163,6 +1173,56 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       chat_id: chatId,
       text: `${head}\nပြီးရင် ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)။ /cancel ဖြင့် ပယ်ဖျက်နိုင်သည်။`,
     });
+  }
+
+  /**
+   * Arm one chat for an odometer capture (photo → kilo) with an expiry.
+   *
+   * The window is 3 h, not 30 min: drivers tap "Back at office" and only send the
+   * kilo after their next errand, and a capture that expired in between left the
+   * photo unanswered (the bot went silent) and the trip without a return reading.
+   */
+  private armOdo(chatId: string, assignmentId: string, stage: 'READY' | 'BACK', photo?: { buffer: Buffer; size: number }) {
+    const at = Date.now();
+    this.pendingOdo.set(chatId, photo ? { assignmentId, stage, at, photo } : { assignmentId, stage, at });
+    setTimeout(() => {
+      const p = this.pendingOdo.get(chatId);
+      if (p && p.assignmentId === assignmentId && p.at === at) this.pendingOdo.delete(chatId);
+    }, TelegramService.ODO_TTL_MS).unref?.();
+  }
+
+  /**
+   * Re-arm a capture the driver never finished — used when a photo arrives and no
+   * capture is waiting for it (the window expired, or a deploy cleared it).
+   *
+   * Which stage? Only what the taps already prove: a returned trip whose return
+   * kilo is missing wants BACK; an arrived trip whose departure kilo is missing
+   * wants READY. Anything less certain returns null and the photo is just stored
+   * (a fuel receipt must never become odometer evidence).
+   */
+  private async resumeOdometerCapture(chatId: string): Promise<{ assignmentId: string; stage: 'READY' | 'BACK' } | null> {
+    const driver = await this.prisma.driver.findFirst({
+      where: { telegramChatId: chatId },
+      select: { id: true },
+    }).catch(() => null);
+    if (!driver) return null;
+    // only the day's trips: an old unfinished row must not turn a receipt photo
+    // sent today into yesterday's odometer evidence
+    const since = new Date(Date.now() - 24 * 60 * 60_000);
+    const trips = await this.prisma.carAssignment.findMany({
+      where: {
+        driverId: driver.id,
+        OR: [{ driverBackAtOfficeAt: { gte: since } }, { driverArrivedAt: { gte: since } }],
+      },
+      orderBy: { assignedAt: 'desc' },
+      take: 5,
+      select: { id: true, startOdoKm: true, endOdoKm: true, driverArrivedAt: true, driverBackAtOfficeAt: true },
+    }).catch(() => []);
+    for (const t of trips) {
+      if (t.driverBackAtOfficeAt && t.endOdoKm == null) return { assignmentId: t.id, stage: 'BACK' };
+      if (t.driverArrivedAt && t.startOdoKm == null) return { assignmentId: t.id, stage: 'READY' };
+    }
+    return null;
   }
 
   /** Driver sent the dashboard photo: keep it until the number arrives. */
@@ -1180,13 +1240,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ မရယူနိုင်ပါ — ထပ်ပို့ပါ' });
       return;
     }
-    const at = Date.now();
-    this.pendingOdo.set(chatId, { ...pending, photo, at });
-    // the photo refreshed the capture — re-arm the abandon timeout on the new stamp
-    setTimeout(() => {
-      const p = this.pendingOdo.get(chatId);
-      if (p && p.assignmentId === pending.assignmentId && p.at === at) this.pendingOdo.delete(chatId);
-    }, 30 * 60_000).unref?.();
+    // the photo refreshed the capture — re-arm it with its own fresh window
+    this.armOdo(chatId, pending.assignmentId, pending.stage, photo);
     await this.call('sendMessage', {
       chat_id: chatId,
       text: '✅ ဓာတ်ပုံ ရပါပြီ — ယခု odometer ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)',
@@ -1275,7 +1330,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       });
     } catch (e) {
       // keep the capture armed so the driver can correct the number
-      this.pendingOdo.set(chatId, { ...pending, at: Date.now() });
+      this.armOdo(chatId, pending.assignmentId, pending.stage, photo);
       await this.call('sendMessage', {
         chat_id: chatId,
         text: `⚠️ ${(e as Error).message || 'မှတ်တမ်းတင် မရပါ'} — ဂဏန်း ပြန်ရိုက်ထည့်ပါ သို့မဟုတ် /cancel`,
@@ -2141,6 +2196,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private pendingCombinedBack = new Map<string, string>();
   /** chatId → assignment armed for the ⏰ custom-ETA text entry (10 min TTL). */
   private pendingEtaCustom = new Map<string, { assignmentId: string; at: number }>();
+  /** How long an armed odometer capture waits for the kilo (see armOdo). */
+  private static readonly ODO_TTL_MS = 3 * 60 * 60_000;
   /** 🛣️ odometer capture armed for this chat: waiting for the photo, then the kilo. */
   private pendingOdo = new Map<
     string,
