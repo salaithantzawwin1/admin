@@ -151,3 +151,41 @@ Audit Logs screen answers "was this number ever checked?".
   typed number and flag it? (Plan assumes: ask first, record on the answer.)
 - Do we want per-dashboard crop templates (better accuracy) or the generic crop
   plus a strong prompt (less maintenance)?
+
+## Engine evaluation: offline options (Nov 2026)
+
+Constraint measured on the AMS host: it reaches PyPI only. Docker Hub, the Debian
+apt mirrors and the Paddle model CDN are all blocked, so a Tesseract install (apt)
+and a PaddleOCR install (the framework downloads its weights from bcebos) cannot be
+done on this server as it stands.
+
+RapidOCR — the same PP-OCR detection/recognition models on ONNX Runtime, weights
+bundled in the wheel, installable from PyPI alone — was installed and benchmarked
+against the six real driver photos in /app/uploads/odometer (four distinct readings:
+341324, 341324, 341325, 341363).
+
+Result: 0 of 4 correct. The detector finds the "ODO" label confidently (0.93), but
+the recogniser then returns confident nonsense for the digits (52E16E000, ESEIHE000,
+HAR2), and returns nothing at all from a tight, 4x-upscaled crop of the digit strip.
+The single correct read came from a centre crop of the sharpest photo — luck, not
+repeatable.
+
+Cause: seven-segment LCD digits are not printed text. PP-OCR and Tesseract recognise
+model glyphs trained on printed type; the dashboards add glare, motion blur and JPEG
+noise on top, and the digits are only ~30px tall in the frame.
+
+Conclusion: keep the reader engine-agnostic through the provider setting and do not
+switch to a classical OCR engine. The viable paths, cheapest first:
+
+1. Human-in-the-loop confirmation — already implemented (number-first capture plus
+   the photo confirm card). Zero cost, no new failure modes.
+2. A free-tier multimodal model key (provider=gemini is already supported). No spend,
+   and multimodal models are the family that actually reads these dashboards.
+3. A dedicated seven-segment pipeline — LCD region from the ODO/clock anchor, then
+   per-digit segmentation and a digit classifier trained on this fleet's dashboards.
+   Free at runtime and fully offline, but a real project: it needs 100+ labelled
+   crops and its own accuracy validation before it can cross-check anything.
+
+Verdict on "PaddleOCR first, Tesseract as backup": not achievable on this host
+(both install paths are blocked) and not accurate enough on seven-segment displays.
+Tesseract would carry the same seven-segment gap on top of the missing binary.
