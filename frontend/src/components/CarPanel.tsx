@@ -221,6 +221,14 @@ export function CarPanel({
   // request is expired (the queue still lists it — vehicleId is null) and showed
   // Start trip / Change assignment for a car that is already back in the pool.
   const liveAssignment = assignment && !assignment.releasedAt ? assignment : null;
+  // A RELEASED row still owns the trip's kilo history: the usage report needs the
+  // missing return reading and the departure photo is the evidence for it. Hiding
+  // the block with the live booking left those trips unfixable and photo-less in
+  // the UI (the usage tab showed "⏳ pending" with no way in).
+  const odoAssignment = liveAssignment ?? (assignment &&
+    (assignment.startOdoKm != null || assignment.startOdoPhoto || assignment.endOdoKm != null || assignment.endOdoPhoto)
+    ? assignment
+    : null);
   const showAssign = canAssign && status === 'APPROVED' && !liveAssignment;
   const canStart = canAssign && !!liveAssignment && !trip;
   // change vehicle/driver on a live assignment (before the trip starts)
@@ -447,8 +455,8 @@ export function CarPanel({
           )}
           {/* 🛣️ car kilo at Ready / Back at office — the trip's distance and the
               evidence photo; Administration records it here when the driver phoned */}
-          {liveAssignment && (
-            <OdometerBox assignment={liveAssignment} canManage={canAssign} onSaved={() => load()} />
+          {odoAssignment && (
+            <OdometerBox assignment={odoAssignment} canManage={canAssign} onSaved={() => load()} />
           )}
           {car.sharedTripId && car.sharedRiders && car.sharedRiders.length > 0 && (
             <div className="mt-1 text-xs text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-1">
