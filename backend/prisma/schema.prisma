@@ -1424,6 +1424,14 @@ model CarAssignment {
   /// When Administration was last nudged that this trip's kilo is still missing
   /// (throttles the follow-up to once a day per assignment).
   odoNudgeAt           DateTime?
+  /// 🛣️ Odometer capture waiting for the driver's number — persisted so a deploy
+  /// or restart cannot lose the photo (and the number typed before it).
+  pendingOdoStage      String?
+  pendingOdoPhoto      String?
+  pendingOdoFileId     String?
+  /// a number the driver typed BEFORE the photo — kept, never discarded
+  pendingOdoKm         Int?
+  pendingOdoAt         DateTime?
   telegramMessageId    String? // Telegram message carrying the ack buttons (for stage edits)
 
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)

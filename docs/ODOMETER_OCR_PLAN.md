@@ -1,0 +1,153 @@
+# Plan — Odometer OCR cross-check (hybrid)
+
+**Goal:** the number a driver types is never silently wrong, and the backlog of
+trips whose reading was never keyed can be filled from the photos we already have.
+
+**Status:** plan only — not implemented. Estimate: 1 day for the cross-check,
++0.5 day for the Administration backfill screen, once a vision key exists.
+
+---
+
+## 1. Why (evidence from the live system, 2026-11-10)
+
+| Fact | Source |
+|---|---|
+| The bot never reads the photo — the driver types the number; the photo is only evidence (`handleOdoText` accepts `^\d{1,7}$`) | `backend/src/telegram/telegram.service.ts` |
+| The typed number and the photo are never compared | no OCR/vision code anywhere in `backend/src` |
+| CAR-202611-0023: the departure photo reads **341,324**, the driver typed **341,325** — a 1 km error that becomes a permanent monthly total | the photo, re-read by hand |
+| 76 assignments ever, **2** with both readings; 2026-10 has **57** trips with no reading | `car_assignments`, `GET /api/cars/usage` |
+
+So: a typo is invisible and the monthly distance is quietly wrong, and the
+unrecorded backlog is far too large to key in by hand.
+
+## 2. Design decision — verification, never extraction
+
+OCR **never** becomes the source of truth. The driver still types the number
+(fast, offline-safe, no dependency); the reader only **checks** it:
+
+```
+photo arrives ─► store pending (done: P8) ─► read the LCD region ─► odoReadKm
+driver types 341363 ─┬─ read == typed  → record, mark odoCheckedAt (auto-confirmed)
+                     └─ read != typed  → confirm card:
+                          "ဓာတ်ပုံမှာ 341,324 — သင်ရိုက်သည်မှာ 341,363 — ဘယ်ဟာ မှန်လဲ?"
+                          [✓ ဓာတ်ပုံအတိုင်း] [✏️ ငါရိုက်တာအတိုင်း]
+```
+
+Reasons to keep it hybrid rather than OCR-only:
+- A wrong reading is permanent (`usage = end - start`) — a human/ driver check is cheap.
+- The reader can be wrong: glare, a dirty lens, the ODO/TRIP toggle, two different
+  dashboards in the fleet (seen: Toyota Succeed, Grand Starex, Probox, Minicab).
+- No key, no internet, or a provider outage must degrade to today's behaviour, never block a trip.
+
+## 3. Provider
+
+Three options; recommendation is **B**, with **A** as the offline fallback.
+
+| | How | Accuracy (this fleet) | Cost / photo | Notes |
+|---|---|---|---|---|
+| **A. Tesseract, offline** | crop the LCD strip, whitelist `0123456789`, 7-seg template per dashboard | ~50–70% | free | needs a per-model template; maintenance heavy |
+| **B. Vision LLM (recommended)** | send the cropped LCD strip, ask for the ODO digits only | ~90%+ | ~$0.001–0.002 (≈ 2–5 MMK) | provider-agnostic: OpenAI / Gemini / Claude; ~100 photos/month is trivial |
+| C. Hybrid A+B | B normally, A when the key is missing/offline | — | — | most work, best resilience |
+
+Provider access needed from the server (it already reaches the internet —
+Telegram polling works). Key stored in `system_settings` (never in code, chat,
+logs or the browser), read through `SettingsService` like the bot token.
+
+**Settings** (all optional; absence = feature off):
+`odometer.ocr.enabled` (bool), `odometer.ocr.provider` (`openai` | `gemini` | `anthropic`),
+`odometer.ocr.api_key`, `odometer.ocr.model`, `odometer.ocr.daily_limit` (cost guard).
+
+## 4. Where it lives in the code
+
+New `backend/src/cars/odometer-reader.service.ts`:
+
+```ts
+@Injectable()
+export class OdometerReaderService {
+  /** null = no key, disabled, provider error, or unreadable photo. Never throws. */
+  async read(photo: { buffer: Buffer; size: number }): Promise<{ km: number; confidence: 'high' | 'low' } | null>;
+}
+```
+
+- Input: the stored pending photo (already on disk — P8 made this possible).
+- Crop the bottom-centre LCD band (~x 0.38–0.72, y 0.60–0.78 of the frame) and
+  upscale 2×; fall back to the full frame when the crop reads nothing.
+- Prompt: *"This is a car dashboard. Reply with ONLY the ODO value as digits
+  (the number labelled ODO, not TRIP and not the clock). If unreadable, reply
+  NONE."* Temperature 0, `max_tokens` ~10.
+- Post-parse: digits only, 4–7 chars, plausible vs the vehicle's `currentMileage`
+  (reject a reading lower than the last recorded return — it is a TRIP reading).
+- Timeout 8 s, one retry, then give up. Cache by photo file hash so a re-send or a
+  confirm tap does not pay twice.
+
+## 5. Data model
+
+On `car_assignments` (next to the pending columns added for P8):
+
+```prisma
+odoReadKm         Int?      // what the reader saw
+odoReadAt         DateTime?
+odoReadSource     String?   // 'llm' | 'tesseract' | 'manual'
+odoReadConfidence String?   // 'high' | 'low'
+odoCheckedAt      DateTime? // the typed number was verified against the photo
+```
+
+Audit: extend `CAR_ODOMETER_RECORDED` with `{ readKm, matched: boolean }` so the
+Audit Logs screen answers "was this number ever checked?".
+
+## 6. Flows
+
+1. **Driver, photo first (normal).** Photo arrives → stored (done) → reader runs in
+   the background (not on the driver's critical path). Number arrives →
+   match → record as today + `odoCheckedAt`; mismatch → the confirm card, and the
+   chosen value is recorded with `odoReadSource`/`matched` in the audit trail.
+2. **Driver, number first (P7 path).** The number is already kept on the row; the
+   photo that follows is confirmed by the driver — the reader's value is shown in
+   that card too ("ဓာတ်ပုံမှာ 341,324 / သင်ရိုက်သည် 341,363").
+3. **Administration backfill screen (the 57-trip backlog).** In the usage tab, a
+   "📷 readings missing (57)" list: for each row, the kept/Telegram photo, the
+   reader's guess pre-filled in the number field, and one **Confirm** button
+   (still one click per trip, but no typing and no hunting for the photo).
+   Where the photo is gone (older than the pending TTL) the row falls back to
+   "photo unavailable — enter manually", which is today's flow.
+4. **Nothing else changes.** If the reader is unavailable, every path behaves
+   exactly as it does now.
+
+## 7. Failure modes and guards
+
+| Case | Behaviour |
+|---|---|
+| No key / disabled | reader returns null, flow unchanged |
+| Provider error / timeout | one retry, then null; a warning log, never a driver-visible error |
+| Two numbers in frame (ODO + TRIP) | prompt names ODO; a value below the last return is rejected |
+| Reading below `currentMileage` | flagged as `low` confidence, still shown to the human |
+| Cost | per-day counter in `system_settings`; over `odometer.ocr.daily_limit` → skip and log |
+| Privacy | only the cropped LCD strip is sent; no driver, plate or chat data; the response is never stored beyond the parsed digits |
+
+## 8. Testing
+
+- Unit with a fake provider: match, mismatch, unreadable, timeout, key absent,
+  rate limit — the flow must be identical to today's when the reader is null.
+- Golden images: the three photos from 2026-11-10 (341,324 / 341,325 / 341,363)
+  as fixtures; assert the reader extracts the ODO and not the clock or TRIP.
+- Confirm card: ✓ records the typed number, ✏️ records the reader's, both audited.
+- Backfill screen: a 57-row list renders, one confirm writes through the real
+  `captureOdometer` guards (photo required, return ≥ departure).
+
+## 9. Rollout
+
+1. Shadow mode (`enabled: true`, `mode: log-only`): the reader runs on every photo
+   and only writes the audit line. Two weeks of real photos tell us the true
+   accuracy before any driver sees it.
+2. Driver-facing mismatch card.
+3. Administration backfill screen for the backlog.
+4. Optional later: an OCR-only mode for vehicles whose dashboard is reliably read
+   (driver just sends the photo) — only after shadow mode shows near-perfect accuracy.
+
+## 10. Open questions
+
+- Which provider/key will be used? (Needed before step 1 of the rollout.)
+- Should a mismatch *block* recording until the driver answers, or record the
+  typed number and flag it? (Plan assumes: ask first, record on the answer.)
+- Do we want per-dashboard crop templates (better accuracy) or the generic crop
+  plus a strong prompt (less maintenance)?

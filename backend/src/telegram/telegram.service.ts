@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
@@ -20,6 +21,22 @@ import { yangonShort, yangonClock } from '../util/yangon-time';
  */
 
 const API = (token: string, method: string) => `https://api.telegram.org/bot${token}/${method}`;
+
+/**
+ * One odometer capture waiting for the driver's number.
+ *
+ * Mirrored on the assignment row (`pendingOdo*`) so a deploy, restart or crash
+ * cannot lose a photo the driver already sent — the bug that cost CAR-202611-0023
+ * its return reading on 2026-11-10.
+ */
+interface OdoPending {
+  assignmentId: string;
+  stage: 'READY' | 'BACK';
+  at: number;
+  photo?: { buffer: Buffer; size: number };
+  /** a number the driver typed BEFORE the photo — kept, never discarded */
+  km?: number;
+}
 
 const KEY_TOKEN = 'telegram.bot_token';
 const KEY_ENABLED = 'telegram.enabled';
@@ -317,6 +334,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         );
         return;
       }
+      // 🛣️ "does this photo match the number you typed?" (odo:ok / odo:fix)
+      if (u.callback_query.data.startsWith('odo:')) {
+        await this.handleOdoCallback(u.callback_query.data, chatId, u.callback_query.id).catch((err) =>
+          this.logger.warn(`odometer confirm failed: ${(err as Error).message}`),
+        );
+        return;
+      }
       await this.handleCallback(u.callback_query.data, String(u.callback_query.from.id), u.callback_query.id);
       return;
     }
@@ -363,8 +387,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
     if (!text) return;
     this.logger.log(`TG text update from ${chatId}: "${text}"`);
-    // 🛣️ an armed odometer capture — the next number IS the reading (photo first)
-    if (this.pendingOdo.has(chatId)) {
+    // 🛣️ an armed odometer capture — the next number IS the reading (photo first).
+    // A capture restored from the database (P8) is not in the map yet, so a bare
+    // number or /cancel is let through to look it up: that is how a driver finishes
+    // a capture the deploy interrupted.
+    const bareNumber = /^\d{1,7}$/.test(text.replace(/[,\s]/g, ''));
+    if (this.pendingOdo.has(chatId) || bareNumber || text === '/cancel') {
       const handled = await this.handleOdoText(chatId, text).catch(() => false);
       if (handled) {
         await this.markInbound(rec?.id, 'ODOMETER');
@@ -1182,13 +1210,192 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * kilo after their next errand, and a capture that expired in between left the
    * photo unanswered (the bot went silent) and the trip without a return reading.
    */
-  private armOdo(chatId: string, assignmentId: string, stage: 'READY' | 'BACK', photo?: { buffer: Buffer; size: number }) {
+  private armOdo(chatId: string, assignmentId: string, stage: 'READY' | 'BACK', photo?: { buffer: Buffer; size: number }, km?: number) {
     const at = Date.now();
-    this.pendingOdo.set(chatId, photo ? { assignmentId, stage, at, photo } : { assignmentId, stage, at });
+    const entry: OdoPending = { assignmentId, stage, at };
+    if (photo) entry.photo = photo;
+    if (km != null) entry.km = km;
+    this.pendingOdo.set(chatId, entry);
+    // P8 — persist the capture. Memory alone lost the photo on every deploy; the
+    // row now says which assignment/stage is waiting, and the file stays on disk.
+    const data: Record<string, unknown> = { pendingOdoStage: stage, pendingOdoAt: new Date(at) };
+    if (!photo) {
+      // a fresh capture: the old photo belongs to a capture nobody finished
+      data.pendingOdoPhoto = null;
+      data.pendingOdoFileId = null;
+    }
+    if (km != null) data.pendingOdoKm = km;
+    else if (!photo) data.pendingOdoKm = null;
+    void Promise.resolve()
+      .then(() => this.prisma.carAssignment.update({ where: { id: assignmentId }, data }))
+      .catch(() => undefined);
     setTimeout(() => {
       const p = this.pendingOdo.get(chatId);
       if (p && p.assignmentId === assignmentId && p.at === at) this.pendingOdo.delete(chatId);
     }, TelegramService.ODO_TTL_MS).unref?.();
+  }
+
+  /** Root of the upload volume — the same one CarsService stores photos under. */
+  private uploadRoot(): string {
+    return process.env.UPLOAD_PATH || '/app/uploads';
+  }
+
+  private pendingOdoDir(): string {
+    return path.join(this.uploadRoot(), 'odometer', 'pending');
+  }
+
+  /**
+   * Keep the driver's photo the moment it arrives.
+   *
+   * Until now it lived only in `pendingOdo`, so a deploy threw away photos the
+   * driver had already sent. The file is written here and the row records which
+   * assignment it belongs to; the reading itself is still the driver's typed
+   * number, so this is evidence storage, nothing more.
+   */
+  private async storePendingPhoto(assignmentId: string, buffer: Buffer, fileId?: string): Promise<string | null> {
+    try {
+      fs.mkdirSync(this.pendingOdoDir(), { recursive: true });
+      const name = `${randomUUID()}.jpg`;
+      fs.writeFileSync(path.join(this.pendingOdoDir(), name), buffer, { mode: 0o600 });
+      const old = await this.prisma.carAssignment
+        .findUnique({ where: { id: assignmentId }, select: { pendingOdoPhoto: true } })
+        .catch(() => null);
+      await this.prisma.carAssignment.update({
+        where: { id: assignmentId },
+        data: { pendingOdoPhoto: name, pendingOdoFileId: fileId ?? null, pendingOdoAt: new Date() },
+      });
+      if (old?.pendingOdoPhoto && old.pendingOdoPhoto !== name) {
+        try {
+          fs.unlinkSync(path.join(this.pendingOdoDir(), old.pendingOdoPhoto));
+        } catch {
+          /* the row is the source of truth */
+        }
+      }
+      return name;
+    } catch (e) {
+      this.logger.warn(`could not keep the pending odometer photo: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /** Read a kept photo back from disk (after a restart, or for the confirm tap). */
+  private readPendingPhoto(name: string): { buffer: Buffer; size: number } | null {
+    try {
+      const buffer = fs.readFileSync(path.join(this.pendingOdoDir(), name));
+      return buffer.length ? { buffer, size: buffer.length } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async pendingPhotoFromDb(assignmentId: string): Promise<{ buffer: Buffer; size: number } | null> {
+    const row = await this.prisma.carAssignment
+      .findUnique({ where: { id: assignmentId }, select: { pendingOdoPhoto: true } })
+      .catch(() => null);
+    return row?.pendingOdoPhoto ? this.readPendingPhoto(row.pendingOdoPhoto) : null;
+  }
+
+  /**
+   * Rebuild an armed capture from the database — the whole point of persisting it:
+   * a fresh process still knows which trip waits for its kilo, and still has the
+   * photo, so the driver only has to type the number.
+   */
+  private async loadPending(chatId: string): Promise<OdoPending | null> {
+    const since = new Date(Date.now() - TelegramService.ODO_PENDING_TTL_MS);
+    const a = await this.prisma.carAssignment
+      .findFirst({
+        where: { pendingOdoStage: { not: null }, pendingOdoAt: { gte: since }, driver: { telegramChatId: chatId } },
+        orderBy: { pendingOdoAt: 'desc' },
+        select: { id: true, pendingOdoStage: true, pendingOdoAt: true, pendingOdoPhoto: true, pendingOdoKm: true },
+      })
+      .catch(() => null);
+    if (!a?.pendingOdoStage || !a.pendingOdoAt) return null;
+    const entry: OdoPending = {
+      assignmentId: a.id,
+      stage: a.pendingOdoStage === 'READY' ? 'READY' : 'BACK',
+      at: a.pendingOdoAt.getTime(),
+    };
+    const photo = a.pendingOdoPhoto ? this.readPendingPhoto(a.pendingOdoPhoto) : null;
+    if (photo) entry.photo = photo;
+    if (a.pendingOdoKm != null) entry.km = a.pendingOdoKm;
+    this.pendingOdo.set(chatId, entry);
+    return entry;
+  }
+
+  /** Drop a capture: memory, the row's pending columns and the file on disk. */
+  private async clearPending(assignmentId: string) {
+    for (const [chatId, p] of this.pendingOdo) {
+      if (p.assignmentId === assignmentId) this.pendingOdo.delete(chatId);
+    }
+    try {
+      const row = await this.prisma.carAssignment.findUnique({
+        where: { id: assignmentId },
+        select: { pendingOdoPhoto: true },
+      });
+      // read the name off BEFORE the update clears the column — the row object can
+      // be the same instance a mock/client hands back, and nulling first lost the file
+      const photoName = row?.pendingOdoPhoto ?? null;
+      await this.prisma.carAssignment.update({
+        where: { id: assignmentId },
+        data: { pendingOdoStage: null, pendingOdoPhoto: null, pendingOdoFileId: null, pendingOdoKm: null, pendingOdoAt: null },
+      });
+      if (photoName) {
+        try {
+          fs.unlinkSync(path.join(this.pendingOdoDir(), photoName));
+        } catch {
+          /* already gone */
+        }
+      }
+    } catch {
+      /* best-effort — a stale row expires on its own */
+    }
+  }
+
+  /**
+   * [✓ မှန်] / [✏️ ဂဏန်း ပြင] on the "does this photo match the number" card.
+   *
+   * A photo that arrives AFTER a number is not recorded on its own: it could be a
+   * fuel receipt or another car's dashboard, so the driver — who is looking at the
+   * odometer — makes the pairing.
+   */
+  private async handleOdoCallback(data: string, chatId: string, callbackId: string) {
+    const [, action, assignmentId] = data.split(':');
+    const pending = this.pendingOdo.get(chatId) ?? (await this.loadPending(chatId));
+    if (!pending || pending.assignmentId !== assignmentId) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'အချိန်ကုန်သွားပြီ — ဂဏန်း ပြန်ရိုက်ပါ' });
+      return;
+    }
+    if (action === 'fix') {
+      this.pendingOdo.set(chatId, { ...pending, km: undefined });
+      void Promise.resolve()
+        .then(() => this.prisma.carAssignment.update({ where: { id: assignmentId }, data: { pendingOdoKm: null } }))
+        .catch(() => undefined);
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'ဂဏန်း ပြန်ရိုက်ပါ' });
+      await this.call('sendMessage', {
+        chat_id: chatId,
+        text: '🔢 မှန်ကန်တဲ့ odometer ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210) — ဓာတ်ပုံက သိမ်းထားပြီးပါပြီ',
+      });
+      return;
+    }
+    const km = pending.km;
+    const photo = pending.photo ?? (await this.pendingPhotoFromDb(assignmentId));
+    if (km == null || !photo) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'မှတ်တမ်းတင် မရပါ — ဂဏန်း ပြန်ရိုက်ပါ' });
+      return;
+    }
+    try {
+      if (!this.odoRef) throw new Error('Odometer handler not ready');
+      await this.odoRef.capture(assignmentId, { stage: pending.stage, km, photo }, { username: 'driver-telegram' });
+      await this.clearPending(assignmentId);
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'မှတ်တမ်းတင်ပြီး' });
+      await this.editCallbackMessage(chatId, callbackId, `✅ Odometer ${km.toLocaleString()} km မှတ်တမ်းတင်ပြီး`);
+    } catch (e) {
+      await this.call('answerCallbackQuery', { callback_query_id: callbackId, text: 'မှတ်တမ်းတင် မရပါ' });
+      await this.call('sendMessage', {
+        chat_id: chatId,
+        text: `⚠️ ${(e as Error).message || 'မှတ်တမ်းတင် မရပါ'} — ဂဏန်း ပြန်ရိုက်ပါ သို့မဟုတ် /cancel`,
+      });
+    }
   }
 
   /**
@@ -1240,8 +1447,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.call('sendMessage', { chat_id: chatId, text: '⚠️ ဓာတ်ပုံ မရယူနိုင်ပါ — ထပ်ပို့ပါ' });
       return;
     }
-    // the photo refreshed the capture — re-arm it with its own fresh window
-    this.armOdo(chatId, pending.assignmentId, pending.stage, photo);
+    // keep the file (P8) and bind it to this assignment, then re-arm with a fresh window
+    await this.storePendingPhoto(pending.assignmentId, photo.buffer, best.file_id);
+    this.armOdo(chatId, pending.assignmentId, pending.stage, photo, pending.km);
+    if (pending.km != null) {
+      // P7 — the number came first, so the photo is offered as evidence and the
+      // driver confirms the pairing (a receipt must never become the odometer)
+      await this.call('sendMessage', {
+        chat_id: chatId,
+        text: `📷 ဓာတ်ပုံ ရပါပြီ — သင်ရိုက်ထည့်ထားတဲ့ ဂဏန်း ${pending.km.toLocaleString()} နှင့် ဒီဓာတ်ပုံ ကိုက်ညီပါသလား?`,
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✓ မှန်တယ် — မှတ်တမ်းတင်', callback_data: `odo:ok:${pending.assignmentId}` },
+              { text: '✏️ ဂဏန်း ပြင်', callback_data: `odo:fix:${pending.assignmentId}` },
+            ],
+          ],
+        },
+      });
+      return;
+    }
     await this.call('sendMessage', {
       chat_id: chatId,
       text: '✅ ဓာတ်ပုံ ရပါပြီ — ယခု odometer ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)',
@@ -1287,10 +1512,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   /** Driver sent text while a capture is armed: the number (or /cancel). true = consumed. */
   private async handleOdoText(chatId: string, text: string): Promise<boolean> {
-    const pending = this.pendingOdo.get(chatId);
+    // P8 — a capture survives a deploy: the row still says which trip is waiting
+    const pending = this.pendingOdo.get(chatId) ?? (await this.loadPending(chatId));
     if (!pending) return false;
     if (text === '/cancel') {
-      this.pendingOdo.delete(chatId);
+      await this.clearPending(pending.assignmentId);
       await this.call('sendMessage', { chat_id: chatId, text: '🛣️ Odometer ထည့်သွင်းမှု ပယ်ဖျက်ပြီး — Administration မှ နောက်မှ ထည့်နိုင်သည်' });
       return true;
     }
@@ -1304,10 +1530,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     let photo: { buffer: Buffer; size: number } | undefined = pending.photo;
     if (!photo) {
       photo = (await this.recentOdoPhoto(chatId, pending.assignmentId).catch(() => null)) ?? undefined;
+      if (!photo) photo = (await this.pendingPhotoFromDb(pending.assignmentId)) ?? undefined;
       if (photo) this.pendingOdo.set(chatId, { ...pending, photo, at: Date.now() });
     }
     if (!photo) {
-      await this.call('sendMessage', { chat_id: chatId, text: '📷 အရင်ဆုံး odometer ဓာတ်ပုံကို ပို့ပါ (/cancel ဖြင့် ပယ်ဖျက်)' });
+      // P7 — the number is KEPT, not thrown away: CAR-202611-0023 lost 341,363
+      // exactly here (the driver typed it 80 minutes after the photo window shut).
+      const digits = text.replace(/[,\s]/g, '');
+      if (!/^\d{1,7}$/.test(digits)) {
+        await this.call('sendMessage', {
+          chat_id: chatId,
+          text: '🔢 ဂဏန်းသက်သက် ရိုက်ထည့်ပါ သို့မဟုတ် odometer ဓာတ်ပုံကို ပို့ပါ (/cancel ဖြင့် ပယ်ဖျက်)',
+        });
+        return true;
+      }
+      const num = Number(digits);
+      this.armOdo(chatId, pending.assignmentId, pending.stage, undefined, num);
+      await this.call('sendMessage', {
+        chat_id: chatId,
+        text: `🔢 ဂဏန်း ${num.toLocaleString()} ကို မှတ်ထားပါတယ် — ယခု odometer ဓာတ်ပုံကို ပို့ပါ 📷\n(ဓာတ်ပုံ မပို့နိုင်ရင် Administration က နောက်မှ ဖြည့်နိုင်သည် — ဂဏန်း မပျောက်ပါ)`,
+      });
       return true;
     }
     const clean = text.replace(/[,\s]/g, '');
@@ -1324,6 +1566,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         { stage: pending.stage, km, photo },
         { username: 'driver-telegram' },
       );
+      // the reading landed — the kept photo and the pending row are done
+      await this.clearPending(pending.assignmentId);
       await this.call('sendMessage', {
         chat_id: chatId,
         text: `✅ Odometer ${km.toLocaleString()} km မှတ်တမ်းတင်ပြီး — ကျေးဇူးတင်ပါသည်`,
@@ -1403,9 +1647,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * longer theirs, and writing it to the new row would corrupt its history.
    */
   forgetOdometer(assignmentId: string) {
-    for (const [chatId, p] of this.pendingOdo) {
-      if (p.assignmentId === assignmentId) this.pendingOdo.delete(chatId);
-    }
+    // a re-assign/release makes a half-finished capture belong to nobody
+    void this.clearPending(assignmentId);
   }
 
   /** "Back at Office": free the vehicle + driver immediately (also on re-assign paths). */
@@ -2198,11 +2441,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private pendingEtaCustom = new Map<string, { assignmentId: string; at: number }>();
   /** How long an armed odometer capture waits for the kilo (see armOdo). */
   private static readonly ODO_TTL_MS = 3 * 60 * 60_000;
+  /** How long a persisted capture (photo on disk) is worth resuming after a restart. */
+  private static readonly ODO_PENDING_TTL_MS = 24 * 60 * 60_000;
   /** 🛣️ odometer capture armed for this chat: waiting for the photo, then the kilo. */
-  private pendingOdo = new Map<
-    string,
-    { assignmentId: string; stage: 'READY' | 'BACK'; at: number; photo?: { buffer: Buffer; size: number } }
-  >();
+  private pendingOdo = new Map<string, OdoPending>();
 
   /** Shared notification payload — text plus an optional "Open in AMS" deep link. */
   private async sendToChat(chatId: string, title: string, body?: string, link?: string) {

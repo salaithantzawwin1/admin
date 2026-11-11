@@ -1,3 +1,4 @@
+process.env.UPLOAD_PATH = require('os').tmpdir() + '/ams-odo-test-' + process.pid;
 /**
  * A dashboard photo that arrives with NO capture armed (plan: odometer rescue).
  *
