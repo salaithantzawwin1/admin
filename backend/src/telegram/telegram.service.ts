@@ -1449,6 +1449,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
     // keep the file (P8) and bind it to this assignment, then re-arm with a fresh window
     await this.storePendingPhoto(pending.assignmentId, photo.buffer, best.file_id);
+    try {
+      this.odoPhotoRef?.afterStore?.(pending.assignmentId, photo);
+    } catch {
+      /* the reader is an observer — it must never break the capture */
+    }
     this.armOdo(chatId, pending.assignmentId, pending.stage, photo, pending.km);
     if (pending.km != null) {
       // P7 — the number came first, so the photo is offered as evidence and the
@@ -2445,6 +2450,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private static readonly ODO_PENDING_TTL_MS = 24 * 60 * 60_000;
   /** 🛣️ odometer capture armed for this chat: waiting for the photo, then the kilo. */
   private pendingOdo = new Map<string, OdoPending>();
+  /**
+   * Hook wired by CarsModule: hand a photo that was just kept to the OCR reader.
+   * Pure observer (shadow mode) — it never changes what gets recorded, and a
+   * reader that throws is swallowed here.
+   */
+  odoPhotoRef?: { afterStore: (assignmentId: string, photo: { buffer: Buffer; size: number }) => void };
 
   /** Shared notification payload — text plus an optional "Open in AMS" deep link. */
   private async sendToChat(chatId: string, title: string, body?: string, link?: string) {

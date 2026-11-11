@@ -1070,6 +1070,26 @@ export class CarsService {
       recordId: a.requestId,
       newValue: { stage, km, photo: !!stored, replaced: existing === stored ? undefined : existing ?? undefined, stamped, docNumber: a.request.docNumber },
     });
+
+    // 🛣️ OCR shadow check (docs/ODOMETER_OCR_PLAN.md): the reader never decides,
+    // but the audit trail now says whether the typed number matched the photo.
+    // That is how shadow mode measures accuracy before a driver ever sees a
+    // mismatch card — no behaviour change, one extra audit line.
+    if (a.odoReadKm != null) {
+      const matched = a.odoReadKm === km;
+      await this.prisma.carAssignment
+        .update({ where: { id: assignmentId }, data: { odoCheckedAt: matched ? new Date() : null } })
+        .catch(() => undefined);
+      await this.audit
+        .log({
+          ...who,
+          action: 'CAR_ODOMETER_OCR_CHECK',
+          module: 'CARS',
+          recordId: a.requestId,
+          newValue: { readKm: a.odoReadKm, typedKm: km, stage, matched, mode: 'shadow' } as never,
+        })
+        .catch(() => undefined);
+    }
     this.push(a.requestId);
 
     const usageKm =

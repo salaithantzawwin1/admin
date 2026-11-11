@@ -1432,6 +1432,14 @@ model CarAssignment {
   /// a number the driver typed BEFORE the photo — kept, never discarded
   pendingOdoKm         Int?
   pendingOdoAt         DateTime?
+  /// 🛣️ OCR cross-check (docs/ODOMETER_OCR_PLAN.md): what the reader saw in the
+  /// photo. Never the recorded value — only evidence for checking the typed one.
+  odoReadKm            Int?
+  odoReadAt            DateTime?
+  odoReadSource        String?
+  odoReadConfidence    String?
+  /// the typed number was verified against the photo (shadow mode: counted only)
+  odoCheckedAt         DateTime?
   telegramMessageId    String? // Telegram message carrying the ack buttons (for stage edits)
 
   request    RequestDocument @relation(fields: [requestId], references: [id], onDelete: Cascade)

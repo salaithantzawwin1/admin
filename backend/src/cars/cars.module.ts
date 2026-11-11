@@ -11,6 +11,7 @@ import { CarsController } from './cars.controller';
 import { CarsService } from './cars.service';
 import { TripRemindersService } from './trip-reminders.service';
 import { TelegramCarActionsService } from './telegram-car-actions.service';
+import { OdometerReaderService } from './odometer-reader.service';
 
 export { CarsService } from './cars.service';
 
@@ -25,7 +26,7 @@ export { CarsService } from './cars.service';
     MulterModule.register({ storage: memoryStorage() }),
   ],
   controllers: [CarsController],
-  providers: [CarsService, TripRemindersService, TelegramCarActionsService],
+  providers: [CarsService, TripRemindersService, TelegramCarActionsService, OdometerReaderService],
   exports: [CarsService],
 })
 export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
@@ -34,11 +35,18 @@ export class CarsModule implements OnModuleInit, OnApplicationBootstrap {
     private workflow: WorkflowService,
     private tgActions: TelegramCarActionsService,
     private telegram: TelegramService,
+    private ocr: OdometerReaderService,
   ) {
     // 🛣️ the driver's Telegram photo + kilo lands on the same capture path the
     // Administration panel uses (validation, evidence photo, audit trail)
     this.telegram.odoRef = {
       capture: (assignmentId, data, actor) => this.cars.captureOdometer(assignmentId, data, data.photo, actor),
+    };
+    // 🛣️ OCR shadow read (docs/ODOMETER_OCR_PLAN.md): every photo the bot keeps is
+    // handed to the reader, which only stores what it saw. Nothing downstream
+    // depends on it — no key, no internet or a provider outage changes nothing.
+    this.telegram.odoPhotoRef = {
+      afterStore: (assignmentId, photo) => void this.ocr.readAndRecord(assignmentId, photo),
     };
   }
 
