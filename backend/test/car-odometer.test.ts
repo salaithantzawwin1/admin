@@ -54,6 +54,7 @@ function build(opts: { row?: any; lastReturn?: any; usageRows?: any[]; fuelRows?
   const updates: any[] = [];
   const audits: any[] = [];
   const ackCalls: any[] = [];
+  const vehicleUpdates: any[] = [];
   const prisma: any = {
     carAssignment: {
       findUnique: async () => opts.row ?? assignment(),
@@ -65,6 +66,12 @@ function build(opts: { row?: any; lastReturn?: any; usageRows?: any[]; fuelRows?
       findMany: async () => opts.usageRows ?? [],
     },
     carExpense: { findMany: async () => opts.fuelRows ?? [] },
+    vehicle: {
+      update: async (args: any) => {
+        vehicleUpdates.push(args);
+        return {};
+      },
+    },
   };
   const audit: any = { log: async (payload: any) => audits.push(payload) };
   const telegram: any = {
@@ -74,7 +81,7 @@ function build(opts: { row?: any; lastReturn?: any; usageRows?: any[]; fuelRows?
     },
   };
   const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, audit, telegram, {} as any, { publish: () => undefined } as any);
-  return { svc, updates, audits, ackCalls };
+  return { svc, updates, audits, ackCalls, vehicleUpdates };
 }
 
 async function main() {
@@ -465,6 +472,101 @@ async function main() {
     assert.strictEqual(res.sent, 1, 'the send-now button reports how many admins got it');
     assert.strictEqual(res.flagged, 1);
     assert.strictEqual(res.totalKm, 200);
+  });
+
+  await test('captureOdometer: the accepted reading moves the vehicle odometer forward', async () => {
+    const { svc, vehicleUpdates } = build({
+      row: assignment({
+        startOdoKm: 45210,
+        startOdoPhoto: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jpg',
+        endOdoPhoto: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jpg',
+        vehicle: { id: VEHICLE_ID, vehicleNo: 'YGN-1234', currentMileage: 45200 },
+      }),
+    });
+    await svc.captureOdometer(ASSIGNMENT_ID, { stage: 'BACK', km: 45268 }, undefined, ACTOR);
+    assert.deepStrictEqual(vehicleUpdates, [{ where: { id: VEHICLE_ID }, data: { currentMileage: 45268 } }], 'the car carries the newest reading');
+  });
+
+  await test('captureOdometer: a lower correction never rolls the vehicle odometer back', async () => {
+    const { svc, vehicleUpdates } = build({
+      row: assignment({
+        startOdoKm: 900000,
+        startOdoPhoto: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.jpg',
+        endOdoPhoto: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.jpg',
+        vehicle: { id: VEHICLE_ID, vehicleNo: 'YGN-1234', currentMileage: 900500 },
+      }),
+    });
+    await svc.captureOdometer(ASSIGNMENT_ID, { stage: 'BACK', km: 900100 }, undefined, ACTOR);
+    assert.deepStrictEqual(vehicleUpdates, [], 'the fleet number only moves forward');
+  });
+
+  await test('vehicleUsage: buckets by the trip date and reports each vehicle\'s gap', async () => {
+    let where: any = null;
+    const prisma: any = {
+      carAssignment: {
+        findMany: async (args: any) => {
+          where = args?.where ?? where;
+          return [
+            {
+              id: 'a1', vehicleId: 'v1', startOdoKm: 1000, endOdoKm: 1040,
+              startOdoAt: new Date('2026-11-02T01:00:00Z'), endOdoAt: new Date('2026-12-01T01:00:00Z'),
+              startOdoPhoto: 'p1.jpg', endOdoPhoto: 'p2.jpg',
+              driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234', brandModel: null, currentMileage: 1040 },
+              request: { docNumber: 'CAR-202611-0001' },
+              carRequest: { destination: 'Mandalay', startDate: new Date('2026-11-02T01:00:00Z') },
+            },
+            {
+              id: 'a2', vehicleId: 'v1', startOdoKm: 1040, endOdoKm: null,
+              startOdoAt: new Date('2026-11-05T01:00:00Z'), endOdoAt: null,
+              startOdoPhoto: null, endOdoPhoto: null,
+              driver: { name: 'U Aung' }, vehicle: { vehicleNo: 'YGN-1234', brandModel: null, currentMileage: 1040 },
+              request: { docNumber: 'CAR-202611-0002' },
+              carRequest: { destination: 'Bago', startDate: new Date('2026-11-05T01:00:00Z') },
+            },
+          ];
+        },
+      },
+      carExpense: { findMany: async () => [] },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, { log: async () => undefined }, {} as any, {} as any, { publish: () => undefined } as any);
+    const res = await svc.vehicleUsage('2026-11');
+    const first = where?.OR?.[0]?.carRequest?.startDate;
+    assert.ok(first?.gte instanceof Date && first?.lt instanceof Date, 'the month filter is the trip start date');
+    assert.strictEqual(res.grandTotalKm, 40);
+    assert.strictEqual(res.pendingCount, 1);
+    assert.strictEqual(res.vehicles[0].pendingCount, 1, 'the card says the vehicle is short by one trip');
+  });
+
+  await test('vehicleUsageTrend: a reading keyed later still counts in its trip month', async () => {
+    const prisma: any = {
+      carAssignment: {
+        findMany: async () => [
+          {
+            vehicleId: 'v1', startOdoKm: 1000, endOdoKm: 1100,
+            endOdoAt: new Date('2026-12-03T03:00:00Z'),
+            vehicle: { vehicleNo: 'YGN-1234', brandModel: null },
+            carRequest: { sharedTripId: null, startDate: new Date('2026-11-20T03:00:00Z') },
+          },
+        ],
+      },
+      carExpense: { findMany: async () => [] },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, { log: async () => undefined }, {} as any, {} as any, { publish: () => undefined } as any);
+    const res = await svc.vehicleUsageTrend('2026-11', 3);
+    assert.deepStrictEqual(res.months, ['2026-09', '2026-10', '2026-11']);
+    assert.strictEqual(res.vehicles[0].series[2].totalKm, 100, 'keyed in December, driven in November');
+    assert.strictEqual(res.vehicles[0].series[2].totalKm, 100);
+  });
+
+  await test('odometerMissingNudge: only the last fortnight, never a closed request', async () => {
+    let where: any = null;
+    const prisma: any = { carAssignment: { findMany: async (args: any) => { where = args.where; return []; } } };
+    const svc: any = new TripRemindersService(prisma, { notifyMany: async () => undefined } as any, {} as any, { usersWithPermissions: async () => [] } as any);
+    await svc.odometerMissingNudge();
+    const recency = where.AND[0].OR[0].driverArrivedAt;
+    assert.ok(recency.gte instanceof Date && recency.lt instanceof Date, 'a bounded age window');
+    assert.ok((Date.now() - recency.gte.getTime()) / 86400000 > 13.9, 'two weeks back, not forever');
+    assert.deepStrictEqual(where.AND[2].request.status.notIn, ['CANCELLED', 'REJECTED', 'DRAFT'], 'a closed trip is not chased');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

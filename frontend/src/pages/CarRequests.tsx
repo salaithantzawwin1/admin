@@ -800,6 +800,8 @@ interface UsageVehicle {
   brandModel: string | null;
   totalKm: number;
   tripCount: number;
+  /** trips of this car in the month that still miss a reading */
+  pendingCount: number;
   trips: UsageTrip[];
   /** fuel bought for this vehicle in the month, and what a kilometre cost */
   fuelCost: number;
@@ -1045,7 +1047,17 @@ function VehicleUsageTab() {
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-2 text-gray-600">{v.tripCount}</td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {v.tripCount}
+                          {v.pendingCount > 0 && (
+                            <span
+                              className="ml-1 rounded-full border border-amber-200 bg-amber-50 px-1.5 text-[10px] font-medium text-amber-800"
+                              title={`${v.pendingCount} trip(s) of this vehicle still miss a reading — the month's distance is short by them`}
+                            >
+                              +{v.pendingCount} pending
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 font-medium text-gray-800">{km(v.totalKm)}</td>
                         <td className="px-3 py-2 text-gray-600">
                           {v.fuelCost > 0 ? (

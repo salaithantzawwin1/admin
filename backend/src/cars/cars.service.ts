@@ -1012,6 +1012,21 @@ export class CarsService {
         : { endOdoKm: km, endOdoPhoto: stored, endOdoAt: now };
     await this.prisma.carAssignment.update({ where: { id: assignmentId }, data: fields });
 
+    // The car's own odometer is what the usage card's "since service" position
+    // and the dispatch guard (startMileage >= current odometer) read — and it was
+    // only ever written by hand in the Fleet edit form, so every vehicle sat at
+    // 0 km and service-due could never fire. An accepted reading IS the newest
+    // truth for that car, so move it forward (never back: a corrected typo must
+    // not roll the fleet's number below a later trip's reading).
+    try {
+      const next = Math.max(km, a.vehicle.currentMileage ?? 0);
+      if (next !== (a.vehicle.currentMileage ?? 0)) {
+        await this.prisma.vehicle.update({ where: { id: a.vehicleId }, data: { currentMileage: next } });
+      }
+    } catch {
+      /* the reading itself already landed — the fleet number is best-effort */
+    }
+
     // A shared ride is ONE physical trip booked twice: the same kilo (and the same
     // photo) belongs to every member. Without this the partner row sits at
     // "pending" for ever and the month's report looks like a lost reading.
@@ -1120,8 +1135,14 @@ export class CarsService {
     const rows = await this.prisma.carAssignment.findMany({
       where: {
         OR: [
-          { endOdoAt: { gte: start, lt: end } },
-          { startOdoAt: { gte: start, lt: end } },
+          // Bucket by the DAY THE TRIP RAN, not the day the number was keyed: a
+          // reading entered later (the driver typed it at night, Administration
+          // backfilled it a week on) belongs to its own month, not to the month
+          // of the keying — which silently moved distance between months.
+          { carRequest: { startDate: { gte: start, lt: end } } },
+          // rows with no booking link fall back to the reading's own timestamp
+          { carRequest: { is: null }, startOdoAt: { gte: start, lt: end } },
+          { carRequest: { is: null }, endOdoAt: { gte: start, lt: end } },
         ],
       },
       select: {
@@ -1179,7 +1200,9 @@ export class CarsService {
       sharedDuplicate: boolean;
     };
     const byVehicle = new Map<string, {
-      vehicleNo: string; brandModel: string | null; totalKm: number; tripCount: number; trips: Trip[];
+      vehicleNo: string; brandModel: string | null; totalKm: number; tripCount: number;
+      /** trips of this car in the month that still miss a reading (total is short by them) */
+      pendingCount: number; trips: Trip[];
       /** service position: distance driven since the last recorded service */
       serviceIntervalKm: number | null;
       lastServiceKm: number | null;
@@ -1200,6 +1223,7 @@ export class CarsService {
         brandModel: r.vehicle?.brandModel ?? null,
         totalKm: 0,
         tripCount: 0,
+        pendingCount: 0,
         trips: [],
         serviceIntervalKm: r.vehicle?.serviceIntervalKm ?? null,
         lastServiceKm: r.vehicle?.lastServiceKm ?? null,
@@ -1224,6 +1248,10 @@ export class CarsService {
       if (usageKm != null) {
         g.totalKm += usageKm;
         g.tripCount += 1;
+      } else if (!duplicate) {
+        // the month's total is short by this trip: the card says how many are
+        // waiting instead of letting a small number look complete
+        g.pendingCount += 1;
       }
       byVehicle.set(r.vehicleId, g);
     }
@@ -1326,14 +1354,23 @@ export class CarsService {
     const to = windows[windows.length - 1].end;
 
     const rows = await this.prisma.carAssignment.findMany({
-      where: { endOdoAt: { gte: from, lt: to }, startOdoKm: { not: null }, endOdoKm: { not: null } },
+      where: {
+        startOdoKm: { not: null },
+        endOdoKm: { not: null },
+        // same month rule as the report: the month the trip ran, not the month
+        // the number was keyed in
+        OR: [
+          { carRequest: { startDate: { gte: from, lt: to } } },
+          { carRequest: { is: null }, endOdoAt: { gte: from, lt: to } },
+        ],
+      },
       select: {
         vehicleId: true,
         startOdoKm: true,
         endOdoKm: true,
         endOdoAt: true,
         vehicle: { select: { vehicleNo: true, brandModel: true } },
-        carRequest: { select: { sharedTripId: true } },
+        carRequest: { select: { sharedTripId: true, startDate: true } },
       },
     });
     const fuelRows = await (async () => {
@@ -1359,8 +1396,9 @@ export class CarsService {
       store.set(vehicleId, m);
     };
     for (const r of rows) {
-      if (!r.vehicleId || !r.endOdoAt) continue;
-      const key = monthKey(r.endOdoAt);
+      const when = r.carRequest?.startDate ?? r.endOdoAt;
+      if (!r.vehicleId || !when) continue;
+      const key = monthKey(when);
       const group = r.carRequest?.sharedTripId ?? null;
       if (group) {
         const gk = `${group}:${key}`;

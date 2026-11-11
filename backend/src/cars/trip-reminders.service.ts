@@ -785,16 +785,22 @@ export class TripRemindersService {
       const now = new Date();
       const old = new Date(now.getTime() - 2 * 3600 * 1000); // give the driver time to send it
       const dayAgo = new Date(now.getTime() - 24 * 3600 * 1000);
+      // Only the last fortnight is worth chasing. The old query had no age or
+      // status filter, so every cancelled October booking whose driver tapped
+      // Ready kept waking Administration up daily (119 nudges by November).
+      const since = new Date(now.getTime() - 14 * 24 * 3600 * 1000);
       const rows = await this.prisma.carAssignment.findMany({
         where: {
           AND: [
             {
               OR: [
-                { driverArrivedAt: { not: null, lt: old }, startOdoKm: null },
-                { driverBackAtOfficeAt: { not: null, lt: old }, endOdoKm: null },
+                { driverArrivedAt: { not: null, gte: since, lt: old }, startOdoKm: null },
+                { driverBackAtOfficeAt: { not: null, gte: since, lt: old }, endOdoKm: null },
               ],
             },
             { OR: [{ odoNudgeAt: null }, { odoNudgeAt: { lt: dayAgo } }] },
+            // a trip that was cancelled or never submitted needs no chase
+            { request: { status: { notIn: ['CANCELLED', 'REJECTED', 'DRAFT'] as never[] } } },
           ],
         },
         select: {
