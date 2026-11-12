@@ -230,9 +230,14 @@ export function CarPanel({
     ? assignment
     : null);
   const showAssign = canAssign && status === 'APPROVED' && !liveAssignment;
-  const canStart = canAssign && !!liveAssignment && !trip;
+  // A COMPLETED (or cancelled) request keeps an unreleased assignment row, so
+  // gating on the row alone offered Start trip / Change assignment on a trip that
+  // is already closed — the click then failed with "Only IN_PROGRESS assignments
+  // can be changed (current: COMPLETED)".
+  const liveAndOpen = !!liveAssignment && status === 'IN_PROGRESS';
+  const canStart = canAssign && liveAndOpen && !trip;
   // change vehicle/driver on a live assignment (before the trip starts)
-  const canReassign = canAssign && !!liveAssignment && !trip;
+  const canReassign = canAssign && liveAndOpen && !trip;
   const canComplete = canAssign && trip?.status === 'STARTED';
   // Administration fleet-plan controls: cancel or shift time on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);

@@ -1776,6 +1776,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return r;
       });
       if (!done) return;
+      // the DOCUMENT moved to COMPLETED here, not just the assignment: the panel's
+      // status badge / action list listen to request.updated and stayed on
+      // IN_PROGRESS (still offering Change assignment / Start trip) until a manual
+      // reload, because ack stamps only publish assignment.updated.
+      this.events?.publish('request.updated', { requestId });
       await this.audit.log({
         action: 'REQUEST_AUTO_COMPLETED',
         module: 'CARS',
