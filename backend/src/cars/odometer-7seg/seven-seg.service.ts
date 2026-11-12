@@ -334,8 +334,9 @@ export class OdometerSevenSegService {
     let glyphs: Box[] = [];
 
     if (marked) {
-      // the human marked the row on the labelling screen: that beats any search
-      row = marked;
+      // The human marked the row on the labelling screen: that beats any search.
+      // The screen sends frame fractions, the pipeline works in pixels.
+      row = priorBox(marked, image);
     } else {
       const prior = priorBox(medianPrior(await this.calibrations()), image);
       const found = findDigitRow(image, prior);
@@ -345,11 +346,16 @@ export class OdometerSevenSegService {
       polarity = found.polarity;
       glyphs = found.glyphs;
     }
+    if (!row) return null;
 
     // a little margin so a digit whose bars touch the edge is not clipped
     const roiBox = expandBox(row, 0.15, image.w, image.h);
     let segmented = segmentDigits(crop(image, roiBox), expected);
-    if (segmented.digits.length < 5 || segmented.digits.length > 8) {
+    // A marked box is trusted: report whatever glyphs it holds and let the label
+    // step compare that count with the typed number. Only the detector's own
+    // guess has to look like a real odometer row.
+    const minGlyphs = marked ? 1 : 5;
+    if (segmented.digits.length < minGlyphs || segmented.digits.length > 8) {
       if (!glyphs.length) return null;
       const digits = glyphs.map((b) => ({
         box: { x: b.x - roiBox.x, y: b.y - roiBox.y, w: b.w, h: b.h },

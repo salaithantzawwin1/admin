@@ -316,6 +316,46 @@ async function main() {
     }
   });
 
+  await test('a marked row sent as frame fractions is cut from the right pixels', async () => {
+    const { image, row } = dashboard('341363', 38);
+    const file = path.join(os.tmpdir(), `odo-7seg-mark-${Date.now()}.png`);
+    fs.writeFileSync(file, pngBytes(image));
+    try {
+      const { svc } = serviceWith([], [], file);
+      const result = await svc.analyze({
+        assignmentId: 'a-4',
+        stage: 'READY',
+        box: { x: row.x / 1280, y: row.y / 720, w: row.w / 1280, h: row.h / 720 },
+      });
+      assert.strictEqual(result.digits.length, 6);
+      const first = result.digits[0].box;
+      const last = result.digits[5].box;
+      assert.ok(
+        Math.abs(first.x - row.x) < 12 && Math.abs(last.x + last.w - (row.x + row.w)) < 12,
+        `glyphs ${first.x}..${last.x + last.w} vs row ${row.x}..${row.x + row.w}`,
+      );
+    } finally {
+      fs.unlinkSync(file);
+    }
+  });
+
+  await test('a marked box holding two digits returns those two, not an error', async () => {
+    const { image, row } = dashboard('341363', 38);
+    const file = path.join(os.tmpdir(), `odo-7seg-mark2-${Date.now()}.png`);
+    fs.writeFileSync(file, pngBytes(image));
+    try {
+      const { svc } = serviceWith([], [], file);
+      const result = await svc.analyze({
+        assignmentId: 'a-5',
+        stage: 'READY',
+        box: { x: row.x / 1280, y: row.y / 720, w: 51 / 1280, h: row.h / 720 },
+      });
+      assert.strictEqual(result.digits.length, 2);
+    } finally {
+      fs.unlinkSync(file);
+    }
+  });
+
   await test('an unknown stage is rejected', async () => {
     const { svc } = serviceWith([]);
     await assert.rejects(() => svc.analyze({ assignmentId: 'a-3', stage: 'MIDDLE' }), /READY or BACK/);
