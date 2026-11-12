@@ -12,6 +12,8 @@ import { CarsService } from './cars.service';
 import { TripRemindersService } from './trip-reminders.service';
 import { TelegramCarActionsService } from './telegram-car-actions.service';
 import { OdometerReaderService } from './odometer-reader.service';
+import { OdometerSevenSegService } from './odometer-7seg/seven-seg.service';
+import { OdometerTrainingController } from './odometer-7seg/training.controller';
 
 export { CarsService } from './cars.service';
 
@@ -25,8 +27,14 @@ export { CarsService } from './cars.service';
     // odometer photos are sniffed in memory before anything is written
     MulterModule.register({ storage: memoryStorage() }),
   ],
-  controllers: [CarsController],
-  providers: [CarsService, TripRemindersService, TelegramCarActionsService, OdometerReaderService],
+  controllers: [CarsController, OdometerTrainingController],
+  providers: [
+    CarsService,
+    TripRemindersService,
+    TelegramCarActionsService,
+    OdometerSevenSegService,
+    OdometerReaderService,
+  ],
   exports: [CarsService],
 })
 export class CarsModule implements OnModuleInit, OnApplicationBootstrap {

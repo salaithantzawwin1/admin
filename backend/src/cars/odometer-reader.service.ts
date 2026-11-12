@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
+import { OdometerSevenSegService } from './odometer-7seg/seven-seg.service';
 
 /**
  * Odometer OCR — shadow mode (plan: docs/ODOMETER_OCR_PLAN.md).
@@ -67,7 +68,13 @@ export class OdometerReaderService {
   /** A slow provider must not hold a photo (or a request) hostage. */
   private static readonly TIMEOUT_MS = 8000;
 
-  constructor(private prisma: PrismaService, private audit: AuditService) {}
+  constructor(
+    private prisma: PrismaService,
+    private audit: AuditService,
+    /** the offline seven-segment reader (provider = 'local'); optional so this
+     *  service still constructs in tests and wherever no training data exists */
+    @Optional() private sevenSeg?: OdometerSevenSegService,
+  ) {}
 
   /**
    * Read the ODO value out of a dashboard photo. null = feature off, no key,
@@ -75,8 +82,12 @@ export class OdometerReaderService {
    */
   async read(photo: { buffer: Buffer; size?: number }): Promise<OdometerRead | null> {
     const cfg = await this.settings();
-    if (!cfg.enabled || !cfg.apiKey) return null;
+    if (!cfg.enabled) return null;
     if (!photo?.buffer?.length) return null;
+    // provider=local is the offline seven-segment reader: it needs no key, so it
+    // must not be gated on one (docs/ODOMETER_OCR_PLAN.md)
+    if (cfg.provider === 'local') return this.readLocal(photo.buffer);
+    if (!cfg.apiKey) return null;
     try {
       if (cfg.dailyLimit > 0) {
         const used = await this.prisma.carAssignment
@@ -94,6 +105,22 @@ export class OdometerReaderService {
     } catch (e) {
       // an observer must never disturb the capture
       this.logger.warn(`odometer read failed: ${(e as Error).message}`);
+      return null;
+    }
+  }
+
+  /**
+   * The offline path: no key, no network, no daily budget — just the pipeline and
+   * the glyphs an administrator labelled. null whenever it is not sure.
+   */
+  private async readLocal(buffer: Buffer): Promise<OdometerRead | null> {
+    if (!this.sevenSeg) return null;
+    try {
+      const read = await this.sevenSeg.read(buffer);
+      if (!read) return null;
+      return { km: read.km, confidence: read.confidence, source: 'local' };
+    } catch (e) {
+      this.logger.warn(`local odometer read failed: ${(e as Error).message}`);
       return null;
     }
   }

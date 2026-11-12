@@ -189,3 +189,48 @@ switch to a classical OCR engine. The viable paths, cheapest first:
 Verdict on "PaddleOCR first, Tesseract as backup": not achievable on this host
 (both install paths are blocked) and not accurate enough on seven-segment displays.
 Tesseract would carry the same seven-segment gap on top of the missing binary.
+---
+
+## 6. Offline seven-segment reader (implemented, 2026-11-12)
+
+**No key, no internet.** `provider=local` uses `backend/src/cars/odometer-7seg/`
+and a classifier made of digit glyphs cut from photos an administrator labelled.
+Why not Tesseract/PaddleOCR: section 5 — both are install-blocked on this host and
+both read these seven-segment panels badly (PP-OCR reported `52E16E000` for a
+clean `341325`).
+
+### Pipeline
+
+| Stage | File | What it does |
+|---|---|---|
+| decode | `image.ts` | JPEG/PNG → greyscale (WebP stays unreadable, by design) |
+| cluster | `lcd.ts` `findCluster()` | biggest bright blob in the frame = the instrument cluster; a bright wall or window is rejected on aspect |
+| anchor | `lcd.ts` `anchorRoi()` | ODO digit row inside the cluster: the **median of labelled rows** when available, the fleet's geometric prior otherwise |
+| segment | `segment.ts` `segmentDigits()` | Otsu, both polarities (unlit LCD = dark digits, backlit = bright digits), keeps the tall blobs (drops fuel bars/clock), splits blobs two digits share, 16×24 contrast-stretched patch each |
+| classify | `classify.ts` | nearest neighbour over stored templates per digit; accepts only when similarity ≥ 0.82 **and** the winner beats the runner-up by ≥ 0.03 |
+
+A doubtful photo returns `null`: a miss is fine, a confident wrong number is not.
+
+### Training (what "label real photos" means)
+
+`GET /api/cars/odometer/training/photos` → stored dashboard photos (cars.assign).
+`POST /api/cars/odometer/training/analyze` → the LCD row + the cut glyphs (PNG
+previews) for one photo. `POST /api/cars/odometer/training/label {km}` → stores one
+`odometer_digit_samples` row per glyph plus an `odometer_lcd_calibrations` row for
+the row position. Frontend: **Odometer Training** in the sidebar.
+
+Nothing is stored from an unlabelled photo, and a label whose digit count differs
+from the glyphs the reader cut is rejected with the count it saw (label a steadier
+photo instead).
+
+### Turning it on
+
+```
+odometer.ocr.enabled  = true
+odometer.ocr.provider = local      # no api_key needed
+odometer.ocr.mode     = shadow
+```
+
+`stats.ready` (≥ 60 glyphs, ≥ 3 per digit) is the point where a read is worth
+trusting; below that expect misses, not mistakes. Shadow mode is unchanged: only
+`odoReadKm` + the audit line are written, the driver's number is untouched.

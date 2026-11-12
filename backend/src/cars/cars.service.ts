@@ -1122,6 +1122,35 @@ export class CarsService {
     return { filePath, mime };
   }
 
+  /**
+   * The stored dashboard photo of one odometer stage, for the offline
+   * seven-segment reader and its labelling queue. Permission is the caller's
+   * business (the browser path below, `odometerPhoto()`, checks the request);
+   * this is the plain "where is the file" lookup.
+   */
+  async odometerPhotoFile(assignmentId: string, stage: string) {
+    const row = await this.prisma.carAssignment.findUnique({
+      where: { id: assignmentId },
+      select: {
+        startOdoPhoto: true,
+        endOdoPhoto: true,
+        startOdoKm: true,
+        endOdoKm: true,
+        vehicle: { select: { vehicleNo: true } },
+      },
+    });
+    if (!row) return null;
+    const name = stage === 'READY' ? row.startOdoPhoto : stage === 'BACK' ? row.endOdoPhoto : null;
+    if (!name || !CarsService.ODO_NAME.test(name)) return null;
+    const filePath = path.join(this.odoRoot, 'odometer', name);
+    if (!fs.existsSync(filePath)) return null;
+    return {
+      filePath,
+      vehicleNo: row.vehicle?.vehicleNo ?? null,
+      typedKm: (stage === 'READY' ? row.startOdoKm : row.endOdoKm) ?? null,
+    };
+  }
+
   /** Yangon calendar month → UTC window (the office books in Asia/Yangon). */
   private monthBounds(y: number, mo: number) {
     if (mo < 1 || mo > 12) throw new BadRequestException('month must look like 2026-11');

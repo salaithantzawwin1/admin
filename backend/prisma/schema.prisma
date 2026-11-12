@@ -2034,3 +2034,39 @@ model Payment {
   @@index([date])
   @@map("payments")
 }
+
+/// 🔢 Offline seven-segment reader (docs/ODOMETER_OCR_PLAN.md): one digit glyph
+/// cut out of a dashboard photo an administrator labelled. These rows ARE the
+/// classifier — no model file, no key, no internet.
+model OdometerDigitSample {
+  id        String   @id @default(uuid()) @db.Uuid
+  /// '0'..'9' as the photo shows it
+  digit     String
+  /// base64 of the normalised 16x24 greyscale patch (odometer-7seg/segment.ts)
+  patch     String
+  vehicleNo String?
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@index([digit])
+  @@map("odometer_digit_samples")
+}
+
+/// Where the ODO digit row sat inside the instrument cluster on one labelled
+/// photo, as a fraction of the cluster box. The median of these is the anchor
+/// the reader starts from on a new photo of the same dashboard.
+model OdometerLcdCalibration {
+  id           String   @id @default(uuid()) @db.Uuid
+  assignmentId String?  @db.Uuid
+  stage        String?
+  vehicleNo    String?
+  rx           Float
+  ry           Float
+  rw           Float
+  rh           Float
+  createdBy    String?
+  createdAt    DateTime @default(now())
+
+  @@index([assignmentId, stage])
+  @@map("odometer_lcd_calibrations")
+}

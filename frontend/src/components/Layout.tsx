@@ -28,6 +28,8 @@ const navGroups = [
       // Car Requests is the fleet dispatch desk — list/queue need cars.assign
       // (backend cars.controller.ts); creating one just needs requests.create.
       { to: '/car-requests', label: 'Car Requests', icon: '🚗', show: () => hasPermission('cars.assign') || hasPermission('requests.create') },
+      // labelling the offline odometer reader (same people who see the photos)
+      { to: '/odometer-training', label: 'Odometer Training', icon: '🔢', show: () => hasPermission('cars.assign') },
       { to: '/meeting-rooms', label: 'Meeting Rooms', icon: '🏢', show: () => hasPermission('requests.create') || hasPermission('meeting-rooms.assign') },
     ],
   },
