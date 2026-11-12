@@ -2060,6 +2060,9 @@ model OdometerLcdCalibration {
   assignmentId String?  @db.Uuid
   stage        String?
   vehicleNo    String?
+  /// coarse fingerprint of the dashboard this row was labelled on: a prior is
+  /// only valid for the cluster it came from
+  dashboardKey String?
   rx           Float
   ry           Float
   rw           Float
@@ -2068,5 +2071,6 @@ model OdometerLcdCalibration {
   createdAt    DateTime @default(now())
 
   @@index([assignmentId, stage])
+  @@index([dashboardKey])
   @@map("odometer_lcd_calibrations")
 }

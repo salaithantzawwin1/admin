@@ -29,7 +29,7 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 const { decodeImage, encodeGrayPng } = require('../src/cars/odometer-7seg/image');
-const { findDigitRow } = require('../src/cars/odometer-7seg/lcd');
+const { findDigitRow, dashboardKey, sameDashboard } = require('../src/cars/odometer-7seg/lcd');
 const { segmentDigits, patchOf, PATCH_W, PATCH_H, PATCH_BYTES } = require('../src/cars/odometer-7seg/segment');
 const { classifyPatch, decodeTemplates, similarity } = require('../src/cars/odometer-7seg/classify');
 const { OdometerSevenSegService } = require('../src/cars/odometer-7seg/seven-seg.service');
@@ -354,6 +354,68 @@ async function main() {
     } finally {
       fs.unlinkSync(file);
     }
+  });
+
+  await test('a prior finds a 12px ODO row instead of falling back to the frame', () => {
+    // the real photos carry the row at 12–19 px: one glyph is barely seven
+    // pixels wide, and a cold full-frame search never survives that
+    const { image, row } = dashboard('341363', 12);
+    const prior = { x: row.x - 4, y: row.y - 4, w: row.w + 8, h: row.h + 8 };
+    const found = findDigitRow(image, prior);
+    assert.ok(found, 'no row found with a prior on a 12px row');
+    assert.strictEqual(found.glyphs.length, 6, `expected 6 glyphs, got ${found.glyphs.length}`);
+    assert.ok(Math.abs(found.row.y - row.y) <= 6, `row y ${found.row.y} vs ${row.y}`);
+    assert.ok(Math.abs(found.row.x - row.x) <= 10, `row x ${found.row.x} vs ${row.x}`);
+  });
+
+  await test('a decoy row inside the window loses to the prior', () => {
+    // every one of these dashboards puts a six-glyph clock right above the ODO
+    // row; inside a padded window it is a perfectly good digit chain
+    const { image, row } = dashboard('341363', 38);
+    const glyphW = Math.round(52 * 0.55);
+    let x = row.x;
+    for (const d of '123456') {
+      drawDigit(image, d, x, row.y - 70, glyphW, 52, 240);
+      x += glyphW + 12;
+    }
+    const prior = { x: row.x - 6, y: row.y - 6, w: row.w + 12, h: row.h + 12 };
+    const found = findDigitRow(image, prior);
+    assert.ok(found, 'no row found');
+    const centre = found.row.y + found.row.h / 2;
+    assert.ok(
+      Math.abs(centre - (row.y + row.h / 2)) <= row.h * 1.2,
+      `picked the decoy: row centre ${Math.round(centre)} vs ODO ${Math.round(row.y + row.h / 2)}`,
+    );
+  });
+
+  await test('a prior that matches nothing returns null, never a cold search', () => {
+    const { image } = dashboard('341363', 38);
+    // a dark corner of the cabin: the ODO row exists elsewhere in the frame, and
+    // a full-frame search would happily return it — with a prior, silence is right
+    const found = findDigitRow(image, { x: 40, y: 40, w: 90, h: 26 });
+    assert.strictEqual(found, null, 'a prior with nothing under it fell back to the full frame');
+  });
+
+  await test('two dashboards get different keys, the same photo gets the same one', () => {
+    const a = dashboard('341363', 38).image;
+    const b = dashboard('341363', 38).image;
+    const moved = dashboard('341363', 38).image;
+    // the same cluster, photographed a little lower in the frame
+    const shifted = { w: moved.w, h: moved.h, data: new Uint8Array(moved.w * moved.h) };
+    for (let y = 0; y < moved.h; y++) {
+      for (let x = 0; x < moved.w; x++) {
+        const sy = Math.min(moved.h - 1, y + 40);
+        shifted.data[y * moved.w + x] = moved.data[sy * moved.w + x];
+      }
+    }
+    const keyA = dashboardKey(a);
+    assert.strictEqual(keyA, dashboardKey(b), 'the same photo did not produce the same key');
+    assert.ok(sameDashboard(keyA, dashboardKey(shifted)), 'the same cluster shifted in frame was not recognised');
+    // a different dashboard: the cluster is elsewhere and a different size
+    const other = blank(1280, 720, 22);
+    fillRect(other, 520, 240, 420, 260, 108);
+    fillRect(other, 640, 380, 220, 80, 34);
+    assert.strictEqual(sameDashboard(keyA, dashboardKey(other)), false, 'two dashboards shared a key');
   });
 
   await test('an unknown stage is rejected', async () => {

@@ -4,7 +4,7 @@ import { PrismaService } from '../../prisma/prisma.module';
 import { AuditService } from '../../audit/audit.service';
 import { CarsService } from '../cars.service';
 import { Box, Gray, crop, decodeImage, encodeGrayPng, expandBox } from './image';
-import { findDigitRow, medianPrior, priorBox } from './lcd';
+import { dashboardKey, findDigitRow, findDigitRowAmong, priorBox, sameDashboard } from './lcd';
 import { PATCH_H, PATCH_W, Segmented, digitBoxes, patchOf, segmentDigits } from './segment';
 import { Match, classifyPatch, decodeTemplates, Template } from './classify';
 
@@ -225,6 +225,8 @@ export class OdometerSevenSegService {
       vehicleNo: file.vehicleNo,
       createdBy,
       // where the ODO row sat in the frame — the detector's tie-breaker next time
+      // (keyed to this dashboard, so it is never used as another one's window)
+      dashboardKey: dashboardKey(image),
       rx: found.row.x / Math.max(1, image.w),
       ry: found.row.y / Math.max(1, image.h),
       rw: found.row.w / Math.max(1, image.w),
@@ -338,8 +340,16 @@ export class OdometerSevenSegService {
       // The screen sends frame fractions, the pipeline works in pixels.
       row = priorBox(marked, image);
     } else {
-      const prior = priorBox(medianPrior(await this.calibrations()), image);
-      const found = findDigitRow(image, prior);
+      // Only a prior labelled on THIS dashboard may steer the search: one cluster
+      // puts its ODO row where another puts the clock, so a borrowed window would
+      // point the detector at the wrong row. No match = a cold search, not a guess.
+      const key = dashboardKey(image);
+      const rows = await this.calibrations();
+      const priors = rows
+        .filter((r) => sameDashboard(r.dashboardKey, key))
+        .map((c) => priorBox({ x: c.rx, y: c.ry, w: c.rw, h: c.rh }, image))
+        .filter((b): b is Box => !!b);
+      const found = priors.length ? findDigitRowAmong(image, priors) : findDigitRow(image, null);
       if (!found) return null;
       row = found.row;
       label = found.label;
@@ -355,7 +365,12 @@ export class OdometerSevenSegService {
     // step compare that count with the typed number. Only the detector's own
     // guess has to look like a real odometer row.
     const minGlyphs = marked ? 1 : 5;
-    if (segmented.digits.length < minGlyphs || segmented.digits.length > 8) {
+    // The detector's grid already decided how many digits the row has. Re-cutting
+    // the row by connected components on a 12–20 px glyph can split a "1" into two
+    // and produce a shorter, wrong number — so a count that disagrees is dropped
+    // in favour of the detector's own boxes.
+    const countDisagrees = !marked && glyphs.length >= 5 && segmented.digits.length !== glyphs.length;
+    if (countDisagrees || segmented.digits.length < minGlyphs || segmented.digits.length > 8) {
       if (!glyphs.length) return null;
       const digits = glyphs.map((b) => ({
         box: { x: b.x - roiBox.x, y: b.y - roiBox.y, w: b.w, h: b.h },
@@ -402,8 +417,15 @@ export class OdometerSevenSegService {
 
   private async calibrations() {
     return this.prisma.odometerLcdCalibration
-      .findMany({ select: { rx: true, ry: true, rw: true, rh: true }, orderBy: { createdAt: 'desc' }, take: MAX_CALIBRATIONS })
-      .catch(() => [] as Array<{ rx: number; ry: number; rw: number; rh: number }>);
+      .findMany({
+        select: { dashboardKey: true, rx: true, ry: true, rw: true, rh: true },
+        orderBy: { createdAt: 'desc' },
+        take: MAX_CALIBRATIONS,
+      })
+      .catch(
+        () =>
+          [] as Array<{ dashboardKey: string | null; rx: number; ry: number; rw: number; rh: number }>,
+      );
   }
 
   private patchPng(patch: Uint8Array): string {
