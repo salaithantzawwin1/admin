@@ -303,6 +303,100 @@ async function main() {
     assert.strictEqual(wrote, false, 'nothing is written when the driver is busy');
   });
 
+  // Odometer readings belong to ONE car: swapping car/driver must drop the OCR
+  // shadow reading of the old one too, or the next typed kilo is compared against
+  // a different dashboard and odoCheckedAt claims the row was verified.
+  await test('assign(): the replaced car\'s OCR shadow reading is cleared with its kilos', async () => {
+    const captured: any[] = [];
+    const tx = {
+      carAssignment: { upsert: async (a: any) => { captured.push(a); return { id: 'a1' }; }, findMany: async () => [] },
+      carRequest: { update: async () => {}, findMany: async () => [] },
+      requestDocument: { update: async () => {} },
+      vehicle: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prismaOcr: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'CAR-OCR-1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
+          carRequest: {
+            id: 'cr1', requestId: 'r1', sharedTripId: null, assignment: null,
+            startDate: new Date('2026-11-20T02:30:00Z'), endDate: new Date('2026-11-20T10:30:00Z'),
+          },
+        }),
+      },
+      vehicle: { findUnique: async () => ({ id: 'v1', vehicleNo: '2P2942', brandModel: 'Starex', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      driverAbsence: { findFirst: async () => null },
+      driver: { findUnique: async () => ({ name: 'Kyaw Thiha Maw' }), update: async () => {} },
+      carRequest: { findFirst: async () => null },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const svcOcr: any = new CarsService(
+      prismaOcr, { usersWithPermissions: async () => [] } as any, {} as any,
+      { notify: async () => {}, notifyMany: async () => {} } as any,
+      { log: async () => {} } as any,
+      { sendAssignment: async () => {}, repaintDriverCards: async () => {}, forgetOdometer: () => {} } as any,
+      {} as any, { publish: () => undefined } as any,
+    );
+    await svcOcr.assign('r1', { vehicleId: 'v1', driverId: 'd1' }, { userId: 'u9', username: 'admin' });
+    const data = captured[0].update;
+    for (const field of ['startOdoKm', 'startOdoPhoto', 'endOdoKm', 'endOdoPhoto', 'odoReadKm', 'odoReadAt', 'odoReadSource', 'odoReadConfidence', 'odoCheckedAt']) {
+      assert.strictEqual(data[field], null, `${field} must be cleared — the new car has its own dashboard`);
+    }
+  });
+
+  await test('reassign(): the previous car\'s OCR shadow reading does not survive the swap', async () => {
+    const captured: any[] = [];
+    const row: any = {
+      id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1', releasedAt: null, trip: null,
+      driverNotedAt: null, driverArrivedAt: null, driverBackAtOfficeAt: null,
+      estimatedReturnAt: null, telegramMessageId: null,
+      vehicle: { vehicleNo: '2P2942', brandModel: 'Probox' }, driver: { name: 'Old Driver' },
+    };
+    const tx = {
+      carAssignment: { update: async (a: any) => { captured.push(a); return row; }, findMany: async () => [] },
+      carRequest: { update: async () => {}, findMany: async () => [], count: async () => 0 },
+      vehicle: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prismaReOcr: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'CAR-OCR-2', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requesterId: 'u1',
+          carRequest: {
+            id: 'cr1', requestId: 'r1', sharedTripId: null,
+            startDate: new Date('2026-11-20T02:30:00Z'), endDate: new Date('2026-11-20T10:30:00Z'),
+            vehicle: { vehicleNo: '2P2942', brandModel: 'Probox' },
+            assignment: row,
+          },
+        }),
+      },
+      vehicle: { findUnique: async () => ({ id: 'v2', vehicleNo: '6P5997', brandModel: 'Starex', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      driverAbsence: { findFirst: async () => null },
+      driver: { findUnique: async () => ({ name: 'New Driver', employee: null }), update: async () => {} },
+      carRequest: { findFirst: async () => null },
+      carAssignment: { findUnique: async () => row },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const svcReOcr: any = new CarsService(
+      prismaReOcr, { usersWithPermissions: async () => [] } as any, {} as any,
+      { notify: async () => {}, notifyMany: async () => {} } as any,
+      { log: async () => {} } as any,
+      {
+        sendAssignment: async () => {}, repaintDriverCards: async () => {},
+        notifyDriverOfReassign: async () => {}, forgetOdometer: () => {}, mirrorToUser: async () => ({}),
+      } as any,
+      {} as any, { publish: () => undefined } as any,
+    );
+    await svcReOcr.reassign('r1', { vehicleId: 'v2', driverId: 'd2' }, { userId: 'u9', username: 'admin' });
+    const data = captured[0].data;
+    for (const field of ['odoReadKm', 'odoReadAt', 'odoReadSource', 'odoReadConfidence', 'odoCheckedAt', 'startOdoKm', 'endOdoKm']) {
+      assert.strictEqual(data[field], null, `${field} must be cleared — the reading belongs to the car just swapped out`);
+    }
+  });
+
   await test('startTrip(): a driver still out on an unfinished trip cannot be dispatched twice', async () => {
     // Trip 1 (09:00 → 12:00) is STARTED and never closed with Back at Office;
     // Trip 2 (13:30 → 15:00) is due. Planned windows do not overlap, yet the

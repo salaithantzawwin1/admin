@@ -1227,7 +1227,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (km != null) data.pendingOdoKm = km;
     else if (!photo) data.pendingOdoKm = null;
     void Promise.resolve()
-      .then(() => this.prisma.carAssignment.update({ where: { id: assignmentId }, data }))
+      .then(async () => {
+        // A fresh capture orphans the file the previous stage left behind: the row
+        // stops naming it and storePendingPhoto() only unlinks a file the column
+        // still points at — so read the old name FIRST, then drop the file. This is
+        // the "Ready photo sent, driver taps Back at office before typing the kilo"
+        // path, which used to leave one JPEG per tap on the volume for ever.
+        const old = !photo
+          ? ((await this.prisma.carAssignment
+              .findUnique({ where: { id: assignmentId }, select: { pendingOdoPhoto: true } })
+              .catch(() => null))?.pendingOdoPhoto ?? null)
+          : null;
+        await this.prisma.carAssignment.update({ where: { id: assignmentId }, data });
+        if (old && /^[0-9a-f-]{36}\.jpe?g$/i.test(old)) {
+          try {
+            fs.unlinkSync(path.join(this.pendingOdoDir(), old));
+          } catch {
+            /* already gone — nothing to reclaim */
+          }
+        }
+      })
       .catch(() => undefined);
     setTimeout(() => {
       const p = this.pendingOdo.get(chatId);

@@ -319,7 +319,7 @@ async function main() {
     );
   });
 
-  function returnedAfterRelease(over: { status?: string; docStatus?: string; taps?: any } = {}) {
+  function returnedAfterRelease(over: { status?: string; docStatus?: string; taps?: any; endDate?: Date | null } = {}) {
     const writes: any[] = [];
     const taps = over.taps ?? { releasedAt: new Date('2026-11-02T04:00:00Z'), driverBackAtOfficeAt: new Date('2026-11-02T04:10:00Z') };
     const tx: any = {
@@ -328,6 +328,8 @@ async function main() {
           status: over.status ?? 'APPROVED',
           docNumber: 'CAR-202611-0005',
           requesterId: 'u-req',
+          // the booking window: null = no schedule on record (old behaviour)
+          carRequest: { endDate: over.endDate ?? null },
           carAssignment: { vehicleId: 'v1', driverId: 'd1', trip: null, ...taps },
         }),
         update: async (a: any) => writes.push({ __w: 'requestDocument', ...a }),
@@ -354,6 +356,54 @@ async function main() {
     assert.strictEqual(cr?.data.status, 'COMPLETED');
     assert.strictEqual(cr?.data.vehicleId, 'v1', 'the closed request keeps the car it actually used');
     assert.strictEqual(cr?.data.driverId, 'd1', 'the closed request keeps the driver it actually used');
+  });
+
+  await test('a stale Back tap cannot close a released booking that has not started yet', async () => {
+    // Administration released an UPCOMING booking (car back in the pool, request
+    // APPROVED, waiting for a new car). The tap on the driver's old card used to
+    // close a ride that never happened — the request became COMPLETED and could
+    // never be re-assigned. Only a window that is really over may close itself.
+    const { svc, writes } = returnedAfterRelease({ endDate: new Date(Date.now() + 6 * 864e5) });
+    await svc.completeAfterReturn('r1');
+    assert.ok(!writes.some((w) => w.__w === 'requestDocument'), 'the booking must stay APPROVED for a new car');
+    assert.ok(!writes.some((w) => w.__w === 'carRequest'), 'nothing is completed');
+    assert.ok(!writes.some((w) => w.__w === 'notification'), 'the requester is not told a ride happened');
+  });
+
+  await test('a fresh odometer capture reclaims the pending photo of the stage it replaced', async () => {
+    // Driver sends the Ready dashboard photo, never types the kilo, then taps Back
+    // at office: the capture is re-armed and the old file used to stay on the
+    // volume for ever (the row stops naming it, storePendingPhoto only unlinks a
+    // file the column still points at).
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ams-odo-'));
+    const pendingDir = path.join(dir, 'odometer', 'pending');
+    fs.mkdirSync(pendingDir, { recursive: true });
+    const oldName = '11111111-1111-1111-1111-111111111111.jpg';
+    fs.writeFileSync(path.join(pendingDir, oldName), 'jpeg-bytes');
+    const prev = process.env.UPLOAD_PATH;
+    process.env.UPLOAD_PATH = dir;
+    try {
+      const writes: any[] = [];
+      const prisma: any = {
+        carAssignment: {
+          findUnique: async () => ({ pendingOdoPhoto: oldName }),
+          update: async (a: any) => { writes.push(a.data); },
+        },
+      };
+      const svc: any = new TelegramService(prisma, { log: async () => {} }, {}, { publish: () => 0 });
+      svc.armOdo('chat-1', 'a1', 'BACK'); // the unanswered READY capture is replaced
+      await new Promise((r) => setTimeout(r, 30));
+      assert.strictEqual(fs.existsSync(path.join(pendingDir, oldName)), false, 'the orphaned photo must be reclaimed');
+      assert.strictEqual(writes[0].pendingOdoStage, 'BACK', 'the row arms the new stage');
+      assert.strictEqual(writes[0].pendingOdoPhoto, null, 'the old photo is no longer referenced');
+    } finally {
+      if (prev === undefined) delete process.env.UPLOAD_PATH;
+      else process.env.UPLOAD_PATH = prev;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   await test('Back at Office does not re-open a request that was cancelled meanwhile', async () => {
