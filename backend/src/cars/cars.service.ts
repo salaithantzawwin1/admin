@@ -846,6 +846,14 @@ export class CarsService {
           endOdoPhoto: null,
           endOdoAt: null,
           odoNudgeAt: null,
+          // ...and the OCR shadow reading belonged to that car's dashboard too:
+          // kept, the next typed kilo was compared against the OLD photo (a false
+          // "matched" audit line) and odoCheckedAt claimed this row was verified
+          odoReadKm: null,
+          odoReadAt: null,
+          odoReadSource: null,
+          odoReadConfidence: null,
+          odoCheckedAt: null,
         },
       });
       await tx.carRequest.update({
@@ -1740,6 +1748,14 @@ export class CarsService {
           endOdoPhoto: null,
           endOdoAt: null,
           odoNudgeAt: null,
+          // ...and the OCR shadow reading belonged to that car's dashboard too:
+          // kept, the next typed kilo was compared against the OLD photo (a false
+          // "matched" audit line) and odoCheckedAt claimed this row was verified
+          odoReadKm: null,
+          odoReadAt: null,
+          odoReadSource: null,
+          odoReadConfidence: null,
+          odoCheckedAt: null,
         },
       });
       await tx.carRequest.update({

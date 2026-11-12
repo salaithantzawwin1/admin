@@ -1713,13 +1713,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (!requestId) return;
     try {
       const done = await this.prisma.$transaction(async (tx: {
-        requestDocument: { findUnique: (a: unknown) => Promise<{ status: string; docNumber: string; requesterId: string; carAssignment?: { releasedAt?: Date | null; driverBackAtOfficeAt?: Date | null; vehicleId?: string | null; driverId?: string | null; trip?: { status: string } | null } | null } | null>; update: (a: unknown) => Promise<unknown> };
+        requestDocument: { findUnique: (a: unknown) => Promise<{ status: string; docNumber: string; requesterId: string; carRequest?: { endDate?: Date | null } | null; carAssignment?: { releasedAt?: Date | null; driverBackAtOfficeAt?: Date | null; vehicleId?: string | null; driverId?: string | null; trip?: { status: string } | null } | null } | null>; update: (a: unknown) => Promise<unknown> };
         carRequest: { update: (a: unknown) => Promise<unknown> };
       }) => {
         const r = await tx.requestDocument.findUnique({
           where: { id: requestId },
           select: {
             status: true, docNumber: true, requesterId: true,
+            carRequest: { select: { endDate: true } },
             carAssignment: {
               select: { releasedAt: true, driverBackAtOfficeAt: true, vehicleId: true, driverId: true, trip: { select: { status: true } } },
             },
@@ -1733,7 +1734,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         // APPROVED with every ack stamped (CAR-202611-0005 on 2026-11-02 —
         // vehicle 10:30 release, "back at office" 10:40). Accept the driver's
         // own return as proof, whatever the row status became meanwhile.
-        const releasedButReturned = r.status === 'APPROVED' && r.carAssignment?.driverBackAtOfficeAt != null;
+        // ...but only once that window really is over. An ADMIN release hands an
+        // upcoming booking back to the assign queue: a tap from the driver's old
+        // card (the car is already gone) closed a ride that has not happened yet
+        // and left the request COMPLETED, so it could never be re-assigned.
+        const windowEnded = !r.carRequest?.endDate || r.carRequest.endDate.getTime() <= Date.now();
+        const releasedButReturned =
+          r.status === 'APPROVED' && r.carAssignment?.driverBackAtOfficeAt != null && windowEnded;
         if (r.status !== 'IN_PROGRESS' && !releasedButReturned) return null;
         if (r.carAssignment?.trip?.status === 'STARTED') return null; // mileage open — Admin completes via the trip form
         await tx.carRequest.update({
