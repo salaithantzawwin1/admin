@@ -3,9 +3,9 @@ import * as fs from 'fs';
 import { PrismaService } from '../../prisma/prisma.module';
 import { AuditService } from '../../audit/audit.service';
 import { CarsService } from '../cars.service';
-import { Box, Gray, crop, decodeImage, encodeGrayPng } from './image';
-import { anchorRoi, findCluster, medianCalibration } from './lcd';
-import { PATCH_H, PATCH_W, Segmented, digitBoxes, segmentDigits } from './segment';
+import { Box, Gray, crop, decodeImage, encodeGrayPng, expandBox } from './image';
+import { findDigitRow, medianPrior, priorBox } from './lcd';
+import { PATCH_H, PATCH_W, Segmented, digitBoxes, patchOf, segmentDigits } from './segment';
 import { Match, classifyPatch, decodeTemplates, Template } from './classify';
 
 /**
@@ -32,8 +32,10 @@ export interface SevenSegRead {
   confidence: 'high' | 'low';
   digits: string;
   minScore: number;
+  /** the ODO row in photo coordinates */
+  row: Box;
+  /** the region the glyphs were cut from */
   roi: Box;
-  cluster: Box;
 }
 
 export interface AnalyzedDigit {
@@ -48,7 +50,8 @@ export interface SevenSegAnalysis {
   assignmentId: string;
   stage: string;
   photoUrl: string;
-  cluster: Box;
+  row: Box;
+  label: Box | null;
   roi: Box;
   polarity: string;
   roiPreview: string;
@@ -85,7 +88,7 @@ export class OdometerSevenSegService {
   // reading (the OCR provider = 'local' path)
 
   /**
-   * Read the ODO digits. null = could not decode, no cluster, the wrong number
+   * Read the ODO digits. null = could not decode, no row found, the wrong number
    * of glyphs, no templates learned yet, or any digit short of confident.
    */
   async read(buffer: Buffer): Promise<SevenSegRead | null> {
@@ -111,13 +114,13 @@ export class OdometerSevenSegService {
       const minScore = Math.min(...matches.map((m) => m.score));
       return {
         km,
-        // below ~0.90 the right digits by a small margin — still worth keeping,
+        // below ~0.9 the right digits by a thinner margin — still worth keeping,
         // but the mismatch card should say "not sure" rather than "wrong"
         confidence: minScore >= 0.9 ? 'high' : 'low',
         digits,
         minScore: Math.round(minScore * 1000) / 1000,
+        row: found.row,
         roi: found.roiBox,
-        cluster: found.cluster,
       };
     } catch (e) {
       this.logger.warn(`seven-segment read failed: ${(e as Error).message}`);
@@ -128,14 +131,18 @@ export class OdometerSevenSegService {
   // ------------------------------------------------------------------
   // labelling (what makes the classifier above possible)
 
-  /** Show a stored photo the way the reader sees it: LCD row + cut digits. */
-  async analyze(input: { assignmentId: string; stage: string }): Promise<SevenSegAnalysis> {
+  /**
+   * Show a stored photo the way the reader sees it: ODO row + cut digits.
+   * `box` (frame fractions) is the row a human marked — the cold-start path,
+   * used when the detector has no prior yet for this dashboard.
+   */
+  async analyze(input: { assignmentId: string; stage: string; box?: Box | null }): Promise<SevenSegAnalysis> {
     const stage = this.stage(input.stage);
     const image = await this.loadImage(input.assignmentId, stage);
-    const found = await this.inspect(image, 6);
-    if (!found) throw new BadRequestException('No instrument cluster found in that photo');
+    const found = await this.inspect(image, 6, input.box ?? null);
+    if (!found) throw new BadRequestException('No ODO digit row found in that photo');
     if (!found.segmented.digits.length) {
-      throw new BadRequestException('No seven-segment digits found in the LCD region of that photo');
+      throw new BadRequestException('The ODO row was found but no seven-segment digits could be cut from it');
     }
 
     const templates = await this.templates();
@@ -158,7 +165,8 @@ export class OdometerSevenSegService {
       assignmentId: input.assignmentId,
       stage,
       photoUrl: `/api/cars/assignments/${input.assignmentId}/odometer/${stage}/photo`,
-      cluster: found.cluster,
+      row: found.row,
+      label: found.label,
       roi: found.roiBox,
       polarity: found.segmented.polarity,
       roiPreview: `data:image/png;base64,${encodeGrayPng(roiView, this.viewScale(roiView, 520))}`,
@@ -170,13 +178,14 @@ export class OdometerSevenSegService {
 
   /**
    * Label one stored photo with the reading it really shows. The glyphs become
-   * classifier templates and the row position becomes a calibration sample: this
-   * single call is both halves of "training".
+   * classifier templates and the row position becomes a prior for the detector:
+   * this single call is both halves of "training".
    */
   async label(input: {
     assignmentId: string;
     stage: string;
     km: number;
+    box?: Box | null;
     actor?: { username?: string };
   }): Promise<{ stored: number; km: number; stats: TrainingStats }> {
     const stage = this.stage(input.stage);
@@ -191,8 +200,9 @@ export class OdometerSevenSegService {
     const image = decodeImage(fs.readFileSync(file.filePath));
     if (!image) throw new BadRequestException('That photo could not be decoded — the reader handles JPEG and PNG only');
 
-    const found = await this.inspect(image, expected);
-    if (!found) throw new BadRequestException('No instrument cluster found in that photo');
+    // expect 0: cut what the photo really has — never force the typed digit count
+    const found = await this.inspect(image, 0, input.box ?? null);
+    if (!found) throw new BadRequestException('No ODO digit row found in that photo');
     const shown = found.segmented.digits.length;
     if (shown !== expected) {
       throw new BadRequestException(
@@ -209,16 +219,16 @@ export class OdometerSevenSegService {
       vehicleNo: file.vehicleNo,
       createdBy,
     }));
-    const cluster = found.cluster;
     const calibration = {
       assignmentId: input.assignmentId,
       stage,
       vehicleNo: file.vehicleNo,
       createdBy,
-      rx: (found.roiBox.x - cluster.x) / Math.max(1, cluster.w),
-      ry: (found.roiBox.y - cluster.y) / Math.max(1, cluster.h),
-      rw: found.roiBox.w / Math.max(1, cluster.w),
-      rh: found.roiBox.h / Math.max(1, cluster.h),
+      // where the ODO row sat in the frame — the detector's tie-breaker next time
+      rx: found.row.x / Math.max(1, image.w),
+      ry: found.row.y / Math.max(1, image.h),
+      rw: found.row.w / Math.max(1, image.w),
+      rh: found.row.h / Math.max(1, image.h),
     };
 
     await this.prisma.$transaction([
@@ -309,14 +319,53 @@ export class OdometerSevenSegService {
 
   // ------------------------------------------------------------------
 
-  /** Find the cluster, the ODO row inside it and the digits in that row. */
-  private async inspect(image: Gray, expected: number): Promise<{ cluster: Box; roiBox: Box; segmented: Segmented } | null> {
-    const cluster = findCluster(image);
-    if (!cluster) return null;
-    const calibration = medianCalibration(await this.calibrations());
-    const roiBox = anchorRoi(cluster, calibration);
-    const segmented = segmentDigits(crop(image, roiBox), expected);
-    return { cluster, roiBox, segmented };
+  /**
+   * Find the ODO row, then cut it into glyphs. The detector's boxes are the
+   * fallback when the full-resolution re-cut disagrees with it.
+   */
+  private async inspect(
+    image: Gray,
+    expected: number,
+    marked?: Box | null,
+  ): Promise<{ row: Box; label: Box | null; roiBox: Box; segmented: Segmented } | null> {
+    let row: Box | null = null;
+    let label: Box | null = null;
+    let polarity: 'light' | 'dark' = 'light';
+    let glyphs: Box[] = [];
+
+    if (marked) {
+      // the human marked the row on the labelling screen: that beats any search
+      row = marked;
+    } else {
+      const prior = priorBox(medianPrior(await this.calibrations()), image);
+      const found = findDigitRow(image, prior);
+      if (!found) return null;
+      row = found.row;
+      label = found.label;
+      polarity = found.polarity;
+      glyphs = found.glyphs;
+    }
+
+    // a little margin so a digit whose bars touch the edge is not clipped
+    const roiBox = expandBox(row, 0.15, image.w, image.h);
+    let segmented = segmentDigits(crop(image, roiBox), expected);
+    if (segmented.digits.length < 5 || segmented.digits.length > 8) {
+      if (!glyphs.length) return null;
+      const digits = glyphs.map((b) => ({
+        box: { x: b.x - roiBox.x, y: b.y - roiBox.y, w: b.w, h: b.h },
+        patch: patchOf(image, b),
+      }));
+      segmented = { polarity, digits, rowBox: { x: 0, y: 0, w: roiBox.w, h: roiBox.h } };
+    }
+
+    // the row we actually cut — a marked box can be looser than the digits
+    const cut: Box = {
+      x: roiBox.x + segmented.rowBox.x,
+      y: roiBox.y + segmented.rowBox.y,
+      w: segmented.rowBox.w,
+      h: segmented.rowBox.h,
+    };
+    return { row: cut, label, roiBox, segmented };
   }
 
   private stage(raw: string): 'READY' | 'BACK' {

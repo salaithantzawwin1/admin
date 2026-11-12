@@ -191,11 +191,13 @@ Verdict on "PaddleOCR first, Tesseract as backup": not achievable on this host
 Tesseract would carry the same seven-segment gap on top of the missing binary.
 ---
 
+---
+
 ## 6. Offline seven-segment reader (implemented, 2026-11-12)
 
 **No key, no internet.** `provider=local` uses `backend/src/cars/odometer-7seg/`
 and a classifier made of digit glyphs cut from photos an administrator labelled.
-Why not Tesseract/PaddleOCR: section 5 — both are install-blocked on this host and
+Why not Tesseract/PaddleOCR: see above — both are install-blocked on this host and
 both read these seven-segment panels badly (PP-OCR reported `52E16E000` for a
 clean `341325`).
 
@@ -204,24 +206,33 @@ clean `341325`).
 | Stage | File | What it does |
 |---|---|---|
 | decode | `image.ts` | JPEG/PNG → greyscale (WebP stays unreadable, by design) |
-| cluster | `lcd.ts` `findCluster()` | biggest bright blob in the frame = the instrument cluster; a bright wall or window is rejected on aspect |
-| anchor | `lcd.ts` `anchorRoi()` | ODO digit row inside the cluster: the **median of labelled rows** when available, the fleet's geometric prior otherwise |
-| segment | `segment.ts` `segmentDigits()` | Otsu, both polarities (unlit LCD = dark digits, backlit = bright digits), keeps the tall blobs (drops fuel bars/clock), splits blobs two digits share, 16×24 contrast-stretched patch each |
-| classify | `classify.ts` | nearest neighbour over stored templates per digit; accepts only when similarity ≥ 0.82 **and** the winner beats the runner-up by ≥ 0.03 |
+| find the row | `lcd.ts` `findDigitRow()` | 5–8 glyph-shaped, equally tall blobs on one baseline with even gaps = an ODO row. With a labelled prior only a window around it is searched; without one the whole frame is. The short blob left of the chain is the "ODO" label. |
+| segment | `segment.ts` `segmentDigits()` | upscales a small LCD region (the digits are ~12 px tall in a 1280×720 photo), Otsu in both polarities (unlit = dark digits, backlit = bright), a morphological close so the bars of one digit join, then split-merged into one box per digit → a 16×24 contrast-stretched patch each |
+| classify | `classify.ts` | nearest neighbour over the stored templates: Pearson correlation on the mean-removed patch; accepted only at ≥ 0.80 similarity **and** a ≥ 0.04 lead over the runner-up |
 
 A doubtful photo returns `null`: a miss is fine, a confident wrong number is not.
 
-### Training (what "label real photos" means)
+### Cold start — the mark
+
+A phone photo of a dashboard has glare, a clock, a fuel gauge and a speedometer
+full of tick marks, and the digits are 12 px. The first photo of a dashboard is
+therefore **marked by a human**: on the training screen you drag a box around the
+ODO digits, and the reader cuts the glyphs inside it. That box is stored as a
+prior (frame fractions), so the next photo of the same dashboard is found by
+searching a window around it.
+
+### Training
 
 `GET /api/cars/odometer/training/photos` → stored dashboard photos (cars.assign).
-`POST /api/cars/odometer/training/analyze` → the LCD row + the cut glyphs (PNG
-previews) for one photo. `POST /api/cars/odometer/training/label {km}` → stores one
-`odometer_digit_samples` row per glyph plus an `odometer_lcd_calibrations` row for
-the row position. Frontend: **Odometer Training** in the sidebar.
+`POST /api/cars/odometer/training/analyze` → the row + the cut glyphs (PNG
+previews) for one photo, optionally inside a marked box.
+`POST /api/cars/odometer/training/label {km, box?}` → one `odometer_digit_samples`
+row per glyph plus an `odometer_lcd_calibrations` row. Frontend: **Odometer
+Training** in the sidebar.
 
-Nothing is stored from an unlabelled photo, and a label whose digit count differs
-from the glyphs the reader cut is rejected with the count it saw (label a steadier
-photo instead).
+Nothing is stored from an unlabelled photo. A label whose digit count differs from
+the glyphs the reader cut is rejected with the count it saw — the count is never
+forced to fit the typed number.
 
 ### Turning it on
 
@@ -234,3 +245,17 @@ odometer.ocr.mode     = shadow
 `stats.ready` (≥ 60 glyphs, ≥ 3 per digit) is the point where a read is worth
 trusting; below that expect misses, not mistakes. Shadow mode is unchanged: only
 `odoReadKm` + the audit line are written, the driver's number is untouched.
+
+### What is verified, and what is not
+
+- `backend/test/odometer-7seg.test.ts` (14 checks): cluster-free row detection in
+  a synthetic dashboard, one glyph per digit, recognition across a 30–44 px size
+  change, refusal with no templates / no confident digit / wrong glyph count,
+  label→read round trip, stored-template validation.
+- On the six real photos in `uploads/odometer`, marking the ODO row by hand cuts
+  legible glyphs (`3`, `4`, `1`, `3` read back from a 12 px-high row) and gives 5–6
+  glyphs depending on how tight the mark is.
+- **Not** verified: a first-time full-frame detection on a real dashboard (it
+  still finds tick marks on some of them — that is why the mark exists), and any
+  read at all before photos are labelled. Expect to label one photo per dashboard
+  model (Succeed, Starex, Probox, Minicab) before `provider=local` is useful.

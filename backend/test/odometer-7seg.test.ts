@@ -29,7 +29,7 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 const { decodeImage, encodeGrayPng } = require('../src/cars/odometer-7seg/image');
-const { findCluster, anchorRoi } = require('../src/cars/odometer-7seg/lcd');
+const { findDigitRow } = require('../src/cars/odometer-7seg/lcd');
 const { segmentDigits, patchOf, PATCH_W, PATCH_H, PATCH_BYTES } = require('../src/cars/odometer-7seg/segment');
 const { classifyPatch, decodeTemplates, similarity } = require('../src/cars/odometer-7seg/classify');
 const { OdometerSevenSegService } = require('../src/cars/odometer-7seg/seven-seg.service');
@@ -176,14 +176,16 @@ async function main() {
     assert.strictEqual(decodeImage(Buffer.alloc(0)), null);
   });
 
-  await test('the instrument cluster is found inside a dark frame', () => {
-    const { image, cluster } = dashboard('341363');
-    const box = findCluster(image);
-    assert.ok(box, 'no cluster found');
-    const cx = cluster.x + cluster.w / 2;
-    const cy = cluster.y + cluster.h / 2;
-    assert.ok(box.x <= cx && box.x + box.w >= cx && box.y <= cy && box.y + box.h >= cy, 'cluster box misses the centre');
-    assert.ok(box.w > image.w * 0.5, `cluster too narrow: ${box.w}`);
+  await test('the ODO row is found in a dark frame, with its label beside it', () => {
+    const { image, row } = dashboard('341363');
+    const found = findDigitRow(image);
+    assert.ok(found, 'no row found');
+    assert.strictEqual(found.glyphs.length, 6, `expected 6 glyphs, got ${found.glyphs.length}`);
+    assert.ok(found.label, 'the ODO label left of the row was not seen');
+    // the row must cover the digits the fixture drew
+    assert.ok(found.row.x <= row.x + 4, `row starts too far right: ${found.row.x} vs ${row.x}`);
+    assert.ok(found.row.x + found.row.w >= row.x + row.w - 6, 'row ends before the last digit');
+    assert.ok(Math.abs(found.row.h - row.h) <= row.h * 0.35, `row height ${found.row.h} vs glyph ${row.h}`);
   });
 
   await test('the LCD row is cut into one glyph per digit', () => {
@@ -290,7 +292,7 @@ async function main() {
       for (const key of ['rx', 'ry', 'rw', 'rh']) {
         assert.ok(calibration.data[key] >= 0 && calibration.data[key] <= 1, `calibration ${key} out of 0..1`);
       }
-      assert.ok(calibration.data.rw > 0.1 && calibration.data.rh > 0.1, 'calibration row is too small');
+      assert.ok(calibration.data.rw > 0.02 && calibration.data.rh > 0.02, 'calibration row is too small');
       assert.ok(Math.abs(calibration.data.rh - row.h / cluster.h) < 0.2, 'calibration height is off');
       assert.strictEqual(audits.length, 1);
       assert.strictEqual(audits[0].action, 'CAR_ODOMETER_DIGIT_LABELLED');

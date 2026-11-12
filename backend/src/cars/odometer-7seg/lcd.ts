@@ -1,48 +1,50 @@
-import { Box, Gray, clampBox, downscale, expandBox, meanBrightness, otsu } from './image';
+import { Box, Gray, clampBox, crop, downscale, otsu } from './image';
 
 /**
- * Where the ODO digit row sits on a dashboard photo.
+ * Finding the ODO row on a dashboard photo.
  *
- * Two steps, both cheap and both explainable:
+ * Two facts drive the design:
  *
- *  1. the instrument cluster — the one big bright blob in the frame (a dashboard
- *     at night/day is dark around it, and every car in the fleet has one),
- *  2. the digit row inside it — anchored on the ODO label position LEARNED FROM
- *     LABELLED PHOTOS. A seven-segment LCD has no printed "ODO" glyph we could
- *     detect with a threshold, so the label is located once by a human (that is
- *     what `POST /cars/odometer/training/label` does) and the usual offset from
- *     the cluster is reused afterwards.
+ *  1. A seven-segment row has a signature nothing else on a dashboard repeats:
+ *     five to seven compact, equally tall glyphs on one baseline with even gaps,
+ *     inside a dark LCD panel, with a short "ODO" label just to their left.
+ *  2. A phone photo of a dashboard is hard: glare, blur, the speedometer's tick
+ *     marks, the clock, the TRIP row. A pure bottom-up search over the whole
+ *     frame finds tick marks as often as digits.
  *
- * With no calibration yet the pipeline falls back to the geometric prior of the
- * fleet's dashboards (row just under the needle hub, centred) — wide enough that
- * the segmenter usually still finds the digits, and the reader refuses to report
- * anything it is not sure about, so a bad guess costs a miss, never a wrong number.
+ * So the first photo of a dashboard is marked by a human (the labelling screen
+ * sends the box; see `analyze`/`label`), and that box is stored as a prior. From
+ * then on the detector only has to search a window around the prior — which is
+ * cheap and reliable — and a confident full-frame search is still used when no
+ * prior exists yet.
  */
 
-export interface Calibration {
-  /** digit-row rectangle, expressed as a fraction of the cluster box */
-  rx: number;
-  ry: number;
-  rw: number;
-  rh: number;
+export interface DigitRow {
+  /** the digits, in photo coordinates */
+  row: Box;
+  /** the "ODO" label to the left of the row, when one was seen */
+  label: Box | null;
+  glyphs: Box[];
+  polarity: 'light' | 'dark';
+  score: number;
 }
 
-/** The instrument cluster: largest bright blob, in full-resolution coordinates. */
-export function findCluster(g: Gray): Box | null {
-  const small = downscale(g, 192);
-  const threshold = Math.max(otsu(small), meanBrightness(small) + 8);
-  const mask = new Uint8Array(small.w * small.h);
-  for (let i = 0; i < mask.length; i++) mask[i] = small.data[i] > threshold ? 1 : 0;
+interface Comp {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  area: number;
+}
 
-  const minArea = Math.round(small.w * small.h * 0.005);
+function components(mask: Uint8Array, w: number, h: number, minArea: number): Comp[] {
   const seen = new Uint8Array(mask.length);
+  const out: Comp[] = [];
   const stack: number[] = [];
-  let best: { x0: number; y0: number; x1: number; y1: number; area: number } | null = null;
-
   for (let start = 0; start < mask.length; start++) {
     if (!mask[start] || seen[start]) continue;
-    let x0 = small.w;
-    let y0 = small.h;
+    let x0 = w;
+    let y0 = h;
     let x1 = -1;
     let y1 = -1;
     let area = 0;
@@ -50,8 +52,8 @@ export function findCluster(g: Gray): Box | null {
     stack.push(start);
     while (stack.length) {
       const p = stack.pop() as number;
-      const x = p % small.w;
-      const y = (p - x) / small.w;
+      const x = p % w;
+      const y = (p - x) / w;
       area++;
       if (x < x0) x0 = x;
       if (x > x1) x1 = x;
@@ -61,75 +63,211 @@ export function findCluster(g: Gray): Box | null {
         seen[p - 1] = 1;
         stack.push(p - 1);
       }
-      if (x < small.w - 1 && mask[p + 1] && !seen[p + 1]) {
+      if (x < w - 1 && mask[p + 1] && !seen[p + 1]) {
         seen[p + 1] = 1;
         stack.push(p + 1);
       }
-      if (y > 0 && mask[p - small.w] && !seen[p - small.w]) {
-        seen[p - small.w] = 1;
-        stack.push(p - small.w);
+      if (y > 0 && mask[p - w] && !seen[p - w]) {
+        seen[p - w] = 1;
+        stack.push(p - w);
       }
-      if (y < small.h - 1 && mask[p + small.w] && !seen[p + small.w]) {
-        seen[p + small.w] = 1;
-        stack.push(p + small.w);
+      if (y < h - 1 && mask[p + w] && !seen[p + w]) {
+        seen[p + w] = 1;
+        stack.push(p + w);
       }
     }
-    if (area < minArea) continue;
-    const width = x1 - x0 + 1;
-    const height = y1 - y0 + 1;
-    // a bright wall or a window can win on area alone — a cluster is wide and
-    // roughly half as tall as it is wide
-    const aspect = height / Math.max(1, width);
-    if (aspect < 0.12 || aspect > 0.95) continue;
-    if (!best || area > best.area) best = { x0, y0, x1, y1, area };
+    if (area >= minArea) out.push({ x0, y0, x1, y1, area });
+  }
+  return out;
+}
+
+const height = (c: Comp) => c.y1 - c.y0 + 1;
+const width = (c: Comp) => c.x1 - c.x0 + 1;
+const centerY = (c: Comp) => (c.y0 + c.y1) / 2;
+
+function bbox(list: Comp[]): Box {
+  const x0 = Math.min(...list.map((c) => c.x0));
+  const y0 = Math.min(...list.map((c) => c.y0));
+  const x1 = Math.max(...list.map((c) => c.x1));
+  const y1 = Math.max(...list.map((c) => c.y1));
+  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/** Longest run of horizontally adjacent, same-height blobs. */
+function chainFrom(seed: Comp, all: Comp[]): Comp[] {
+  const h = height(seed);
+  const same = all.filter(
+    (c) =>
+      Math.abs(centerY(c) - centerY(seed)) <= Math.max(2, h * 0.35) &&
+      Math.abs(height(c) - h) <= Math.max(2, h * 0.25) &&
+      width(c) <= h * 1.6,
+  );
+  same.sort((a, b) => a.x0 - b.x0);
+
+  let best: Comp[] = [];
+  let run: Comp[] = [];
+  for (const c of same) {
+    const last = run[run.length - 1];
+    const gap = last ? c.x0 - last.x1 : 0;
+    // a chain may skip one glyph (a thin "1" can be filtered out) — up to 1.3h
+    if (last && gap >= -Math.max(1, h * 0.25) && gap <= Math.max(4, h * 1.3)) {
+      run.push(c);
+    } else {
+      if (run.length > best.length) best = run;
+      run = [c];
+    }
+  }
+  if (run.length > best.length) best = run;
+  return best;
+}
+
+/** A short blob immediately left of the row — the "ODO" (or "TRIP") label. */
+function labelLeftOf(row: Comp[], all: Comp[]): Comp | null {
+  const box = bbox(row);
+  const h = box.h;
+  let best: Comp | null = null;
+  for (const c of all) {
+    if (height(c) > h * 0.85 || width(c) > h * 1.1) continue;
+    if (c.x1 > box.x || c.x0 < box.x - Math.max(8, h * 2.4)) continue;
+    if (Math.abs(centerY(c) - (box.y + h / 2)) > h * 0.6) continue;
+    if (!best || width(c) * height(c) > width(best) * height(best)) best = c;
+  }
+  return best;
+}
+
+function componentsFor(g: Gray, polarity: 'light' | 'dark', threshold: number, minArea: number): Comp[] {
+  const mask = new Uint8Array(g.data.length);
+  for (let i = 0; i < mask.length; i++) {
+    const v = g.data[i];
+    mask[i] = (polarity === 'light' ? v > threshold : v <= threshold) ? 1 : 0;
+  }
+  return components(mask, g.w, g.h, minArea);
+}
+
+/** Glyph-shaped components: compact, part-inked, not a tick or a wide letter. */
+function glyphShape(g: Gray) {
+  return (c: Comp): boolean => {
+    const h = height(c);
+    const w = width(c);
+    const fill = c.area / (w * h);
+    return (
+      h >= Math.max(4, g.h * 0.02) &&
+      h <= g.h * 0.35 &&
+      w >= 2 &&
+      // a seven-segment "1" is two thin bars: the narrowest legitimate glyph
+      w / h >= 0.15 &&
+      w / h <= 1.5 &&
+      // a thin-barred seven-segment glyph can ink as little as a tenth of its box,
+      // and a solid narrow "1" inks all of it — the aspect test is what keeps
+      // the speedo's tick marks out, not the fill ceiling
+      fill >= 0.1 &&
+      c.area >= h * 1.8
+    );
+  };
+}
+
+/** Bottom-up search of one image (or window). Coordinates are image-local. */
+function detect(g: Gray): DigitRow | null {
+  const small = downscale(g, 640);
+  const sx = g.w / small.w;
+  const sy = g.h / small.h;
+  const threshold = otsu(small);
+  const minArea = Math.max(4, Math.round(small.w * small.h * 0.00002));
+
+  let best: { row: Comp[]; all: Comp[]; polarity: 'light' | 'dark'; score: number } | null = null;
+
+  for (const polarity of ['light', 'dark'] as const) {
+    // the label ("ODO") is shorter and thinner than a digit, so it is looked for
+    // among every blob, not only the glyph-shaped ones
+    const raw = componentsFor(small, polarity, threshold, minArea);
+    const all = raw.filter(glyphShape(small));
+    for (const seed of all) {
+      const row = chainFrom(seed, all);
+      if (row.length < 5 || row.length > 8) continue;
+      const box = bbox(row);
+      if (box.w < small.w * 0.05 || box.w > small.w * 0.6) continue;
+
+      const heights = row.map(height);
+      const mean = heights.reduce((a, b) => a + b, 0) / heights.length;
+      const spread = (Math.max(...heights) - Math.min(...heights)) / Math.max(1, mean);
+      if (spread > 0.35) continue;
+      const label = labelLeftOf(row, raw);
+      // equal heights, six or seven of them, a label beside them
+      const score =
+        row.length - spread * 3 + (label ? 1.2 : 0) + (row.length === 6 || row.length === 7 ? 0.6 : 0) - box.w / small.w;
+      if (!best || score > best.score) best = { row, all: raw, polarity, score };
+    }
   }
   if (!best) return null;
 
-  const sx = g.w / small.w;
-  const sy = g.h / small.h;
-  const box: Box = {
-    x: best.x0 * sx,
-    y: best.y0 * sy,
-    w: (best.x1 - best.x0 + 1) * sx,
-    h: (best.y1 - best.y0 + 1) * sy,
+  const label = labelLeftOf(best.row, best.all);
+  const sorted = [...best.row].sort((a, b) => a.x0 - b.x0);
+  return {
+    row: bbox(sorted),
+    label: label ? { x: label.x0, y: label.y0, w: width(label), h: height(label) } : null,
+    glyphs: sorted.map((c) => ({ x: c.x0, y: c.y0, w: width(c), h: height(c) })),
+    polarity: best.polarity,
+    score: best.score,
   };
-  // the blob stops at the first dark pixel of the bezel
-  return expandBox(clampBox(box, g.w, g.h), 0.05, g.w, g.h);
+}
+
+/** Shift a detection made inside a crop back into frame coordinates. */
+function shiftBox(b: Box, dx: number, dy: number, g: Gray): Box {
+  return clampBox({ x: b.x + dx, y: b.y + dy, w: b.w, h: b.h }, g.w, g.h);
+}
+
+function scaled(row: DigitRow, kx: number, ky: number, g: Gray, dx = 0, dy = 0): DigitRow {
+  return {
+    row: shiftBox({ x: row.row.x * kx, y: row.row.y * ky, w: row.row.w * kx, h: row.row.h * ky }, dx, dy, g),
+    label: row.label ? shiftBox({ x: row.label.x * kx, y: row.label.y * ky, w: row.label.w * kx, h: row.label.h * ky }, dx, dy, g) : null,
+    glyphs: row.glyphs.map((b) => shiftBox({ x: b.x * kx, y: b.y * ky, w: b.w * kx, h: b.h * ky }, dx, dy, g)),
+    polarity: row.polarity,
+    score: row.score,
+  };
 }
 
 /**
- * The ODO digit row inside the cluster: the learned offset when we have one,
- * the fleet's geometric prior otherwise.
+ * The ODO row on a dashboard photo, or null when nothing looks like one.
+ * With a `prior` (a labelled row, in frame coordinates) only a window around it
+ * is searched; without one the whole frame is.
  */
-export function anchorRoi(cluster: Box, calibration: Calibration | null): Box {
-  const inside = (x: number, y: number, w: number, h: number): Box => {
-    const left = Math.max(cluster.x, Math.min(cluster.x + cluster.w - 2, x));
-    const top = Math.max(cluster.y, Math.min(cluster.y + cluster.h - 2, y));
-    return {
-      x: left,
-      y: top,
-      w: Math.max(2, Math.min(cluster.x + cluster.w - left, w)),
-      h: Math.max(2, Math.min(cluster.y + cluster.h - top, h)),
-    };
-  };
-  if (calibration) {
-    return inside(
-      cluster.x + calibration.rx * cluster.w,
-      cluster.y + calibration.ry * cluster.h,
-      calibration.rw * cluster.w,
-      calibration.rh * cluster.h,
+export function findDigitRow(g: Gray, prior: Box | null = null): DigitRow | null {
+  if (prior) {
+    const padX = Math.max(prior.w * 0.8, prior.h * 4);
+    const padY = Math.max(prior.h * 5, g.h * 0.12);
+    const win = clampBox(
+      { x: prior.x - padX, y: prior.y - padY, w: prior.w + 2 * padX, h: prior.h + 2 * padY },
+      g.w,
+      g.h,
     );
+    if (win.w > 8 && win.h > 8) {
+      const sub = crop(g, win);
+      const found = detect(sub);
+      if (found) {
+        const small = downscale(sub, 640);
+        return scaled(found, sub.w / Math.max(1, small.w), sub.h / Math.max(1, small.h), g, win.x, win.y);
+      }
+    }
   }
-  return inside(cluster.x + cluster.w * 0.22, cluster.y + cluster.h * 0.55, cluster.w * 0.56, cluster.h * 0.27);
+  const full = detect(g);
+  if (!full) return null;
+  const kx = g.w / Math.max(1, downscale(g, 640).w);
+  const ky = g.h / Math.max(1, downscale(g, 640).h);
+  return scaled(full, kx, ky, g);
 }
 
-/** Median of the labelled rows — one odd photo cannot drag the ROI away. */
-export function medianCalibration(rows: Calibration[]): Calibration | null {
+/** Median of previously labelled rows, as frame fractions (or null). */
+export function medianPrior(rows: Array<{ rx: number; ry: number; rw: number; rh: number }>): Box | null {
   if (!rows.length) return null;
-  const pick = (key: keyof Calibration) => {
+  const pick = (key: 'rx' | 'ry' | 'rw' | 'rh') => {
     const values = rows.map((r) => r[key]).filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
-    if (!values.length) return 0;
-    return values[Math.floor(values.length / 2)];
+    return values.length ? values[Math.floor(values.length / 2)] : 0;
   };
-  return { rx: pick('rx'), ry: pick('ry'), rw: pick('rw'), rh: pick('rh') };
+  return { x: pick('rx'), y: pick('ry'), w: pick('rw'), h: pick('rh') };
+}
+
+/** A prior stored as fractions → frame pixels. */
+export function priorBox(fractions: Box | null, g: Gray): Box | null {
+  if (!fractions) return null;
+  return clampBox({ x: fractions.x * g.w, y: fractions.y * g.h, w: fractions.w * g.w, h: fractions.h * g.h }, g.w, g.h);
 }

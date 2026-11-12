@@ -89,8 +89,75 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
+/**
+ * Morphological close (square, radius d).
+ *
+ * On a phone photo the bars of one digit often do not touch: blur and low
+ * contrast break the corner joins, so a "3" arrives as five separate blobs and a
+ * naive labelling counts five digits instead of one. Closing bridges those
+ * intra-digit gaps while the wider gap between two digits survives.
+ */
+function close(mask: Uint8Array, w: number, h: number, d: number): Uint8Array {
+  if (d <= 0) return mask;
+  const wide = new Uint8Array(mask.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!mask[y * w + x]) continue;
+      const from = Math.max(0, x - d);
+      const to = Math.min(w - 1, x + d);
+      for (let k = from; k <= to; k++) wide[y * w + k] = 1;
+    }
+  }
+  const out = new Uint8Array(mask.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (!wide[y * w + x]) continue;
+      const from = Math.max(0, y - d);
+      const to = Math.min(h - 1, y + d);
+      for (let k = from; k <= to; k++) out[k * w + x] = 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge the closest neighbours until the row has the digit count we expect — but
+ * only across gaps that are clearly INSIDE a digit. Two real digits sit ~0.25–0.4
+ * glyph-heights apart; fusing them would turn one reading into another, so an
+ * uncrossable gap means we hand back more blobs than expected and the caller
+ * refuses the photo.
+ */
+function mergeTo(comps: Comp[], expect: number): Comp[] {
+  const list = [...comps].sort((a, b) => a.x0 - b.x0);
+  const heights = list.map((c) => c.y1 - c.y0 + 1).sort((a, b) => a - b);
+  const medianHeight = heights[Math.floor(heights.length / 2)] || 1;
+  const maxGap = Math.max(1, medianHeight * 0.22);
+  while (list.length > expect && list.length > 1) {
+    let at = 0;
+    let gap = Infinity;
+    for (let i = 0; i < list.length - 1; i++) {
+      const g = list[i + 1].x0 - list[i].x1;
+      if (g < gap) {
+        gap = g;
+        at = i;
+      }
+    }
+    if (gap > maxGap) break;
+    const a = list[at];
+    const b = list[at + 1];
+    list.splice(at, 2, {
+      x0: Math.min(a.x0, b.x0),
+      y0: Math.min(a.y0, b.y0),
+      x1: Math.max(a.x1, b.x1),
+      y1: Math.max(a.y1, b.y1),
+      area: a.area + b.area,
+    });
+  }
+  return list;
+}
+
 /** Keep only glyph-sized blobs and split any that two digits share. */
-function glyphsOf(roi: Gray): { comps: Comp[]; polarity: 'light' | 'dark' } {
+function glyphsOf(roi: Gray, expect: number): { comps: Comp[]; polarity: 'light' | 'dark' } {
   const threshold = otsu(roi);
   const minArea = Math.max(6, Math.round(roi.w * roi.h * 0.0004));
   const passes: Array<{ comps: Comp[]; polarity: 'light' | 'dark' }> = [];
@@ -101,7 +168,8 @@ function glyphsOf(roi: Gray): { comps: Comp[]; polarity: 'light' | 'dark' } {
       const v = roi.data[i];
       mask[i] = (polarity === 'light' ? v > threshold : v <= threshold) ? 1 : 0;
     }
-    const all = components(mask, roi.w, roi.h, minArea);
+    // bridge the gaps between the bars of one digit (see close())
+    const all = components(close(mask, roi.w, roi.h, Math.max(1, Math.round(roi.h * 0.03))), roi.w, roi.h, minArea);
     // glyph-shaped: not a single pixel, not the cluster hood behind the panel
     const candidates = all.filter((c) => {
       const h = c.y1 - c.y0 + 1;
@@ -148,6 +216,7 @@ function glyphsOf(roi: Gray): { comps: Comp[]; polarity: 'light' | 'dark' } {
   const mid = median(sorted.map((c) => c.x1 - c.x0 + 1));
   if (!mid) return { comps: sorted, polarity };
 
+  // one blob per digit: split a blob two digits share, merge blobs one digit broke into
   const split: Comp[] = [];
   for (const c of sorted) {
     const w = c.x1 - c.x0 + 1;
@@ -163,7 +232,10 @@ function glyphsOf(roi: Gray): { comps: Comp[]; polarity: 'light' | 'dark' } {
       split.push({ x0, x1, y0: c.y0, y1: c.y1, area: Math.round(c.area / parts) });
     }
   }
-  return { comps: split, polarity };
+  // expect <= 0 means "do not force a count": labelling must see what the photo
+  // really has, otherwise a wrong number could be made to fit
+  if (expect <= 0) return { comps: split, polarity };
+  return { comps: mergeTo(split, expect), polarity };
 }
 
 /** One glyph box → the comparable 16×24 patch. */
@@ -173,12 +245,24 @@ export function patchOf(g: Gray, box: Box): Uint8Array {
   return stretch(resizeBox(padded, PATCH_W, PATCH_H).data);
 }
 
-/** Find the digit row in a region and cut it into glyphs. */
-export function segmentDigits(roi: Gray, expect = 6): Segmented {
-  const empty: Segmented = { polarity: 'light', digits: [], rowBox: { x: 0, y: 0, w: roi.w, h: roi.h } };
-  if (roi.w < 8 || roi.h < 8) return empty;
+function zoomed(b: Box, zoom: number): Box {
+  if (zoom === 1) return b;
+  return { x: b.x / zoom, y: b.y / zoom, w: b.w / zoom, h: b.h / zoom };
+}
 
-  const found = glyphsOf(roi);
+/** Find the digit row in a region and cut it into glyphs. */
+export function segmentDigits(rawRoi: Gray, expect = 6): Segmented {
+  const empty: Segmented = { polarity: 'light', digits: [], rowBox: { x: 0, y: 0, w: rawRoi.w, h: rawRoi.h } };
+  if (rawRoi.w < 8 || rawRoi.h < 8) return empty;
+
+  // These dashboards put the ODO row ~12 px tall in a 1280×720 phone photo: the
+  // bars are barely two pixels thick and a one-pixel blur decides whether two of
+  // them touch. Work on an upscaled copy — the geometry (gaps, aspect, joins)
+  // only becomes reliable above ~40 px per glyph.
+  const zoom = rawRoi.h < 160 ? Math.max(1, Math.min(4, Math.round(200 / rawRoi.h))) : 1;
+  const roi = zoom === 1 ? rawRoi : resizeBox(rawRoi, rawRoi.w * zoom, rawRoi.h * zoom);
+
+  const found = glyphsOf(roi, expect);
   const comps = found.comps;
   if (!comps.length) return empty;
 
@@ -195,13 +279,23 @@ export function segmentDigits(roi: Gray, expect = 6): Segmented {
 
   const digits: DigitGlyph[] = kept.map((c) => {
     const box: Box = { x: c.x0, y: c.y0, w: c.x1 - c.x0 + 1, h: c.y1 - c.y0 + 1 };
-    return { box, patch: patchOf(roi, box) };
+    // the patch is cut from the upscaled copy (more detail), but the box is
+    // reported in the caller's coordinates
+    return { box: zoomed(box, zoom), patch: patchOf(roi, box) };
   });
 
   return {
     polarity: found.polarity,
     digits,
-    rowBox: { x: Math.min(...kept.map((c) => c.x0)), y: y0, w: Math.max(...kept.map((c) => c.x1)) - Math.min(...kept.map((c) => c.x0)) + 1, h: rowH },
+    rowBox: zoomed(
+      {
+        x: Math.min(...kept.map((c) => c.x0)),
+        y: y0,
+        w: Math.max(...kept.map((c) => c.x1)) - Math.min(...kept.map((c) => c.x0)) + 1,
+        h: rowH,
+      },
+      zoom,
+    ),
   };
 }
 
