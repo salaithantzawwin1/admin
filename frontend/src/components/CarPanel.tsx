@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, getUser, hasPermission, hasRole } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Disclosure } from './Disclosure';
@@ -97,6 +97,16 @@ interface Expense {
   litres?: string | null;
   description?: string;
   expenseDate: string;
+}
+
+/** One boxed fact of the request: tiny label, value under it. */
+function DetailField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-2.5 py-1.5">
+      <div className="text-gray-400 text-[11px] uppercase tracking-wide">{label}</div>
+      <div className="mt-0.5 break-words">{children}</div>
+    </div>
+  );
 }
 
 /** One acknowledgement stamp: filled (who · when), or "not recorded" while a record button sits beside it. */
@@ -321,57 +331,37 @@ export function CarPanel({
   };
 
   return (
-    <Card className="p-5 mb-5">
+    <Card className="p-4 mb-4">
       <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Car Request Details</h2>
       {error && <div className="mb-3 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
-        {/* every field sits in the same rounded box (label above, value below) so the
-            row reads as one consistent set — Assigned is the tinted variant of it */}
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Destination</div>
-          <div className="mt-1 font-medium text-gray-800">{car.destination}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Start</div>
-          <div className="mt-1 text-gray-800">{fmtDateTime(car.startDate)}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">End</div>
-          <div className="mt-1 text-gray-800">{fmtDateTime(car.endDate)}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Passengers</div>
-          <div className="mt-1 text-gray-800">{car.passengers}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Time slot</div>
-          <div className="mt-1 text-gray-800">{car.timeSlot}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Pickup</div>
-          <div className="mt-1 text-gray-800">{car.pickupLocation ?? '—'}</div>
-        </div>
-        <div className="col-span-2 sm:col-span-4 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Special request</div>
-          <div className="mt-1">{car.specialRequest ? <Badge color="yellow">⭐ {car.specialRequest}</Badge> : <span className="text-gray-400">—</span>}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Vehicle required</div>
-          <div className="mt-1 text-gray-800">{car.vehicleTypeRequired ?? 'Any'}</div>
-        </div>
-        <div className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Purpose</div>
-          <div className="mt-1 text-gray-800 break-words">{car.purpose?.trim() || '—'}</div>
-        </div>
-        {/* Details: the requester's own words — the one place Administration reads
-            WHY the car is needed and anything the drop-down fields cannot say. */}
-        <div className="col-span-2 sm:col-span-4 rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2">
-          <div className="text-gray-400 text-xs uppercase tracking-wide">Details</div>
-          <div className="mt-1 text-gray-800 whitespace-pre-wrap break-words">
-            {car.request?.description?.trim() || car.request?.title?.trim() || '—'}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-sm mb-3">
+        {/* one boxed field per fact, but only for facts that exist: an optional
+            field left empty (special request, purpose, vehicle type "Any") used to
+            add a row of dashes and made this card half the page on a phone */}
+        <DetailField label="Destination">{car.destination}</DetailField>
+        <DetailField label="Start">{fmtDateTime(car.startDate)}</DetailField>
+        <DetailField label="End">{fmtDateTime(car.endDate)}</DetailField>
+        <DetailField label="Passengers">{car.passengers}</DetailField>
+        <DetailField label="Time slot">{car.timeSlot}</DetailField>
+        <DetailField label="Pickup">{car.pickupLocation ?? '—'}</DetailField>
+        {car.vehicleTypeRequired && car.vehicleTypeRequired !== 'Any' && (
+          <DetailField label="Vehicle required">{car.vehicleTypeRequired}</DetailField>
+        )}
+        {car.purpose?.trim() && <DetailField label="Purpose">{car.purpose.trim()}</DetailField>}
+        {car.specialRequest && (
+          <div className="col-span-2 sm:col-span-3">
+            <Badge color="yellow">⭐ {car.specialRequest}</Badge>
           </div>
-        </div>
+        )}
+        {/* the requester's own words — the one place Administration reads WHY the
+            car is needed. Skipped when empty: the title is already the page subtitle. */}
+        {car.request?.description?.trim() && (
+          <div className="col-span-2 sm:col-span-3 rounded-lg border border-gray-100 bg-gray-50/50 px-2.5 py-1.5">
+            <div className="text-gray-400 text-[11px] uppercase tracking-wide">Details</div>
+            <div className="mt-0.5 whitespace-pre-wrap break-words">{car.request.description.trim()}</div>
+          </div>
+        )}
         {/* Approval and assignment are Administration's steps; Noted / Ready /
             Back at office are the driver's. They fail independently, so they get
             separate lanes — "approved but no car" must not look like "driver

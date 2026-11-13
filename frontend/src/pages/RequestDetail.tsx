@@ -186,8 +186,11 @@ export default function RequestDetail() {
           it on a sticky rail. Stacked, the summary and an often-empty Actions card
           pushed the actual assignment a full screen down. On phones the rail comes
           first so the status and the approval buttons stay above the fold. */}
+      {/* The rail only becomes a rail when there is room for it: the app's own
+          sidebar leaves ~460px of content at 768, so a fixed rail there squeezed
+          the panel to 170px. Tablets get the two cards side by side instead. */}
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-6 lg:items-start">
-        <aside className="lg:order-2 lg:sticky lg:top-6 space-y-5 mb-5">
+        <aside className="mb-5 grid gap-4 md:grid-cols-2 lg:mb-0 lg:order-2 lg:grid-cols-1 lg:gap-5 lg:sticky lg:top-6">
           {showActions && (
             <Card className="p-4">
               <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Actions</h2>
