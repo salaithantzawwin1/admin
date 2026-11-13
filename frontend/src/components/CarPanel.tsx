@@ -129,6 +129,10 @@ export function CarPanel({
   // change vehicle/driver of a live assignment (fleet plan change)
   const [reassignForm, setReassignForm] = useState({ vehicleId: '', driverId: '' });
   const [confirmReassign, setConfirmReassign] = useState(false);
+  // Administration records the driver's phone confirmation and can hand the car
+  // back without cancelling the booking (both endpoints exist in the API)
+  const [ackBusy, setAckBusy] = useState(false);
+  const [confirmRelease, setConfirmRelease] = useState(false);
   // Administration ⏰ ETA override (driver reported a delay by phone — record it)
   const [etaBusy, setEtaBusy] = useState(false);
   const [etaMinutes, setEtaMinutes] = useState('30');
@@ -238,6 +242,13 @@ export function CarPanel({
   const canStart = canAssign && liveAndOpen && !trip;
   // change vehicle/driver on a live assignment (before the trip starts)
   const canReassign = canAssign && liveAndOpen && !trip;
+  // Noted is the driver's first tap; a driver who phones instead left every ack
+  // lane empty and the panel read "driver never tapped Noted" for ever.
+  const canNote = canAssign && liveAndOpen && !trip && !assignment?.driverNotedAt;
+  // Release hands the car+driver back and re-queues the request for a new car —
+  // the API had it, the UI only ever offered "Cancel request" (which also kills
+  // the booking). Not offered once the mileage trip is running.
+  const canRelease = canAssign && liveAndOpen && !trip;
   const canComplete = canAssign && trip?.status === 'STARTED';
   // Administration fleet-plan controls: cancel or shift time on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);
@@ -456,6 +467,33 @@ export function CarPanel({
                 Save
               </Button>
               </span>
+            </div>
+          )}
+          {canNote && assignment && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Button
+                variant="ghost"
+                disabled={ackBusy}
+                title="The driver confirmed by phone — record the same Noted stamp the Telegram button makes"
+                onClick={async () => {
+                  setAckBusy(true); setError('');
+                  try {
+                    await api('/cars/assignments/simulate-ack', {
+                      method: 'POST',
+                      body: { assignmentId: assignment.id, action: 'noted' },
+                    });
+                    toast('Noted recorded — driver acknowledged the assignment');
+                    load();
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : 'Could not record Noted');
+                  } finally {
+                    setAckBusy(false);
+                  }
+                }}
+              >
+                ✓ Noted (driver phoned)
+              </Button>
+              <span className="text-[11px] text-gray-500">the driver has not tapped Noted in Telegram yet</span>
             </div>
           )}
           {/* 🛣️ car kilo at Ready / Back at office — the trip's distance and the
@@ -760,6 +798,42 @@ export function CarPanel({
         </div>
         );
       })()}
+
+      {canRelease && (
+        <div className="border-t border-gray-100 pt-4 mt-4">
+          <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Release the car</div>
+          <p className="text-xs text-gray-400 mb-2">
+            Hands the vehicle and driver back to the pool and returns this request to the APPROVED queue for a new
+            assignment. The booking is not cancelled; the requester is told.
+          </p>
+          <Button variant="danger" onClick={() => setConfirmRelease(true)}>
+            Release assignment
+          </Button>
+        </div>
+      )}
+
+      {confirmRelease && (
+        <ConfirmDialog
+          title="Release this assignment?"
+          description={
+            <>
+              {car.vehicle ? <><b>{car.vehicle.vehicleNo}</b> and its driver</> : 'The car and driver'} go back to the pool,
+              and the request returns to APPROVED so a different car can be assigned. The requester is notified. Use
+              “Cancel request” instead if the trip is not needed at all.
+            </>
+          }
+          confirmLabel="Release"
+          variant="danger"
+          onConfirm={async () => {
+            const ok = await act(() => api(`/cars/requests/${requestId}/release`, { method: 'POST' }));
+            if (ok) {
+              setConfirmRelease(false);
+              toast('Assignment released — the car is back in the pool');
+            }
+          }}
+          onClose={() => setConfirmRelease(false)}
+        />
+      )}
 
       {confirmReassign && (
         <ConfirmDialog
