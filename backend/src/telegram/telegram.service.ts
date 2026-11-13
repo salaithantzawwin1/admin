@@ -1617,9 +1617,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       },
     })) as PrismaCarAssignment;
     await this.notifyStage(updated, action as 'noted' | 'arrived' | 'returned');
-    // live push — open Car Panels / dashboards refetch immediately (best-effort)
+    // live push — open Car Panels / dashboards refetch immediately (best-effort).
+    // A stage moves the DOCUMENT too (Ready starts the trip, Back at Office can
+    // close it), so the header badge and the lists hear the same signal.
     try {
       this.events.publish('assignment.updated', { requestId: updated.request.id });
+      this.events.publish('request.updated', { requestId: updated.request.id });
       this.events.publish('driver.updated', { driverId: updated.driver?.id });
     } catch {
       /* SSE push is best-effort */
@@ -1773,10 +1776,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return r;
       });
       if (!done) return;
-      // the DOCUMENT moved to COMPLETED here, not just the assignment: the panel's
-      // status badge / action list listen to request.updated and stayed on
-      // IN_PROGRESS (still offering Change assignment / Start trip) until a manual
-      // reload, because ack stamps only publish assignment.updated.
+      // the DOCUMENT moved to COMPLETED here, not just the assignment — after the
+      // stage push above already went out, so this closing status needs its own
+      // signal or the badge stayed on IN_PROGRESS (still offering Change
+      // assignment / Start trip) until a manual reload.
       this.events?.publish('request.updated', { requestId });
       await this.audit.log({
         action: 'REQUEST_AUTO_COMPLETED',

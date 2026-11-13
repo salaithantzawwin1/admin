@@ -38,10 +38,16 @@ export class CarsService {
    * Live push for open panels — every transition that already notifies someone
    * must ALSO signal the watchers, or a second open tab only catches up on the
    * 15s poll. The frame carries ids only; clients refetch through the API.
+   *
+   * Both signals, always: the Car panel refetches on assignment.updated, the
+   * document header and the Administration lists on request.updated. Sending one
+   * and forgetting the other is how the status badge kept showing a released trip
+   * as live, so callers no longer choose.
    */
-  private push(requestId: string, type: 'assignment.updated' | 'request.updated' = 'assignment.updated') {
+  private push(requestId: string) {
     try {
-      this.events.publish(type, { requestId });
+      this.events.publish('assignment.updated', { requestId });
+      this.events.publish('request.updated', { requestId });
     } catch {
       /* SSE push is best-effort */
     }
@@ -672,7 +678,7 @@ export class CarsService {
     for (const userId of admins) {
       await this.telegram.mirrorToUser(userId, title, body, '/car-requests').catch(() => undefined);
     }
-    this.push(requestId, 'request.updated');
+    this.push(requestId);
   }
 
   /** Administration assigns vehicle (+ optional driver) to an APPROVED car request.
@@ -911,6 +917,7 @@ export class CarsService {
     // a half-finished odometer capture belongs to the PREVIOUS car — drop it
     this.telegram.forgetOdometer?.(assignment.id);
     // the requester's panel is already open in another tab — show the car now
+    // (the DOCUMENT went APPROVED → IN_PROGRESS too, so the header badge moves)
     this.push(requestId);
     return assignment;
   }
@@ -1051,7 +1058,7 @@ export class CarsService {
       }).catch(() => []);
       for (const s of siblings) {
         await this.prisma.carAssignment.update({ where: { id: s.id }, data: fields }).catch(() => undefined);
-        this.push(s.requestId);
+        this.push(s.requestId); // a convoy member's panel shows the same reading
       }
     }
 
@@ -1098,6 +1105,7 @@ export class CarsService {
         })
         .catch(() => undefined);
     }
+    // the stamp above can open (READY) or close (BACK) the document, so both layers repaint
     this.push(a.requestId);
 
     const usageKm =
@@ -1816,6 +1824,7 @@ export class CarsService {
       newValue: { vehicleId: data.vehicleId, driverId: data.driverId ?? null },
     });
 
+    // a re-assign of a released booking re-opens it (APPROVED → IN_PROGRESS)
     this.push(requestId);
     return this.prisma.carAssignment.findUnique({ where: { requestId }, include: { vehicle: true, driver: true } });
   }
@@ -1868,10 +1877,8 @@ export class CarsService {
       action: 'CAR_ASSIGNMENT_RELEASED', module: 'CARS', recordId: requestId,
     });
 
-    // the DOCUMENT went IN_PROGRESS → APPROVED, not just the assignment: the panel
-    // status badge and every list read request.updated and kept showing the trip as
-    // live (with a release button) until a manual reload.
-    this.push(requestId, 'request.updated');
+    // the DOCUMENT went IN_PROGRESS → APPROVED, not just the assignment
+    this.push(requestId);
     return { success: true };
   }
 
@@ -1955,7 +1962,7 @@ export class CarsService {
     });
     // the assigned driver doesn't hold an AMS account — reply to their Telegram directly
     await this.telegram.notifyDriverOfCancellation(requestId, request.docNumber, comment);
-    this.push(requestId, 'request.updated'); // status + freed car repaint everywhere
+    this.push(requestId); // status + freed car repaint everywhere
     return { success: true };
   }
 
@@ -2039,7 +2046,7 @@ export class CarsService {
     if (request.carRequest?.driverId) {
       await this.telegram.notifyDriverOfTimeChange(requestId, request.docNumber, request.carRequest.driverId, start, end, data.comment).catch(() => undefined);
     }
-    this.push(requestId, 'request.updated'); // the moved window shows without a reload
+    this.push(requestId); // the moved window shows without a reload
     return { success: true };
   }
 
@@ -2144,11 +2151,7 @@ export class CarsService {
     }
     // the driver's own trip card shows the ETA line (editStageMessage repaints it)
     await this.telegram.sendAssignment(assignment.id, true).catch(() => undefined);
-    try {
-      this.events.publish('assignment.updated', { requestId: assignment.requestId });
-    } catch {
-      /* SSE push is best-effort */
-    }
+    this.push(assignment.requestId);
     return {
       success: true,
       estimatedReturnAt: updated.estimatedReturnAt,
@@ -2404,7 +2407,7 @@ export class CarsService {
       action: 'TRIP_STARTED', module: 'CARS', recordId: requestId,
       newValue: { startMileage: data.startMileage },
     });
-    this.push(requestId);
+    this.push(requestId); // Start trip only moves the trip row, but the badge must agree
     return trip;
   }
 
@@ -2484,7 +2487,7 @@ export class CarsService {
       oldValue: { status: 'STARTED' },
       newValue: { endMileage: data.endMileage, distance },
     });
-    this.push(requestId, 'request.updated'); // COMPLETED closes the doc too
+    this.push(requestId); // COMPLETED closes the doc too
     return trip;
   }
 

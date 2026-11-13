@@ -98,7 +98,7 @@ interface Expense {
   expenseDate: string;
 }
 
-/** One acknowledgement stamp: filled (who · when) or a record button while missing. */
+/** One acknowledgement stamp: filled (who · when), or "not recorded" while a record button sits beside it. */
 function AckLine({
   label,
   at,
@@ -117,14 +117,12 @@ function AckLine({
           ✅ {label} — {by ? `${by} · ` : ''}{fmtDateTime(at)}
         </span>
       ) : (
-        <>
-          <span className="text-gray-500">⏳ {label} — not recorded</span>
-          {action && (
-            <Button variant="ghost" onClick={action.onClick}>
-              {action.label}
-            </Button>
-          )}
-        </>
+        <span className="text-gray-500">⏳ {label} — not recorded</span>
+      )}
+      {!at && action && (
+        <Button variant="ghost" onClick={action.onClick}>
+          {action.label}
+        </Button>
       )}
     </div>
   );
@@ -275,14 +273,10 @@ export function CarPanel({
   // gating on the row alone offered Start trip / Change assignment on a trip that
   // is already closed — the click then failed with "Only IN_PROGRESS assignments
   // can be changed (current: COMPLETED)".
-  const liveAndOpen = !!liveAssignment && status === 'IN_PROGRESS';
   // The one live state Administration can still act on: start the trip, swap the
   // car/driver, release it, or record the driver's Noted. All of them need a live
-  // assignment whose mileage trip has not begun — one flag, not four copies.
-  const canManageAssignment = canAssign && liveAndOpen && !trip;
-  const canStart = canManageAssignment;
-  const canReassign = canManageAssignment;
-  const canRelease = canManageAssignment;
+  // assignment whose mileage trip has not begun — one flag for all four.
+  const canManageAssignment = canAssign && !!liveAssignment && status === 'IN_PROGRESS' && !trip;
   // Noted is the driver's own tap; Administration records it when the driver
   // phoned instead — only while the stamp is still missing.
   const canRecordNoted = canManageAssignment && !assignment?.driverNotedAt;
@@ -580,8 +574,9 @@ export function CarPanel({
       {/* Two separate stamps that both read "acknowledged": the DRIVER's Noted
           (Telegram ✓ / recorded by Administration when the driver phoned) and the
           DEPARTMENT MANAGER's optional FYI ack — never the same thing, and one can
-          be missing while the other is in. Shown together so the desk sees which. */}
-      {status !== 'DRAFT' && (liveAssignment || car.managerAckAt) && (
+          be missing while the other is in. Shown together so the desk sees which;
+          on a released booking only the manager ack is left, so that alone opens it. */}
+      {(liveAssignment || car.managerAckAt) && (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Acknowledgements</div>
           <div className="space-y-1.5 text-sm">
@@ -589,21 +584,13 @@ export function CarPanel({
               label="Driver Noted"
               at={assignment?.driverNotedAt ?? car.sharedRide?.notedAt}
               by={assignment?.driver?.name ?? car.driver?.name ?? car.sharedRide?.driverName}
-              action={
-                canRecordNoted && assignment
-                  ? { label: '✓ Record Noted', onClick: () => setConfirmNoted(true) }
-                  : null
-              }
+              action={canRecordNoted ? { label: '✓ Record Noted', onClick: () => setConfirmNoted(true) } : null}
             />
             <AckLine
               label="Department manager ack"
               at={car.managerAckAt}
               by={car.managerAckBy?.fullName}
-              action={
-                canRecordManagerAck
-                  ? { label: '👍 Record ack', onClick: () => setConfirmManagerAck(true) }
-                  : null
-              }
+              action={canRecordManagerAck ? { label: '👍 Record ack', onClick: () => setConfirmManagerAck(true) } : null}
             />
           </div>
           <p className="text-[11px] text-gray-400 mt-2">
@@ -785,7 +772,7 @@ export function CarPanel({
         />
       )}
 
-      {canReassign && (() => {
+      {canManageAssignment && (() => {
         // tripStart/tripEnd/busyDrivers come from the unconditional top-level hook call
         return (
         <div className="border-t border-gray-100 pt-4 mt-4">
@@ -828,7 +815,7 @@ export function CarPanel({
         );
       })()}
 
-      {canRelease && (
+      {canManageAssignment && (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Release the car</div>
           <p className="text-xs text-gray-400 mb-2">
@@ -934,7 +921,7 @@ export function CarPanel({
         />
       )}
 
-      {canStart && (
+      {canManageAssignment && (
         <div className="border-t border-gray-100 pt-4 mt-4">
           <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Start trip</div>
           <div className="flex gap-2 items-center">

@@ -150,6 +150,25 @@ async function main() {
     assert.ok(calls.some((c) => c.table === 'driver' && c.data.status === 'AVAILABLE'));
   });
 
+  // release() moves the DOCUMENT (IN_PROGRESS → APPROVED), so the badge and the
+  // Administration lists must hear request.updated — assignment.updated alone left
+  // the header showing the trip as live with a release button.
+  await test('release() publishes request.updated carrying the requestId, not only assignment.updated', async () => {
+    const { prisma } = releasePrisma({ othersOnVehicle: 0, othersForDriver: 0 });
+    const seen: { type: string; requestId?: string }[] = [];
+    const svc = cars(prisma, {
+      events: { publish: (type: string, targets: any) => seen.push({ type, requestId: targets?.requestId }) },
+    });
+    await svc.release('r1', ACTOR);
+    const doc = seen.find((e) => e.type === 'request.updated');
+    assert.ok(doc, `release must publish request.updated (got: ${seen.map((e) => e.type).join(', ') || 'nothing'})`);
+    assert.strictEqual(doc!.requestId, 'r1', 'the document signal names the request whose status moved');
+    assert.ok(
+      seen.some((e) => e.type === 'assignment.updated' && e.requestId === 'r1'),
+      'the Car panel signal stays — it refetches the assignment',
+    );
+  });
+
   // ------------------------------------------------ 3) shift re-checks the driver
   function shiftPrisma(clash: any) {
     const calls: any[] = [];
