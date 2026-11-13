@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
+import * as fs from 'fs';
+import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -13,6 +15,10 @@ const REMINDER_TYPE = 'REMINDER' as never; // existing NotificationType enum val
  *  retention kept yesterday's trips in the Administration queue under "window
  *  passed" as if they were still waiting for a car (CAR-202611-0004). */
 const STALE_AFTER_MS = 2 * 3600 * 1000;
+
+/** A pending dashboard photo nobody finished is stale after the same 24 h the
+ *  Telegram loader accepts (TelegramService.ODO_PENDING_TTL_MS). */
+const ODO_PENDING_TTL_MS = 24 * 3600 * 1000;
 
 /**
  * Reminders for upcoming car trips (Plan §20): when a week's worth of requests
@@ -1276,6 +1282,56 @@ export class TripRemindersService {
       }
     } catch (e) {
       this.logger.warn(`escalateOverdueRunning failed: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * Reclaim pending odometer photos no assignment references any more.
+   *
+   * armOdo()/clearPending() unlink the file they replace, but a deploy or crash
+   * between the row write and that unlink (or a row deleted outside the service)
+   * leaves the JPEG on the uploads volume with nothing pointing at it — and it
+   * would sit there for ever. Runs every 6 h beside the janitor; only files that
+   * are (a) named like a capture, (b) older than the capture TTL and (c) not named
+   * by any car_assignments.pendingOdoPhoto are removed, so an armed capture in
+   * flight is never destroyed. Never throws — a missing volume must not stop the
+   * janitor.
+   */
+  @Cron('0 15 */6 * * *')
+  async sweepOrphanPendingOdoPhotos(): Promise<number> {
+    const dir = path.join(process.env.UPLOAD_PATH || '/app/uploads', 'odometer', 'pending');
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return 0; // no captures were ever stored on this volume
+    }
+    if (names.length === 0) return 0;
+    try {
+      const rows = await this.prisma.carAssignment.findMany({
+        where: { pendingOdoPhoto: { not: null } },
+        select: { pendingOdoPhoto: true },
+      });
+      const referenced = new Set(rows.map((r) => r.pendingOdoPhoto as string));
+      const cutoff = Date.now() - ODO_PENDING_TTL_MS;
+      let removed = 0;
+      for (const name of names) {
+        // only files this service wrote (uuid.ext) — never touch anything else
+        if (!/^[0-9a-f-]{36}\.(jpe?g|png|webp)$/i.test(name) || referenced.has(name)) continue;
+        const full = path.join(dir, name);
+        try {
+          if (fs.statSync(full).mtimeMs > cutoff) continue; // a capture still in flight
+          fs.unlinkSync(full);
+          removed++;
+        } catch {
+          /* raced with armOdo()/clearPending() — nothing left to reclaim */
+        }
+      }
+      if (removed > 0) this.logger.log(`reclaimed ${removed} orphaned pending odometer photo(s)`);
+      return removed;
+    } catch (e) {
+      this.logger.warn(`pending odometer sweep failed: ${(e as Error).message}`);
+      return 0;
     }
   }
 }
