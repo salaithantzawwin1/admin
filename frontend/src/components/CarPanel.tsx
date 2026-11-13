@@ -98,6 +98,38 @@ interface Expense {
   expenseDate: string;
 }
 
+/** One acknowledgement stamp: filled (who · when) or a record button while missing. */
+function AckLine({
+  label,
+  at,
+  by,
+  action,
+}: {
+  label: string;
+  at?: string | null;
+  by?: string | null;
+  action?: { label: string; onClick: () => void } | null;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {at ? (
+        <span className="text-green-700">
+          ✅ {label} — {by ? `${by} · ` : ''}{fmtDateTime(at)}
+        </span>
+      ) : (
+        <>
+          <span className="text-gray-500">⏳ {label} — not recorded</span>
+          {action && (
+            <Button variant="ghost" onClick={action.onClick}>
+              {action.label}
+            </Button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function CarPanel({
   requestId,
   status,
@@ -131,8 +163,9 @@ export function CarPanel({
   const [confirmReassign, setConfirmReassign] = useState(false);
   // Administration records the driver's phone confirmation and can hand the car
   // back without cancelling the booking (both endpoints exist in the API)
-  const [ackBusy, setAckBusy] = useState(false);
   const [confirmRelease, setConfirmRelease] = useState(false);
+  const [confirmNoted, setConfirmNoted] = useState(false);
+  const [confirmManagerAck, setConfirmManagerAck] = useState(false);
   // Administration ⏰ ETA override (driver reported a delay by phone — record it)
   const [etaBusy, setEtaBusy] = useState(false);
   const [etaMinutes, setEtaMinutes] = useState('30');
@@ -243,16 +276,19 @@ export function CarPanel({
   // is already closed — the click then failed with "Only IN_PROGRESS assignments
   // can be changed (current: COMPLETED)".
   const liveAndOpen = !!liveAssignment && status === 'IN_PROGRESS';
-  const canStart = canAssign && liveAndOpen && !trip;
-  // change vehicle/driver on a live assignment (before the trip starts)
-  const canReassign = canAssign && liveAndOpen && !trip;
-  // Noted is the driver's first tap; a driver who phones instead left every ack
-  // lane empty and the panel read "driver never tapped Noted" for ever.
-  const canNote = canAssign && liveAndOpen && !trip && !assignment?.driverNotedAt;
-  // Release hands the car+driver back and re-queues the request for a new car —
-  // the API had it, the UI only ever offered "Cancel request" (which also kills
-  // the booking). Not offered once the mileage trip is running.
-  const canRelease = canAssign && liveAndOpen && !trip;
+  // The one live state Administration can still act on: start the trip, swap the
+  // car/driver, release it, or record the driver's Noted. All of them need a live
+  // assignment whose mileage trip has not begun — one flag, not four copies.
+  const canManageAssignment = canAssign && liveAndOpen && !trip;
+  const canStart = canManageAssignment;
+  const canReassign = canManageAssignment;
+  const canRelease = canManageAssignment;
+  // Noted is the driver's own tap; Administration records it when the driver
+  // phoned instead — only while the stamp is still missing.
+  const canRecordNoted = canManageAssignment && !assignment?.driverNotedAt;
+  // The department manager's FYI ack: an eligible head, or a superuser recording
+  // it on their behalf (managerAck() allows a SYSTEM_ADMIN).
+  const canRecordManagerAck = !car.managerAckAt && (canManagerAck || (canAssign && sysAdmin));
   const canComplete = canAssign && trip?.status === 'STARTED';
   // Administration fleet-plan controls: cancel or shift time on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);
@@ -473,33 +509,6 @@ export function CarPanel({
               </span>
             </div>
           )}
-          {canNote && assignment && (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <Button
-                variant="ghost"
-                disabled={ackBusy}
-                title="The driver confirmed by phone — record the same Noted stamp the Telegram button makes"
-                onClick={async () => {
-                  setAckBusy(true); setError('');
-                  try {
-                    await api('/cars/assignments/simulate-ack', {
-                      method: 'POST',
-                      body: { assignmentId: assignment.id, action: 'noted' },
-                    });
-                    toast('Noted recorded — driver acknowledged the assignment');
-                    load();
-                  } catch (e) {
-                    setError(e instanceof Error ? e.message : 'Could not record Noted');
-                  } finally {
-                    setAckBusy(false);
-                  }
-                }}
-              >
-                ✓ Noted (driver phoned)
-              </Button>
-              <span className="text-[11px] text-gray-500">the driver has not tapped Noted in Telegram yet</span>
-            </div>
-          )}
           {/* 🛣️ car kilo at Ready / Back at office — the trip's distance and the
               evidence photo; Administration records it here when the driver phoned */}
           {odoAssignment && (
@@ -568,32 +577,38 @@ export function CarPanel({
         </div>
       )}
 
-      {/* optional manager acknowledgement (Department Head) — never blocks.
-          Administration (SYSTEM_ADMIN) records it for the manager when the ack
-          arrives by phone, so the desk is not stuck waiting on a head who is out. */}
-      {status !== 'DRAFT' && (car.managerAckAt || canManagerAck || (canAssign && sysAdmin)) && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
-          {car.managerAckAt ? (
-            <span className="text-green-700">✅ Manager acknowledged{car.managerAckBy ? ` — ${car.managerAckBy.fullName}` : ''} · {fmtDateTime(car.managerAckAt)}</span>
-          ) : (
-            <>
-              <span className="text-gray-500">
-                Department manager has not acknowledged yet (optional — does not delay the trip).
-                {!canManagerAck && sysAdmin ? ' You can record it on their behalf.' : ''}
-              </span>
-              <Button
-                variant="ghost"
-                title={
-                  canManagerAck
-                    ? 'Acknowledge this trip as the requester\u2019s department manager'
-                    : 'Record the department manager\u2019s acknowledgement (given by phone) on their behalf'
-                }
-                onClick={() => act(() => api(`/cars/requests/${requestId}/manager-ack`, { method: 'POST' }))}
-              >
-                {canManagerAck ? '👍 Acknowledge' : '✓ Noted (manager-ack)'}
-              </Button>
-            </>
-          )}
+      {/* Two separate stamps that both read "acknowledged": the DRIVER's Noted
+          (Telegram ✓ / recorded by Administration when the driver phoned) and the
+          DEPARTMENT MANAGER's optional FYI ack — never the same thing, and one can
+          be missing while the other is in. Shown together so the desk sees which. */}
+      {status !== 'DRAFT' && (liveAssignment || car.managerAckAt) && (
+        <div className="border-t border-gray-100 pt-4 mt-4">
+          <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Acknowledgements</div>
+          <div className="space-y-1.5 text-sm">
+            <AckLine
+              label="Driver Noted"
+              at={assignment?.driverNotedAt ?? car.sharedRide?.notedAt}
+              by={assignment?.driver?.name ?? car.driver?.name ?? car.sharedRide?.driverName}
+              action={
+                canRecordNoted && assignment
+                  ? { label: '✓ Record Noted', onClick: () => setConfirmNoted(true) }
+                  : null
+              }
+            />
+            <AckLine
+              label="Department manager ack"
+              at={car.managerAckAt}
+              by={car.managerAckBy?.fullName}
+              action={
+                canRecordManagerAck
+                  ? { label: '👍 Record ack', onClick: () => setConfirmManagerAck(true) }
+                  : null
+              }
+            />
+          </div>
+          <p className="text-[11px] text-gray-400 mt-2">
+            Both are optional and never delay the trip. Administration records either one when it arrives by phone.
+          </p>
         </div>
       )}
 
@@ -846,6 +861,50 @@ export function CarPanel({
             }
           }}
           onClose={() => setConfirmRelease(false)}
+        />
+      )}
+
+      {confirmNoted && assignment && (
+        <ConfirmDialog
+          title="Record the driver's Noted?"
+          description={
+            <>
+              Stamps <b>{assignment.driver?.name ?? car.driver?.name ?? 'the driver'}</b> as having acknowledged this
+              assignment — the same stamp the driver's Telegram <b>✓ Noted</b> button makes, and the requester is told.
+              Record it only when the driver really confirmed.
+            </>
+          }
+          confirmLabel="Record Noted"
+          onConfirm={async () => {
+            await api('/cars/assignments/simulate-ack', {
+              method: 'POST',
+              body: { assignmentId: assignment.id, action: 'noted' },
+            });
+            setConfirmNoted(false);
+            toast('Noted recorded — driver acknowledged the assignment');
+            load();
+          }}
+          onClose={() => setConfirmNoted(false)}
+        />
+      )}
+
+      {confirmManagerAck && (
+        <ConfirmDialog
+          title="Record the department manager's acknowledgement?"
+          description={
+            <>
+              Stamps the <b>Department manager ack</b> for this car request — an FYI only (it never blocks the trip) and
+              a different stamp from the driver's Noted. Use it when the manager confirmed by phone.
+            </>
+          }
+          confirmLabel="Record ack"
+          onConfirm={async () => {
+            await api(`/cars/requests/${requestId}/manager-ack`, { method: 'POST' });
+            setConfirmManagerAck(false);
+            toast('Department manager ack recorded');
+            load();
+          }}
+          onClose={() => setConfirmManagerAck(false)}
         />
       )}
 
