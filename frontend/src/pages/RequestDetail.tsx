@@ -7,7 +7,7 @@ import { MeetingRoomPanel } from '../components/MeetingRoomPanel';
 import { PurchaseRequestPanel } from '../components/PurchaseRequestPanel';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { fmtDateTime } from '../util/yangonTime';
+import { fmtDate, fmtDateTime } from '../util/yangonTime';
 import { useLiveReload } from '../hooks/useLiveReload';
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
@@ -145,14 +145,13 @@ export default function RequestDetail() {
 
   // Only a document that is actually waiting on someone gets the Actions card —
   // an approved/in-progress request used to show an empty card and a comment box
-  // nobody could submit.
-  const canApprove = detail.status === 'PENDING_APPROVAL' && hasPermission('approvals.act');
-  const canActOnDraft = detail.isOwner && detail.status === 'DRAFT';
-  // Withdrawing is ownership, not approval: an owner who also holds approvals.act
-  // still needs Cancel Request beside the approve buttons (the server refuses to
-  // let anyone approve their own request, so that neighbour is the only way out).
+  // nobody could submit. The server refuses to let anyone approve their own
+  // request, so an owner who holds approvals.act gets the withdraw button instead
+  // of three buttons that could only fail.
+  const canApprove = detail.status === 'PENDING_APPROVAL' && hasPermission('approvals.act') && !detail.isOwner;
   const canWithdraw = detail.isOwner && detail.status === 'PENDING_APPROVAL';
-  const hasActions = canApprove || canActOnDraft || canWithdraw;
+  const canSubmitDraft = detail.isOwner && detail.status === 'DRAFT';
+  const showActions = canApprove || canWithdraw || canSubmitDraft;
 
   return (
     <div className="max-w-6xl">
@@ -188,12 +187,12 @@ export default function RequestDetail() {
           pushed the actual assignment a full screen down. On phones the rail comes
           first so the status and the approval buttons stay above the fold. */}
       <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_20rem] lg:gap-6 lg:items-start">
-        <aside className="order-1 lg:order-2 lg:sticky lg:top-6 space-y-5 mb-5">
-          {hasActions && (
+        <aside className="lg:order-2 lg:sticky lg:top-6 space-y-5 mb-5">
+          {showActions && (
             <Card className="p-4">
               <h2 className="font-semibold text-gray-800 mb-3 text-sm uppercase tracking-wide">Actions</h2>
               <div className="flex flex-wrap gap-2 items-center">
-                {canActOnDraft && (
+                {canSubmitDraft && (
                   <>
                     <Button onClick={() => act('submit')}>Submit for Approval</Button>
                     <Button variant="danger" onClick={cancel}>Delete Draft</Button>
@@ -239,19 +238,14 @@ export default function RequestDetail() {
               </div>
               <div>
                 <dt className="text-gray-400 text-xs uppercase">Raised</dt>
-                <dd className="mt-0.5 font-medium">{fmtDateTime(detail.createdAt)}</dd>
+                <dd className="mt-0.5 font-medium">{fmtDate(detail.createdAt)}</dd>
               </div>
             </dl>
             {detail.escalated && <div className="mt-3 text-xs text-orange-600">⚠ This request has been escalated.</div>}
-            {detail.description && (
-              <p className="mt-3 pt-3 border-t border-gray-100 text-sm text-gray-700 whitespace-pre-wrap break-words">
-                {detail.description}
-              </p>
-            )}
           </Card>
         </aside>
 
-        <div className="order-2 lg:order-1 min-w-0">
+        <div className="lg:order-1 min-w-0">
           {detail.docType === 'CAR_REQUEST' && (
             <CarPanel requestId={detail.id} status={detail.status} isOwner={detail.isOwner} canView={detail.canViewCar} />
           )}

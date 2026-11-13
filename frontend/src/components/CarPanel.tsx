@@ -101,19 +101,16 @@ interface Expense {
 /**
  * A low-frequency administration form, folded to one line until it is opened.
  *
- * Shifting a window, swapping the car and cancelling are rare compared with
- * watching the trip, but each form used to take a third of the panel and pushed
- * the trip itself off the screen. Native <details> keeps them keyboard- and
- * screen-reader-accessible with no state of our own.
+ * Shifting a window and swapping the car are rare compared with watching the
+ * trip, but each form took a third of the panel and pushed the trip off the
+ * screen. Native <details> keeps them keyboard- and screen-reader-accessible
+ * with no state of our own.
  */
-function Disclosure({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+function Disclosure({ title, children }: { title: string; children: ReactNode }) {
   return (
     <details className="border-t border-gray-100 pt-4 mt-4 group">
       <summary className="flex items-center justify-between gap-2 cursor-pointer select-none text-xs font-semibold text-gray-500 uppercase tracking-wide hover:text-gray-700">
-        <span>
-          {title}
-          {hint && <span className="ml-2 font-normal normal-case tracking-normal text-gray-400">{hint}</span>}
-        </span>
+        {title}
         <span className="text-gray-400 transition-transform group-open:rotate-180" aria-hidden>⌄</span>
       </summary>
       <div className="mt-3">{children}</div>
@@ -623,7 +620,7 @@ export function CarPanel({
       )}
 
       {showAdminControls && (
-        <Disclosure title="Administration — plan change" hint="shift or cancel">
+        <Disclosure title="Administration — plan change">
           <div className="flex flex-wrap gap-2 items-center">
             <Input type="datetime-local" className="!w-56" value={shiftForm.startDate} onChange={(e) => setShiftForm({ ...shiftForm, startDate: e.target.value })} placeholder="New start" />
             <Input type="datetime-local" className="!w-56" value={shiftForm.endDate} onChange={(e) => setShiftForm({ ...shiftForm, endDate: e.target.value })} placeholder="End (optional — keeps duration)" title="Leave empty to keep the trip duration — only the start moves" />
@@ -796,7 +793,7 @@ export function CarPanel({
       {canManageAssignment && (() => {
         // tripStart/tripEnd/busyDrivers come from the unconditional top-level hook call
         return (
-        <Disclosure title="Change vehicle / driver" hint="swap the car or driver">
+        <Disclosure title="Change vehicle / driver">
           <div className="flex flex-wrap gap-2 items-center">
             <Select className="!w-56" value={reassignForm.vehicleId} onChange={(e) => setReassignForm({ ...reassignForm, vehicleId: e.target.value, driverId: e.target.value === reassignForm.driverId ? '' : reassignForm.driverId })}>
               <option value="">— Vehicle —</option>
@@ -836,13 +833,10 @@ export function CarPanel({
       })()}
 
       {canManageAssignment && (
-        <div className="border-t border-gray-100 pt-4 mt-4 flex flex-wrap items-center gap-2">
+        <div className="border-t border-gray-100 pt-4 mt-4">
           <Button variant="danger" onClick={() => setConfirmRelease(true)}>
             Release assignment
           </Button>
-          <span className="text-xs text-gray-400">
-            hands the car back to the pool and re-queues this request — not a cancellation
-          </span>
         </div>
       )}
 
