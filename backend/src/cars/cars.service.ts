@@ -1868,7 +1868,10 @@ export class CarsService {
       action: 'CAR_ASSIGNMENT_RELEASED', module: 'CARS', recordId: requestId,
     });
 
-    this.push(requestId);
+    // the DOCUMENT went IN_PROGRESS → APPROVED, not just the assignment: the panel
+    // status badge and every list read request.updated and kept showing the trip as
+    // live (with a release button) until a manual reload.
+    this.push(requestId, 'request.updated');
     return { success: true };
   }
 
