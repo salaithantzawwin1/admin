@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../auth/permissions.service';
 import { EventsService } from '../events/events.service';
 import { yangonShort, yangonClock } from '../util/yangon-time';
+import { ODO_FILE_TTL_MS, ODO_PENDING_DIR, odoPath } from '../cars/odometer-files';
 
 /**
  * Telegram driver-notification bot (Plan: Car assignment → Noted/Arrived/Back flow).
@@ -1254,13 +1255,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }, TelegramService.ODO_TTL_MS).unref?.();
   }
 
-  /** Root of the upload volume — the same one CarsService stores photos under. */
-  private uploadRoot(): string {
-    return process.env.UPLOAD_PATH || '/app/uploads';
-  }
-
+  /** Where an armed capture waits for its kilo — the same folder the janitor sweeps. */
   private pendingOdoDir(): string {
-    return path.join(this.uploadRoot(), 'odometer', 'pending');
+    return odoPath(ODO_PENDING_DIR);
   }
 
   /**
@@ -1320,7 +1317,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * photo, so the driver only has to type the number.
    */
   private async loadPending(chatId: string): Promise<OdoPending | null> {
-    const since = new Date(Date.now() - TelegramService.ODO_PENDING_TTL_MS);
+    const since = new Date(Date.now() - ODO_FILE_TTL_MS);
     const a = await this.prisma.carAssignment
       .findFirst({
         where: { pendingOdoStage: { not: null }, pendingOdoAt: { gte: since }, driver: { telegramChatId: chatId } },
@@ -2477,8 +2474,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private pendingEtaCustom = new Map<string, { assignmentId: string; at: number }>();
   /** How long an armed odometer capture waits for the kilo (see armOdo). */
   private static readonly ODO_TTL_MS = 3 * 60 * 60_000;
-  /** How long a persisted capture (photo on disk) is worth resuming after a restart. */
-  private static readonly ODO_PENDING_TTL_MS = 24 * 60 * 60_000;
   /** 🛣️ odometer capture armed for this chat: waiting for the photo, then the kilo. */
   private pendingOdo = new Map<string, OdoPending>();
   /**
