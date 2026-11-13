@@ -31,6 +31,8 @@ const navGroups = [
       // labelling the offline odometer reader (same people who see the photos)
       { to: '/odometer-training', label: 'Odometer Training', icon: '🔢', show: () => hasPermission('cars.assign') },
       { to: '/meeting-rooms', label: 'Meeting Rooms', icon: '🏢', show: () => hasPermission('requests.create') || hasPermission('meeting-rooms.assign') },
+      // company licence register (scans live on the license card)
+      { to: '/licenses', label: 'Import/Export Licenses', icon: '🛂', show: () => hasPermission('licenses.read') },
     ],
   },
   {

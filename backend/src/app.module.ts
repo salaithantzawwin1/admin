@@ -23,6 +23,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { AnnouncementsModule } from './announcements/announcements.module';
 import { MessagesModule } from './messages/messages.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
+import { LicensesModule } from './licenses/licenses.module';
 import { ProcurementModule } from './procurement/procurement.module';
 import { PurchaseOrdersModule } from './procurement/purchase-orders.module';
 import { InvoicesModule } from './procurement/invoices.module';
@@ -60,6 +61,7 @@ import { HealthController } from './health/health.controller';
     AnnouncementsModule,
     MessagesModule,
     SuppliersModule,
+    LicensesModule,
     ProcurementModule,
     PurchaseOrdersModule,
     InvoicesModule,

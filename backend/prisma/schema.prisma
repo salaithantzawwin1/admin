@@ -2074,3 +2074,49 @@ model OdometerLcdCalibration {
   @@index([dashboardKey])
   @@map("odometer_lcd_calibrations")
 }
+// ---------------- Company Import/Export licenses ----------------
+
+/// One company licence in the import/export register: registration dates, the
+/// portal logins kept for handover, and its certificate scans.
+model ImportExportLicense {
+  id               String    @id @default(uuid()) @db.Uuid
+  name             String    @db.VarChar(160)
+  registrationNo   String?   @db.VarChar(60)
+  companyLimited   String?   @db.VarChar(200)
+  myanmarName      String?   @db.VarChar(200)
+  startDate        DateTime? @db.Date
+  dueDate          DateTime? @db.Date
+  email            String?   @db.VarChar(160)
+  /// portal logins — only returned to holders of licenses.manage
+  emailPassword    String?   @db.VarChar(160)
+  tradenetPassword String?   @db.VarChar(160)
+  status           String    @default("Updated") @db.VarChar(40)
+  note             String?   @db.VarChar(500)
+  createdById      String?   @db.Uuid
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  images LicenseImage[]
+
+  @@index([dueDate])
+  @@index([name])
+  @@map("import_export_licenses")
+}
+
+/// A scan of the licence certificate (max five per licence). Files are written
+/// to UPLOAD_PATH/license-images and only served through the guarded route.
+model LicenseImage {
+  id          String              @id @default(uuid()) @db.Uuid
+  licenseId   String              @db.Uuid
+  license     ImportExportLicense @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  /// uuid.ext — never leaves the server
+  storedName  String
+  mimeType    String              @db.VarChar(40)
+  size        Int
+  sortOrder   Int                 @default(0)
+  createdById String?             @db.Uuid
+  createdAt   DateTime            @default(now())
+
+  @@index([licenseId])
+  @@map("license_images")
+}
