@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Disclosure } from './Disclosure';
 import { Badge, Button, Card, Input, Select } from './ui';
 import { fmtDateTime } from '../util/yangonTime';
 
@@ -155,8 +156,7 @@ export function MeetingRoomPanel({
       </div>
 
       {showAdminControls && (
-        <div className="border-t border-gray-100 pt-4 mt-4">
-          <div className="text-xs font-semibold text-gray-500 uppercase mb-2">Administration — plan change</div>
+        <Disclosure title="Administration — plan change">
           <div className="flex flex-wrap gap-2 items-center">
             <Input type="datetime-local" className="!w-56" value={shiftForm.startTime} onChange={(e) => setShiftForm({ ...shiftForm, startTime: e.target.value })} />
             <Input type="datetime-local" className="!w-56" value={shiftForm.endTime} onChange={(e) => setShiftForm({ ...shiftForm, endTime: e.target.value })} />
@@ -172,8 +172,7 @@ export function MeetingRoomPanel({
               Cancel request
             </Button>
           </div>
-          <p className="text-xs text-gray-400 mt-1.5">Shift time moves the meeting (room availability is checked). Mark Completed closes the meeting and frees the room. Cancel frees the room and notifies the requester.</p>
-        </div>
+        </Disclosure>
       )}
 
       {confirmShift && (

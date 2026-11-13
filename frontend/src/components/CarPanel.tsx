@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api, getUser, hasPermission, hasRole } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
+import { Disclosure } from './Disclosure';
 import { OdometerBox } from './OdometerBox';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
 import { toast } from './Toast';
@@ -96,26 +97,6 @@ interface Expense {
   litres?: string | null;
   description?: string;
   expenseDate: string;
-}
-
-/**
- * A low-frequency administration form, folded to one line until it is opened.
- *
- * Shifting a window and swapping the car are rare compared with watching the
- * trip, but each form took a third of the panel and pushed the trip off the
- * screen. Native <details> keeps them keyboard- and screen-reader-accessible
- * with no state of our own.
- */
-function Disclosure({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <details className="border-t border-gray-100 pt-4 mt-4 group">
-      <summary className="flex items-center justify-between gap-2 cursor-pointer select-none text-xs font-semibold text-gray-500 uppercase tracking-wide hover:text-gray-700">
-        {title}
-        <span className="text-gray-400 transition-transform group-open:rotate-180" aria-hidden>⌄</span>
-      </summary>
-      <div className="mt-3">{children}</div>
-    </details>
-  );
 }
 
 /** One acknowledgement stamp: filled (who · when), or "not recorded" while a record button sits beside it. */
