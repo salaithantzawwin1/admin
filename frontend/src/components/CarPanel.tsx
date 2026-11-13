@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, hasPermission } from '../api';
+import { api, getUser, hasPermission, hasRole } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { OdometerBox } from './OdometerBox';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
@@ -145,7 +145,11 @@ export function CarPanel({
   const [editForm, setEditForm] = useState<{
     destination: string; purpose: string; passengers: string; pickupLocation: string; specialRequest: string;
   } | null>(null);
+  const sysAdmin = hasRole(getUser(), 'SYSTEM_ADMIN');
   const canAssign = hasPermission('cars.assign');
+  // SYSTEM_ADMIN may record the department manager's acknowledgement on their
+  // behalf (managerAck() allows a superuser); other Administrators may not, so the
+  // button only widens for them.
   // fleet.read guards /fleet/vehicles + /fleet/drivers server-side. Without it,
   // every employee opening a request fires two calls that only come back 403 —
   // the selects are rendered for Administration only, so skip the fetch entirely.
@@ -564,19 +568,29 @@ export function CarPanel({
         </div>
       )}
 
-      {/* optional manager acknowledgement (Department Head) — never blocks */}
-      {status !== 'DRAFT' && (car.managerAckAt || canManagerAck) && (
-        <div className="mb-4 flex items-center gap-2 text-sm">
+      {/* optional manager acknowledgement (Department Head) — never blocks.
+          Administration (SYSTEM_ADMIN) records it for the manager when the ack
+          arrives by phone, so the desk is not stuck waiting on a head who is out. */}
+      {status !== 'DRAFT' && (car.managerAckAt || canManagerAck || (canAssign && sysAdmin)) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
           {car.managerAckAt ? (
             <span className="text-green-700">✅ Manager acknowledged{car.managerAckBy ? ` — ${car.managerAckBy.fullName}` : ''} · {fmtDateTime(car.managerAckAt)}</span>
           ) : (
             <>
-              <span className="text-gray-500">Department manager has not acknowledged yet (optional — does not delay the trip).</span>
+              <span className="text-gray-500">
+                Department manager has not acknowledged yet (optional — does not delay the trip).
+                {!canManagerAck && sysAdmin ? ' You can record it on their behalf.' : ''}
+              </span>
               <Button
                 variant="ghost"
+                title={
+                  canManagerAck
+                    ? 'Acknowledge this trip as the requester\u2019s department manager'
+                    : 'Record the department manager\u2019s acknowledgement (given by phone) on their behalf'
+                }
                 onClick={() => act(() => api(`/cars/requests/${requestId}/manager-ack`, { method: 'POST' }))}
               >
-                👍 Acknowledge
+                {canManagerAck ? '👍 Acknowledge' : '✓ Noted (manager-ack)'}
               </Button>
             </>
           )}
