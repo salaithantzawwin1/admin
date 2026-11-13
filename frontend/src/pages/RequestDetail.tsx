@@ -148,7 +148,10 @@ export default function RequestDetail() {
   // nobody could submit.
   const canApprove = detail.status === 'PENDING_APPROVAL' && hasPermission('approvals.act');
   const canActOnDraft = detail.isOwner && detail.status === 'DRAFT';
-  const canWithdraw = detail.isOwner && detail.status === 'PENDING_APPROVAL' && !canApprove;
+  // Withdrawing is ownership, not approval: an owner who also holds approvals.act
+  // still needs Cancel Request beside the approve buttons (the server refuses to
+  // let anyone approve their own request, so that neighbour is the only way out).
+  const canWithdraw = detail.isOwner && detail.status === 'PENDING_APPROVAL';
   const hasActions = canApprove || canActOnDraft || canWithdraw;
 
   return (
