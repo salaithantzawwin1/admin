@@ -35,7 +35,6 @@ export class LicenseDto {
   @IsOptional() @IsString() @MaxLength(160) email?: string;
   @IsOptional() @IsString() @MaxLength(160) emailPassword?: string;
   @IsOptional() @IsString() @MaxLength(160) tradenetPassword?: string;
-  @IsOptional() @IsString() @MaxLength(40) status?: string;
   @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
@@ -49,7 +48,6 @@ export class UpdateLicenseDto {
   @IsOptional() @IsString() @MaxLength(160) email?: string;
   @IsOptional() @IsString() @MaxLength(160) emailPassword?: string;
   @IsOptional() @IsString() @MaxLength(160) tradenetPassword?: string;
-  @IsOptional() @IsString() @MaxLength(40) status?: string;
   @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
@@ -64,10 +62,18 @@ export class LicensesController {
     return { userId: req.user.id, username: req.user.username };
   }
 
+  /** One page of the register (20 per page by default). */
   @RequirePermissions(PERMISSIONS.LICENSES_READ)
   @Get()
-  list(@Query('q') q?: string) {
-    return this.licenses.list(q || undefined);
+  list(
+    @Query('q') q?: string,
+    @Query('filter') filter?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    const size = Math.min(Math.max(Number(pageSize) || 20, 1), 100);
+    const current = Math.max(Number(page) || 1, 1);
+    return this.licenses.list(q || undefined, filter || undefined, current, size);
   }
 
   /** Renewal planning download — due-date order, before the :id routes. */

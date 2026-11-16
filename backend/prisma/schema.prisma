@@ -2092,7 +2092,7 @@ model ImportExportLicense {
   /// portal logins — only returned to holders of licenses.manage
   emailPassword    String?   @db.VarChar(160)
   tradenetPassword String?   @db.VarChar(160)
-  status           String    @default("Updated") @db.VarChar(40)
+  /// Status is derived from dueDate in the API (Expired / Renewing / Updated)
   note             String?   @db.VarChar(500)
   createdById      String?   @db.Uuid
   createdAt        DateTime  @default(now())

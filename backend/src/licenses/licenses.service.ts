@@ -14,6 +14,10 @@ import { daysUntilExpiry, ymd } from '../fleet/expiry';
 /** Scans kept per license — mirrors the "up to 5" promise in the UI. */
 export const LICENSE_IMAGE_MAX = 5;
 
+/** A licence inside this window is "Renewing" — the same 60 days the
+ *  dashboard tile and the reminder sweep use. */
+export const RENEWING_DAYS = 60;
+
 const MAX_BYTES = 5 * 1024 * 1024;
 const IMAGE_DIR = 'license-images';
 /** Only the uuid + extension this service writes may ever be opened. */
@@ -30,7 +34,6 @@ export interface LicenseInput {
   email?: string | null;
   emailPassword?: string | null;
   tradenetPassword?: string | null;
-  status?: string;
   note?: string | null;
 }
 
@@ -76,7 +79,6 @@ export class LicensesService {
       email: text(input.email),
       emailPassword: text(input.emailPassword),
       tradenetPassword: text(input.tradenetPassword),
-      status: text(input.status) ?? undefined,
       note: text(input.note),
     };
   }
@@ -120,25 +122,53 @@ export class LicensesService {
 
   // ---------------- register ----------------
 
-  /** Register list — next renewal first; the stored logins stay out of it. */
-  async list(q: string | undefined) {
+  /** Status is never typed in: it follows the due date. */
+  private statusOf(dueDate: Date | null, now: Date = new Date()) {
+    if (!dueDate) return 'No due date';
+    const left = daysUntilExpiry(dueDate, now);
+    if (left < 0) return 'Expired';
+    return left <= RENEWING_DAYS ? 'Renewing' : 'Updated';
+  }
+
+  /** Register page — next renewal first, one page at a time. The stored
+   *  portal logins never appear here. */
+  async list(q: string | undefined, filter: string | undefined, page = 1, pageSize = 20) {
     const term = q?.trim();
-    const rows = await this.prisma.importExportLicense.findMany({
-      where: term
+    const now = new Date();
+    const today = new Date(`${ymd(now)}T00:00:00.000Z`);
+    const soon = new Date(today.getTime() + RENEWING_DAYS * 86_400_000);
+    const where = {
+      ...(term
         ? {
             OR: [
-              { name: { contains: term, mode: 'insensitive' } },
-              { companyLimited: { contains: term, mode: 'insensitive' } },
-              { myanmarName: { contains: term, mode: 'insensitive' } },
-              { registrationNo: { contains: term, mode: 'insensitive' } },
-              { email: { contains: term, mode: 'insensitive' } },
+              { name: { contains: term, mode: 'insensitive' as const } },
+              { companyLimited: { contains: term, mode: 'insensitive' as const } },
+              { myanmarName: { contains: term, mode: 'insensitive' as const } },
+              { registrationNo: { contains: term, mode: 'insensitive' as const } },
+              { email: { contains: term, mode: 'insensitive' as const } },
             ],
           }
-        : {},
-      orderBy: [{ dueDate: { sort: 'asc', nulls: 'last' } }, { name: 'asc' }],
-      include: { _count: { select: { images: true } } },
-    });
-    return rows.map((row) => this.stripSecrets(row));
+        : {}),
+      ...(filter === 'soon' ? { dueDate: { gte: today, lte: soon } } : {}),
+      ...(filter === 'expired' ? { dueDate: { lt: today } } : {}),
+      ...(filter === 'none' ? { dueDate: null } : {}),
+    };
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.importExportLicense.findMany({
+        where,
+        orderBy: [{ dueDate: { sort: 'asc', nulls: 'last' } }, { name: 'asc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { _count: { select: { images: true } } },
+      }),
+      this.prisma.importExportLicense.count({ where }),
+    ]);
+    return {
+      rows: rows.map((row) => ({ ...this.stripSecrets(row), status: this.statusOf(row.dueDate, now) })),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   /** Licences due within `days` — including any already overdue — soonest
@@ -148,7 +178,7 @@ export class LicensesService {
     const rows = await this.prisma.importExportLicense.findMany({
       where: { dueDate: { not: null } },
       orderBy: { dueDate: 'asc' },
-      select: { id: true, name: true, registrationNo: true, dueDate: true, status: true },
+      select: { id: true, name: true, registrationNo: true, dueDate: true },
     });
     return rows
       .map((row) => ({ ...row, daysLeft: daysUntilExpiry(row.dueDate as Date, now) }))
@@ -180,7 +210,7 @@ export class LicensesService {
           row.startDate ? ymd(row.startDate) : '',
           row.dueDate ? ymd(row.dueDate) : '',
           row.dueDate ? daysUntilExpiry(row.dueDate, now) : '',
-          row.status,
+          this.statusOf(row.dueDate, now),
           row.email,
           row._count.images,
         ]
@@ -195,7 +225,8 @@ export class LicensesService {
   async detail(id: string, userId: string) {
     const license = await this.row(id);
     const manager = await this.permissions.userHas(userId, PERMISSIONS.LICENSES_MANAGE);
-    return manager ? license : this.stripSecrets(license);
+    const status = this.statusOf(license.dueDate);
+    return { ...(manager ? license : this.stripSecrets(license)), status };
   }
 
   async create(input: LicenseInput, actor: Actor) {

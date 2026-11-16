@@ -6,14 +6,15 @@ import { PermissionsService } from '../auth/permissions.service';
 import { PERMISSIONS } from '../auth/permissions';
 import { daysUntilExpiry, ymd } from '../fleet/expiry';
 
-/** Reminder days before the licence due date (the two the office asked for). */
-export const LICENSE_REMINDER_DAYS = [60, 30] as const;
+/** Reminder days before the licence due date. */
+export const LICENSE_REMINDER_DAYS = [60, 30, 7] as const;
 
 /**
- * Daily import/export licence reminder. One alert per licence per threshold:
- * at 60 days and again at 30, delivered in-app + Telegram to the people who
- * manage the register. `Notification.dedupeKey` makes a rerun, a restart or a
- * second instance unable to send the same reminder twice.
+ * Daily import/export licence reminder: 60, 30 and 7 days before the due date,
+ * plus one "it has lapsed" notice once the date has passed. Delivered in-app +
+ * Telegram to the people who manage the register. `Notification.dedupeKey`
+ * makes a rerun, a restart or a second instance unable to send the same
+ * reminder twice.
  */
 @Injectable()
 export class LicenseRemindersService {
@@ -41,12 +42,17 @@ export class LicenseRemindersService {
 
     // The reminder a licence is currently inside: 60 → 30, the tightest one that
     // has been reached. A sweep that missed a day still sends the right one.
-    const due: { license: (typeof licenses)[number]; left: number; threshold: number }[] = [];
+    const due: { license: (typeof licenses)[number]; left: number; threshold: string }[] = [];
     for (const license of licenses) {
       const left = daysUntilExpiry(license.dueDate as Date, now);
-      if (left < 0) continue; // already expired — the register shows that
+      // expired: one "it has lapsed" notice (the office asked for it a day
+      // after the date, but any missed day still sends it exactly once)
+      if (left < 0) {
+        due.push({ license, left, threshold: 'expired' });
+        continue;
+      }
       const threshold = LICENSE_REMINDER_DAYS.filter((days) => left <= days).pop();
-      if (threshold !== undefined) due.push({ license, left, threshold });
+      if (threshold !== undefined) due.push({ license, left, threshold: String(threshold) });
     }
 
     if (due.length === 0) return { due: 0, recipients: 0, sent: 0 };
@@ -54,7 +60,7 @@ export class LicenseRemindersService {
     const recipients = await this.permissions.usersWithPermissions([PERMISSIONS.LICENSES_MANAGE]);
     if (recipients.length === 0) return { due: due.length, recipients: 0, sent: 0 };
 
-    const key = (licenseId: string, threshold: number, userId: string) => `lic:${licenseId}:${threshold}:${userId}`;
+    const key = (licenseId: string, threshold: string, userId: string) => `lic:${licenseId}:${threshold}:${userId}`;
     const existing = new Set(
       (
         await this.prisma.notification.findMany({
@@ -66,10 +72,13 @@ export class LicenseRemindersService {
 
     let sent = 0;
     for (const { license, left, threshold } of due) {
-      const title = `🛂 Import/Export license — ${license.name} expires in ${left} day${left === 1 ? '' : 's'}`;
+      const expired = threshold === 'expired';
+      const title = expired
+        ? `🔴 Import/Export license — ${license.name} expired ${-left} day${left === -1 ? '' : 's'} ago`
+        : `🛂 Import/Export license — ${license.name} expires in ${left} day${left === 1 ? '' : 's'}`;
       const body =
-        `Registration No. ${license.registrationNo ?? '—'} · due ${ymd(license.dueDate as Date)} (${threshold}-day reminder). ` +
-        'Start the renewal and upload the new certificate.';
+        `Registration No. ${license.registrationNo ?? '—'} · due ${ymd(license.dueDate as Date)}` +
+        (expired ? ' — the license has LAPSED. Renew it and upload the new certificate.' : ` (${threshold}-day reminder). Start the renewal and upload the new certificate.`);
       for (const userId of recipients) {
         const dedupeKey = key(license.id, threshold, userId);
         if (existing.has(dedupeKey)) continue;

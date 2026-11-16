@@ -1,4 +1,4 @@
-import { ComponentProps, useCallback, useEffect, useMemo, useState } from 'react';
+import { ComponentProps, useCallback, useEffect, useState } from 'react';
 import { api, getToken, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { LicenseImages } from '../components/LicenseImages';
@@ -35,7 +35,6 @@ interface FormState {
   email: string;
   emailPassword: string;
   tradenetPassword: string;
-  status: string;
   note: string;
 }
 
@@ -49,9 +48,18 @@ const EMPTY_FORM: FormState = {
   email: '',
   emailPassword: '',
   tradenetPassword: '',
-  status: 'Updated',
   note: '',
 };
+
+/** Rows per page — the register runs into hundreds over the years. */
+const PAGE_SIZE = 20;
+
+interface LicensePage {
+  rows: License[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
 
 const FILTERS = [
   { value: 'all', label: 'All licenses' },
@@ -101,6 +109,8 @@ function DueBadge({ due, today }: { due: string | null; today: string }) {
 export default function Licenses() {
   const canManage = hasPermission('licenses.manage');
   const [rows, setRows] = useState<License[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('all');
   const [error, setError] = useState('');
@@ -113,16 +123,21 @@ export default function Licenses() {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Yangon' });
 
   const load = useCallback(() => {
-    api<License[]>(`/licenses${q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`)
+    const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
+    if (q.trim()) params.set('q', q.trim());
+    if (filter !== 'all') params.set('filter', filter);
+    api<LicensePage>(`/licenses?${params.toString()}`)
       .then((data) => {
-        setRows(data);
+        setRows(data.rows);
+        setTotal(data.total);
         setError('');
       })
       .catch((e) => {
         setError(e instanceof Error ? e.message : 'Could not load licenses');
         setRows([]);
+        setTotal(0);
       });
-  }, [q]);
+  }, [q, filter, page]);
 
   // typing in the search box reloads after a short pause, not on every key
   useEffect(() => {
@@ -130,16 +145,15 @@ export default function Licenses() {
     return () => clearTimeout(timer);
   }, [load, q]);
 
-  const visible = useMemo(() => {
-    const list = rows ?? [];
-    if (filter === 'all') return list;
-    return list.filter((row) => {
-      if (filter === 'none') return !row.dueDate;
-      const days = daysLeft(row.dueDate, today);
-      if (days === null) return false;
-      return filter === 'expired' ? days < 0 : days >= 0 && days <= 60;
-    });
-  }, [rows, filter, today]);
+  // a new search or filter always starts at page 1
+  useEffect(() => {
+    setPage(1);
+  }, [q, filter]);
+
+  const visible = rows ?? [];
+  const lastPage = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const firstRow = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const lastRow = Math.min(page * PAGE_SIZE, total);
 
   const openCreate = () => {
     setModalError('');
@@ -160,7 +174,6 @@ export default function Licenses() {
       email: row.email ?? '',
       emailPassword: row.emailPassword ?? '',
       tradenetPassword: row.tradenetPassword ?? '',
-      status: row.status,
       note: row.note ?? '',
     });
     if (canManage) {
@@ -192,7 +205,6 @@ export default function Licenses() {
       email: form.email,
       emailPassword: form.emailPassword,
       tradenetPassword: form.tradenetPassword,
-      status: form.status,
       note: form.note,
     };
     try {
@@ -219,7 +231,9 @@ export default function Licenses() {
     toast('License deleted');
     setDeleting(null);
     setDetail(null);
-    load();
+    // deleting the last row of a page falls back to the previous page
+    if (rows && rows.length === 1 && page > 1) setPage(page - 1);
+    else load();
   };
 
   /** Renewal planning: the whole register as CSV, due-date order (server). */
@@ -287,7 +301,7 @@ export default function Licenses() {
             ))}
           </Select>
         </label>
-        {rows && <span className="pb-2 text-xs text-gray-500">{visible.length} of {rows.length}</span>}
+        {rows && <span className="pb-2 text-xs text-gray-500">{total} license{total === 1 ? '' : 's'}</span>}
       </div>
 
       {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
@@ -295,7 +309,7 @@ export default function Licenses() {
       {rows === null ? (
         <Empty label="Loading licenses…" />
       ) : visible.length === 0 ? (
-        <Empty label={rows.length === 0 ? 'No license yet — use “+ Add license”' : 'No license matches this filter'} />
+        <Empty label={total === 0 ? 'No license yet — use “+ Add license”' : 'No license on this page'} />
       ) : (
         <>
           {/* Phones: six columns never fit 349px — one card per licence. */}
@@ -408,6 +422,32 @@ export default function Licenses() {
               </table>
             </Card>
           </div>
+
+          {/* Paging — one page at a time, still sorted by due date */}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-gray-500">
+              {firstRow}–{lastRow} of {total}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              >
+                ‹ Prev
+              </button>
+              <span className="text-xs text-gray-600">Page {page} / {lastPage}</span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(lastPage, p + 1))}
+                disabled={page >= lastPage}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
+              >
+                Next ›
+              </button>
+            </div>
+          </div>
         </>
       )}
 
@@ -427,14 +467,6 @@ export default function Licenses() {
             {field('startDate', 'Start date', { type: 'date' })}
             {field('dueDate', 'Due date', { type: 'date' })}
             {field('email', 'Email address', { type: 'email' })}
-            <label className="block">
-              <span className="mb-1 block text-xs font-medium text-gray-600">Status</span>
-              <Select value={form.status} onChange={(e) => setForm((f) => (f ? { ...f, status: e.target.value } : f))}>
-                {['Updated', 'Renewing', 'Pending', 'Expired'].map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </Select>
-            </label>
             {field('emailPassword', 'E-mail password', { autoComplete: 'new-password' })}
             {field('tradenetPassword', 'TradeNet password', { autoComplete: 'new-password' })}
           </div>
@@ -462,7 +494,7 @@ export default function Licenses() {
                 ['Registration No.', detail.registrationNo || '—'],
                 ['Company Limited', detail.companyLimited || '—'],
                 ['Myanmar name', detail.myanmarName || '—'],
-                ['Status', detail.status],
+                ['Status', detail.status || '—'],
                 ['Start date', fmtDate(detail.startDate)],
                 ['Due date', fmtDate(detail.dueDate)],
                 ['Email address', detail.email || '—'],
