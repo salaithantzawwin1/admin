@@ -105,6 +105,20 @@ export class AnnouncementsController {
     return this.announcements.readStats(id);
   }
 
+  /** One notice with its audience — the messages tab's side panel reads this. */
+  @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
+  @Get(':id')
+  findOne(@Param('id') id: string) {
+    return this.announcements.findOne(id);
+  }
+
+  /** Copy an existing notice into a fresh draft (template). */
+  @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
+  @Post(':id/duplicate')
+  duplicate(@Req() req, @Param('id') id: string) {
+    return this.announcements.duplicate(id, this.actor(req));
+  }
+
   @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
   @Delete(':id')
   remove(@Req() req, @Param('id') id: string) {

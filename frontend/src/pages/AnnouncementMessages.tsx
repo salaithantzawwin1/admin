@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, getToken } from '../api';
 import { Badge, Button, Empty, Input, PageLoader } from '../components/ui';
 import { toast } from '../components/Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
@@ -98,10 +98,22 @@ const initial = (name: string | null) => (name?.trim()?.[0] ?? '?').toUpperCase(
  * links all land on the same conversation. Live updates arrive as a `message.new`
  * signal plus a 15 s poll — the event is only a hint to refetch, never data.
  */
-export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: {
-  canManage: boolean;
-  onOpenAnnouncement: (id: string) => void;
-}) {
+/** The notice read in the side panel (GET /announcements/:id). */
+interface NoticeDetail {
+  id: string;
+  code: string;
+  title: string;
+  content: string;
+  category: string;
+  priority: string;
+  status: string;
+  publishAt: string | null;
+  endAt: string | null;
+  createdBy: string | null;
+  attachments?: { id: string; filename: string; mimeType: string; size: number }[];
+}
+
+export default function AnnouncementMessages({ canManage }: { canManage: boolean }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const ann = searchParams.get('ann'); // null = thread list only (mobile) / "All" (desktop)
   const bucket = searchParams.get('bucket'); // 'trips' — the vehicle-trip inbox
@@ -120,6 +132,62 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // ---- notice side panel: read the announcement without leaving the inbox
+  const noticeId = searchParams.get('notice');
+  const [notice, setNotice] = useState<NoticeDetail | null>(null);
+  const [noticeError, setNoticeError] = useState('');
+
+  useEffect(() => {
+    if (!noticeId) {
+      setNotice(null);
+      setNoticeError('');
+      return;
+    }
+    let dead = false;
+    const load = canManage
+      ? api<NoticeDetail>(`/announcements/${noticeId}`)
+      : api<NoticeDetail[]>('/announcements/mine').then((rows) => {
+          const hit = rows.find((r) => r.id === noticeId);
+          if (!hit) throw new Error('Notice not found');
+          return hit;
+        });
+    load
+      .then((r) => {
+        if (dead) return;
+        setNotice(r);
+        setNoticeError('');
+      })
+      .catch((e) => {
+        if (dead) return;
+        setNotice(null);
+        setNoticeError(e instanceof Error ? e.message : 'Could not load the notice');
+      });
+    return () => {
+      dead = true;
+    };
+  }, [noticeId, canManage]);
+
+  const openNotice = (id: string) => {
+    const p = new URLSearchParams(searchParams);
+    p.set('notice', id);
+    setSearchParams(p, { replace: false });
+  };
+  const closeNotice = () => {
+    const p = new URLSearchParams(searchParams);
+    p.delete('notice');
+    setSearchParams(p, { replace: false });
+  };
+
+  useEffect(() => {
+    if (!noticeId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeNotice();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [noticeId, searchParams]);
 
   const selectThread = (key: string) => {
     // `replace` keeps history clean while still making the URL shareable
@@ -379,10 +447,10 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
               {canManage && currentThread && (
                 <button
                   className="text-xs text-blue-600 hover:underline"
-                  onClick={() => onOpenAnnouncement(currentThread.announcementId)}
-                  title="Open the notice"
+                  onClick={() => openNotice(currentThread.announcementId)}
+                  title="Read the notice beside the conversation"
                 >
-                  Open notice →
+                  Open notice ⇥
                 </button>
               )}
               <Button variant="ghost" onClick={markAllRead} disabled={busy}>
@@ -501,6 +569,69 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
           </p>
         )}
       </section>
+
+      {/* ---------- the notice, read without leaving the conversation ---------- */}
+      {noticeId && (
+        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Announcement">
+          <div className="absolute inset-0 bg-black/30" onClick={closeNotice} />
+          <aside className="relative flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-gray-200 bg-white shadow-2xl">
+            <header className="sticky top-0 z-10 flex items-start gap-2 border-b border-gray-100 bg-white px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                  {notice?.code ?? 'Announcement'}
+                </div>
+                <h2 className="truncate text-sm font-semibold text-gray-900">{notice?.title ?? 'Loading…'}</h2>
+              </div>
+              <button
+                className="h-8 w-8 shrink-0 rounded-lg text-lg leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                onClick={closeNotice}
+                aria-label="Close the notice"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="px-4 py-3">
+              {noticeError && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{noticeError}</div>}
+              {notice && (
+                <>
+                  <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">{notice.status}</span>
+                    <span className="rounded bg-orange-100 px-1.5 py-0.5 text-orange-700">{notice.priority}</span>
+                    <span className="text-gray-400">{notice.category}</span>
+                    {notice.publishAt && (
+                      <span className="text-gray-400" title={fmtDateTimeYgn(notice.publishAt)}>
+                        · {fmtDateTimeYgn(notice.publishAt)}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    className="rich-content text-sm text-gray-700"
+                    dangerouslySetInnerHTML={{ __html: notice.content }}
+                  />
+                  {(notice.attachments?.length ?? 0) > 0 && (
+                    <div className="mt-3 border-t border-gray-100 pt-3">
+                      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">Attachments</div>
+                      {notice.attachments!.map((f) => (
+                        <a
+                          key={f.id}
+                          href={`/api/attachments/${f.id}/download?token=${encodeURIComponent(getToken() ?? '')}`}
+                          className="block truncate text-sm text-blue-600 hover:underline"
+                        >
+                          📎 {f.filename}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {notice.createdBy && (
+                    <div className="mt-3 text-[11px] text-gray-400">Sent by {notice.createdBy}</div>
+                  )}
+                </>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

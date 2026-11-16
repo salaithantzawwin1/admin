@@ -209,6 +209,46 @@ export class AnnouncementsService {
     return updated;
   }
 
+  /** One notice for reading (the messages tab's side panel, admin detail). */
+  async findOne(id: string) {
+    const a = await this.prisma.announcement.findUnique({
+      where: { id },
+      include: { targets: true, createdBy: { select: { fullName: true } }, attachments: true },
+    });
+    if (!a) throw new NotFoundException('Announcement not found');
+    return {
+      ...a,
+      createdBy: a.createdBy?.fullName ?? null,
+      attachments: a.attachments.map((x) => ({ id: x.id, filename: x.filename, size: x.size, mimeType: x.mimeType })),
+    };
+  }
+
+  /**
+   * "Use as template": copy the text, classification and audience into a fresh
+   * DRAFT. The schedule is cleared and pictures are left behind (the files belong
+   * to the source notice), so nothing can be published by accident.
+   */
+  async duplicate(id: string, actor: Actor) {
+    const a = await this.prisma.announcement.findUnique({ where: { id }, include: { targets: true } });
+    if (!a) throw new NotFoundException('Announcement not found');
+    const copy = await this.create(
+      {
+        title: `${a.title} (copy)`.slice(0, 200),
+        content: a.content,
+        category: a.category,
+        priority: a.priority,
+        targets: a.targets.map((t) => ({ targetType: t.targetType, targetId: t.targetId ?? undefined })),
+      },
+      actor,
+    );
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'ANNOUNCEMENT_DUPLICATED', module: 'ANNOUNCEMENT', recordId: copy.id,
+      newValue: { from: a.code, code: copy.code, audience: a.targets.length },
+    });
+    return copy;
+  }
+
   async remove(id: string, actor: Actor) {
     const a = await this.prisma.announcement.findUnique({ where: { id } });
     if (!a) throw new NotFoundException('Announcement not found');

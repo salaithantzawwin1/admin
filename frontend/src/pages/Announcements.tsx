@@ -5,6 +5,7 @@ import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../compon
 import { RichTextEditor } from '../components/RichTextEditor';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { AnnouncementCalendar } from '../components/AnnouncementCalendar';
 import { toast } from '../components/Toast';
 import { fmtDate as fmtDateYgn, fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
 import { useLiveReload } from '../hooks/useLiveReload';
@@ -12,6 +13,21 @@ import AnnouncementMessages, { ThreadsResponse } from './AnnouncementMessages';
 
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'];
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'];
+
+/** Audience kinds that can be combined in one notice (a department + 3 people). */
+type Kind = 'DEPARTMENT' | 'BRANCH' | 'ROLE' | 'EMPLOYEE';
+const KINDS: { key: Kind; label: string }[] = [
+  { key: 'DEPARTMENT', label: 'Departments' },
+  { key: 'BRANCH', label: 'Branches' },
+  { key: 'ROLE', label: 'Roles' },
+  { key: 'EMPLOYEE', label: 'Employees' },
+];
+const ROLES = ['ADMINISTRATION', 'MANAGEMENT', 'DEPARTMENT_HEAD', 'EMPLOYEE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
+
+interface Picks { ALL: boolean; DEPARTMENT: string[]; BRANCH: string[]; ROLE: string[]; EMPLOYEE: string[] }
+const emptyPicks = (): Picks => ({ ALL: false, DEPARTMENT: [], BRANCH: [], ROLE: [], EMPLOYEE: [] });
+const countPicks = (p: Picks) =>
+  (p.ALL ? 1 : 0) + p.DEPARTMENT.length + p.BRANCH.length + p.ROLE.length + p.EMPLOYEE.length;
 
 const PRIORITY_STYLE: Record<string, string> = {
   NORMAL: 'bg-gray-100 text-gray-600',
@@ -513,6 +529,87 @@ function EmployeePicker({
   );
 }
 
+/**
+ * Compact multi-select for departments, branches and roles — the same list
+ * pattern as the employee picker, without the chips (the summary line below the
+ * audience block already spells the selection out).
+ */
+function Picker({
+  items,
+  value,
+  onChange,
+  empty = 'Nothing to pick',
+}: {
+  items: { id: string; label: string }[];
+  value: string[];
+  onChange: (ids: string[]) => void;
+  empty?: string;
+}) {
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? items.filter((i) => i.label.toLowerCase().includes(needle)) : items;
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-2.5 py-2">
+        <span className="text-xs font-medium text-gray-700">
+          Selected{value.length > 0 && <span className="text-gray-400"> · {value.length}</span>}
+        </span>
+        {value.length > 0 && (
+          <button
+            type="button"
+            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100"
+            onClick={() => onChange([])}
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      {items.length > 4 && (
+        <div className="px-2.5 py-2">
+          <Input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search…"
+            aria-label="Search this list"
+            className="text-xs py-1.5"
+          />
+        </div>
+      )}
+      <div className="max-h-44 overflow-y-auto border-t border-gray-100 px-1 py-1">
+        {shown.length === 0 && <div className="px-2 py-3 text-xs text-gray-400">{empty}</div>}
+        {shown.map((i) => (
+          <label key={i.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50">
+            <input
+              type="checkbox"
+              className="h-4 w-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              checked={value.includes(i.id)}
+              onChange={() => onChange(value.includes(i.id) ? value.filter((x) => x !== i.id) : [...value, i.id])}
+            />
+            <span className="min-w-0 truncate text-gray-800">{i.label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** "3 selections: Administration, 2 employees" — the audience in one line. */
+function audienceSummary(
+  p: Picks,
+  org: { departments: { id: string; name: string }[]; branches: { id: string; name: string }[] },
+) {
+  const parts: string[] = [];
+  if (p.ALL) parts.push('Everyone');
+  const depts = p.DEPARTMENT.map((id) => org.departments.find((d) => d.id === id)?.name).filter(Boolean) as string[];
+  if (depts.length) parts.push(depts.join(', '));
+  const branches = p.BRANCH.map((id) => org.branches.find((b) => b.id === id)?.name).filter(Boolean) as string[];
+  if (branches.length) parts.push(branches.join(', '));
+  if (p.ROLE.length) parts.push(p.ROLE.map(nice).join(', '));
+  if (p.EMPLOYEE.length) parts.push(`${p.EMPLOYEE.length} employee${p.EMPLOYEE.length === 1 ? '' : 's'}`);
+  const n = countPicks(p);
+  return `${n} selection${n === 1 ? '' : 's'}: ${parts.join(' · ')}`;
+}
+
 /** ============ Administration manage view ============ */
 function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   items: Announcement[];
@@ -534,13 +631,15 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'PUBLISHED' | 'DRAFT' | 'SCHEDULED' | 'EXPIRED'>('ALL');
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [search, setSearch] = useState('');
+  const [view, setView] = useState<'list' | 'calendar'>('list');
 
   const [form, setForm] = useState({
     title: '', content: '', category: 'GENERAL', priority: 'NORMAL',
     publishAt: '', endAt: '',
-    targetType: 'ALL' as 'ALL' | 'DEPARTMENT' | 'ROLE' | 'EMPLOYEE' | 'BRANCH',
-    departmentId: '', roleId: 'EMPLOYEE', userIds: [] as string[], branchId: '',
+    picks: emptyPicks(),
   });
+  // which audience list is expanded (the selections live in `form.picks`)
+  const [openKind, setOpenKind] = useState<Kind | null>('EMPLOYEE');
 
   const [org, setOrg] = useState<{ departments: { id: string; name: string }[]; branches: { id: string; name: string }[]; users: { id: string; fullName: string; username: string }[] }>({
     departments: [], branches: [], users: [],
@@ -569,7 +668,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userIds: [], branchId: '' });
+    setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', picks: emptyPicks() });
     setPendingFiles([]);
     setExistingFiles([]);
     setError('');
@@ -597,7 +696,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     setForm({
       title: a.title, content: a.content, category: a.category, priority: a.priority,
       publishAt: '', endAt: a.endAt ? a.endAt.slice(0, 16) : '',
-      targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userIds: [], branchId: '',
+      picks: emptyPicks(),
     });
     setPendingFiles([]);
     setExistingFiles([]);
@@ -629,16 +728,16 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
         ...(form.endAt ? { endAt: new Date(form.endAt).toISOString() } : {}),
       };
       if (!editing) {
-        // one target per person — ticking five colleagues must reach all five
-        const targets: TargetInput[] = form.targetType === 'ALL'
-          ? [{ targetType: 'ALL' }]
-          : form.targetType === 'DEPARTMENT'
-            ? [{ targetType: 'DEPARTMENT', targetId: form.departmentId }]
-            : form.targetType === 'BRANCH'
-              ? [{ targetType: 'BRANCH', targetId: form.branchId }]
-              : form.targetType === 'ROLE'
-                ? [{ targetType: 'ROLE', targetId: form.roleId }]
-                : form.userIds.map((id) => ({ targetType: 'EMPLOYEE', targetId: id }));
+        // Every kind becomes its own target row — a department plus a few people
+        // is one notice with a union audience (the server de-duplicates them).
+        const p = form.picks;
+        const targets: TargetInput[] = [
+          ...(p.ALL ? [{ targetType: 'ALL' }] : []),
+          ...p.DEPARTMENT.map((id) => ({ targetType: 'DEPARTMENT', targetId: id })),
+          ...p.BRANCH.map((id) => ({ targetType: 'BRANCH', targetId: id })),
+          ...p.ROLE.map((r) => ({ targetType: 'ROLE', targetId: r })),
+          ...p.EMPLOYEE.map((id) => ({ targetType: 'EMPLOYEE', targetId: id })),
+        ];
         body.targets = targets;
         const created = await api<{ id: string }>('/announcements', { method: 'POST', body });
         setUploadIds([created.id]);
@@ -704,6 +803,18 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
       reload();
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  /** Template: same text, classification and audience, saved as a fresh draft. */
+  const duplicate = async (a: Announcement) => {
+    try {
+      const copy = await api<{ code: string }>(`/announcements/${a.id}/duplicate`, { method: 'POST' });
+      toast(`Copied to draft ${copy.code} — edit and publish when ready`);
+      setStatusFilter('DRAFT');
+      reload();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not duplicate');
     }
   };
 
@@ -776,6 +887,21 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
               aria-label="Search announcements"
               className="ml-auto w-full text-xs py-1.5 sm:!w-56"
             />
+            <div className="flex items-center rounded-lg bg-gray-100 p-0.5" role="group" aria-label="View">
+              {(['list', 'calendar'] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  aria-pressed={view === v}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    view === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {v === 'list' ? '☰ List' : '▦ Schedule'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -795,11 +921,21 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
         </div>
       )}
 
+      {view === 'calendar' ? (
+        <AnnouncementCalendar
+          items={filtered}
+          onOpen={(hit) => {
+            const full = filtered.find((x) => x.id === hit.id);
+            if (full) openDetail(full);
+          }}
+        />
+      ) : (
       <div className="space-y-3">
         {filtered.map((a) => {
           const audience = a.audienceCount ?? 0;
           const pct = audience > 0 ? Math.round(((a.readCount ?? 0) / audience) * 100) : 0;
           const emptyDept = (a.targetsWithCounts ?? []).find((t) => t.memberCount === 0);
+          const labels = (a.targets ?? []).map((t) => t.targetLabel);
           return (
           <Card key={a.id} className={`px-4 py-3.5 sm:px-5 ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.status === 'EXPIRED' ? 'opacity-70' : ''}`}>
             <div className="flex flex-col gap-2">
@@ -821,8 +957,14 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                 </button>
                 <p className="mt-1 line-clamp-2 text-sm text-gray-600">{plain(a.content)}</p>
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
-                  <span className="inline-flex items-center gap-1" title={(a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target'}>
-                    👥 {audience > 0 ? `${audience} ${audience === 1 ? 'person' : 'people'}` : ((a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target')}
+                  <span className="inline-flex min-w-0 items-center gap-1" title={labels.join(', ') || 'No target'}>
+                    👥 {audience > 0 ? `${audience} ${audience === 1 ? 'person' : 'people'}` : 'no audience'}
+                    {labels.length > 0 && (
+                      <span className="truncate text-gray-500">
+                        · {labels.slice(0, 2).join(', ')}
+                        {labels.length > 2 ? ` +${labels.length - 2}` : ''}
+                      </span>
+                    )}
                   </span>
                   <span className="inline-flex items-center gap-1" title={fmtDate(a.publishAt)}>
                     🗓 {a.status === 'SCHEDULED' ? 'goes out ' : ''}{relTime(a.publishAt) || 'not published'}
@@ -885,6 +1027,14 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                     </>
                   )}
                   <button
+                    className="text-xs text-gray-500 hover:underline"
+                    onClick={() => duplicate(a)}
+                    title="Copy this notice into a new draft (text and audience)"
+                  >
+                    ⧉ Duplicate
+                  </button>
+                  <span className="text-gray-200">·</span>
+                  <button
                     className={`text-xs hover:underline ${a.pinnedAt ? 'text-gray-900 font-semibold' : 'text-gray-400 hover:text-gray-700'}`}
                     onClick={() => togglePin(a)}
                     title={a.pinnedAt ? 'Unpin' : 'Pin to top'}
@@ -908,6 +1058,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
           );
         })}
       </div>
+      )}
 
       {/* create / edit modal */}
       {formOpen && (
@@ -946,46 +1097,97 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                   <span className="text-xs font-medium text-gray-600">Target audience</span>
                   <span className="text-[11px] text-gray-400">who receives it, and gets the Telegram card</span>
                 </div>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <Select value={form.targetType} onChange={(e) => setForm({ ...form, targetType: e.target.value as never })}>
-                    <option value="ALL">Everyone</option>
-                    <option value="DEPARTMENT">Department</option>
-                    <option value="BRANCH">Branch</option>
-                    <option value="ROLE">Role</option>
-                    <option value="EMPLOYEE">Specific employee</option>
-                  </Select>
-                  {form.targetType === 'DEPARTMENT' && (
-                    <Select value={form.departmentId} onChange={(e) => setForm({ ...form, departmentId: e.target.value })}>
-                      <option value="">— choose —</option>
-                      {org.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                    </Select>
-                  )}
-                  {form.targetType === 'BRANCH' && (
-                    <Select value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
-                      <option value="">— choose —</option>
-                      {org.branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                    </Select>
-                  )}
-                  {form.targetType === 'ROLE' && (
-                    <Select value={form.roleId} onChange={(e) => setForm({ ...form, roleId: e.target.value })}>
-                      {['ADMINISTRATION', 'MANAGEMENT', 'DEPARTMENT_HEAD', 'EMPLOYEE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'].map((r) => <option key={r} value={r}>{r.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase())}</option>)}
-                    </Select>
-                  )}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    aria-pressed={form.picks.ALL}
+                    onClick={() => setForm((f) => ({ ...f, picks: { ...f.picks, ALL: !f.picks.ALL } }))}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                      form.picks.ALL ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    Everyone
+                  </button>
+                  {KINDS.map((k) => {
+                    const n = form.picks[k.key].length;
+                    return (
+                      <button
+                        key={k.key}
+                        type="button"
+                        aria-pressed={n > 0}
+                        aria-expanded={openKind === k.key}
+                        onClick={() => setOpenKind(openKind === k.key ? null : k.key)}
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                          n > 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                        }`}
+                      >
+                        {k.label}
+                        {n > 0 && <span className="ml-1 text-white/70">{n}</span>}
+                        <span className="ml-1 text-[10px] opacity-70">{openKind === k.key ? '▴' : '▾'}</span>
+                      </button>
+                    );
+                  })}
                 </div>
-                {form.targetType === 'EMPLOYEE' && (
+
+                {form.picks.ALL && (
+                  <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                    Everyone — every active employee, plus anyone already in the audience.
+                  </p>
+                )}
+
+                {openKind === 'DEPARTMENT' && (
+                  <div className="mt-2">
+                    <Picker
+                      items={org.departments.map((d) => ({ id: d.id, label: d.name }))}
+                      value={form.picks.DEPARTMENT}
+                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, DEPARTMENT: ids } }))}
+                      empty="No department loaded"
+                    />
+                  </div>
+                )}
+                {openKind === 'BRANCH' && (
+                  <div className="mt-2">
+                    <Picker
+                      items={org.branches.map((b) => ({ id: b.id, label: b.name }))}
+                      value={form.picks.BRANCH}
+                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, BRANCH: ids } }))}
+                      empty="No branch loaded"
+                    />
+                  </div>
+                )}
+                {openKind === 'ROLE' && (
+                  <div className="mt-2">
+                    <Picker
+                      items={ROLES.map((r) => ({ id: r, label: nice(r) }))}
+                      value={form.picks.ROLE}
+                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, ROLE: ids } }))}
+                    />
+                  </div>
+                )}
+                {openKind === 'EMPLOYEE' && (
                   <div className="mt-2">
                     <EmployeePicker
                       users={org.users}
-                      value={form.userIds}
-                      onChange={(ids) => setForm((f) => ({ ...f, userIds: ids }))}
+                      value={form.picks.EMPLOYEE}
+                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, EMPLOYEE: ids } }))}
                     />
-                    <p className={`mt-1 text-[11px] ${form.userIds.length === 0 ? 'text-amber-600' : 'text-gray-400'}`}>
-                      {form.userIds.length === 0
-                        ? 'Tick at least one employee — a notice with no audience cannot be published.'
-                        : `${form.userIds.length} employee${form.userIds.length === 1 ? '' : 's'} will receive this notice.`}
-                    </p>
                   </div>
                 )}
+
+                <p className={`mt-1.5 text-[11px] ${countPicks(form.picks) === 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                  {countPicks(form.picks) === 0
+                    ? 'Pick at least one group or employee — a notice with no audience cannot be published.'
+                    : audienceSummary(form.picks, org)}
+                </p>
+              </div>
+            )}
+            {editing && (
+              <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                Audience is fixed after creation:{' '}
+                <span className="font-medium">
+                  {(editing.targets ?? []).map((t) => t.targetLabel).join(', ') || 'no target'}
+                </span>{' '}
+                — duplicate the notice to send it to someone else.
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
@@ -1037,7 +1239,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
               <Button
-                disabled={busy || !form.title || !plain(form.content) || (!editing && form.targetType === 'EMPLOYEE' && form.userIds.length === 0)}
+                disabled={busy || !form.title || !plain(form.content) || (!editing && countPicks(form.picks) === 0)}
                 onClick={submit}
               >
                 {editing ? 'Save' : 'Create'}
@@ -1320,10 +1522,7 @@ export default function Announcements() {
       {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4">{error}</div>}
 
       {tab === 'messages' && canMessages ? (
-        <AnnouncementMessages
-          canManage={canManage}
-          onOpenAnnouncement={(id) => setSearchParams({ ann: id }, { replace: false })}
-        />
+        <AnnouncementMessages canManage={canManage} />
       ) : canManage ? (
         <AdminAnnouncements items={items} reload={load} replyCounts={replyCounts} onOpenMessages={(id) => setSearchParams({ tab: 'messages', ann: id })} />
       ) : (
