@@ -30,6 +30,81 @@ const countPicks = (p: Picks) =>
   (p.ALL ? 1 : 0) + p.DEPARTMENT.length + p.BRANCH.length + p.ROLE.length + p.EMPLOYEE.length;
 
 
+/** A picked file's type — browsers sometimes hand it over empty, and the PDF
+ * viewer will not open a blob it cannot identify. */
+function fileMime(f: File): string {
+  if (f.type) return f.type;
+  const ext = (f.name.toLowerCase().split('.').pop() ?? '').trim();
+  if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  return 'application/octet-stream';
+}
+
+/** A PDF drawn onto canvases. The browser's built-in viewer is refused by our
+ * CSP on some machines and renders blank on others, so we do it ourselves. */
+function PdfPreview({ file, name }: { file: File; name: string }) {
+  const host = useRef<HTMLDivElement | null>(null);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    let pdf: { destroy: () => Promise<void> } | null = null;
+    const drawn: HTMLCanvasElement[] = [];
+
+    void (async () => {
+      try {
+        const pdfjs = await import('pdfjs-dist');
+        const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
+        pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+        // read the bytes here: pdf.js fetching the blob URL is refused by connect-src
+        const data = await file.arrayBuffer();
+        const doc = await pdfjs.getDocument({ data: new Uint8Array(data) }).promise;
+        pdf = doc;
+        const width = Math.max(280, host.current?.clientWidth || 640);
+        for (let n = 1; n <= doc.numPages && !cancelled; n += 1) {
+          const page = await doc.getPage(n);
+          const viewport = page.getViewport({ scale: width / page.getViewport({ scale: 1 }).width });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.floor(viewport.width);
+          canvas.height = Math.floor(viewport.height);
+          canvas.className = 'mb-2 h-auto w-full rounded-lg bg-white ring-1 ring-gray-200';
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('this browser cannot draw the page');
+          host.current?.appendChild(canvas);
+          drawn.push(canvas);
+          await page.render({ canvasContext: context, viewport }).promise;
+        }
+        if (!cancelled) setLoading(false);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'could not read the file');
+          setLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      drawn.forEach((canvas) => canvas.remove());
+      void pdf?.destroy();
+    };
+  }, [file]);
+
+  return (
+    <div className="max-h-[70vh] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-2">
+      {loading && !error && <p className="py-8 text-center text-sm text-gray-400">Opening {name}…</p>}
+      {error && (
+        <p className="py-8 text-center text-sm text-red-500">Could not open this PDF — {error}</p>
+      )}
+      <div ref={host} />
+    </div>
+  );
+}
+
 /** The one thing still missing before this notice can be created (empty = ready). */
 function missingRequirement(title: string, body: string, editing: boolean, picks: Picks): string {
   if (!title.trim()) return 'Add a title first';
@@ -678,7 +753,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
 
   // a picked-but-not-yet-uploaded file, opened in a preview dialog
-  const [pendingPreview, setPendingPreview] = useState<{ url: string; name: string; type: string } | null>(null);
+  const [pendingPreview, setPendingPreview] = useState<{ file: File; url: string; name: string; type: string } | null>(null);
 
   useEffect(() => {
     if (formOpen) setFormTab('content');
@@ -1397,7 +1472,11 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                           <button
                             type="button"
                             className="text-blue-600 hover:underline"
-                            onClick={() => setPendingPreview({ url: URL.createObjectURL(f), name: f.name, type: f.type })}
+                            onClick={() => {
+                              const type = fileMime(f);
+                              const url = URL.createObjectURL(new Blob([f], { type }));
+                              setPendingPreview({ file: f, url, name: f.name, type });
+                            }}
                           >
                             preview
                           </button>
@@ -1448,14 +1527,10 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             <img
               src={pendingPreview.url}
               alt={pendingPreview.name}
-              className="mx-auto max-h-[70vh] w-auto rounded-lg ring-1 ring-gray-200"
+              className="mx-auto max-h-[70vh] w-auto max-w-full rounded-lg ring-1 ring-gray-200"
             />
           ) : (
-            <iframe
-              src={pendingPreview.url}
-              title={pendingPreview.name}
-              className="h-[70vh] w-full rounded-lg border border-gray-200"
-            />
+            <PdfPreview file={pendingPreview.file} name={pendingPreview.name} />
           )}
         </Modal>
       )}
