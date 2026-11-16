@@ -1,6 +1,7 @@
 import { ComponentProps, useCallback, useEffect, useState } from 'react';
 import { api, getToken, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { LicenseHistory } from '../components/LicenseHistory';
 import { LicenseImages } from '../components/LicenseImages';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
@@ -532,6 +533,10 @@ export default function Licenses() {
 
             <div className="mt-5">
               <LicenseImages licenseId={detail.id} canManage={canManage} onChanged={load} />
+            </div>
+
+            <div className="mt-5">
+              <LicenseHistory licenseId={detail.id} />
             </div>
 
             <div className="mt-5 flex justify-end gap-2">

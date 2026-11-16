@@ -93,6 +93,13 @@ export class LicensesController {
     return this.licenses.upcoming(Number.isFinite(window) && window > 0 ? window : 60);
   }
 
+  /** Who renewed this licence, and how the number / due date moved. */
+  @RequirePermissions(PERMISSIONS.LICENSES_READ)
+  @Get(':id/history')
+  history(@Param('id') id: string) {
+    return this.licenses.history(id);
+  }
+
   @RequirePermissions(PERMISSIONS.LICENSES_READ)
   @Get(':id')
   detail(@Req() req, @Param('id') id: string) {

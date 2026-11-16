@@ -229,6 +229,37 @@ export class LicensesService {
     return { ...(manager ? license : this.stripSecrets(license)), status };
   }
 
+  /** Renewal history, rebuilt from the audit trail: old → new registration
+   *  number and due date, with who made the change. A licence is renewed by
+   *  editing those two fields, so an entry that changed neither (a note, a
+   *  password) is not part of the history. */
+  async history(id: string) {
+    await this.row(id);
+    const entries = await this.prisma.auditLog.findMany({
+      where: { module: 'LICENSES', recordId: id, action: { in: ['LICENSE_CREATED', 'LICENSE_UPDATED'] } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, action: true, username: true, createdAt: true, oldValue: true, newValue: true },
+    });
+    // audit JSON keeps a date as its ISO string
+    const day = (value: unknown) =>
+      typeof value === 'string' && value ? value.slice(0, 10) : value instanceof Date ? value.toISOString().slice(0, 10) : null;
+    return entries
+      .map((entry) => {
+        const before = (entry.oldValue ?? {}) as Record<string, unknown>;
+        const after = (entry.newValue ?? {}) as Record<string, unknown>;
+        const changes = [
+          {
+            label: 'Registration No.',
+            from: (before.registrationNo as string | null) ?? null,
+            to: (after.registrationNo as string | null) ?? null,
+          },
+          { label: 'Due date', from: day(before.dueDate), to: day(after.dueDate) },
+        ].filter((change) => change.from !== change.to);
+        return { id: entry.id, action: entry.action, at: entry.createdAt, username: entry.username, changes };
+      })
+      .filter((entry) => entry.changes.length > 0);
+  }
+
   async create(input: LicenseInput, actor: Actor) {
     const name = this.clean(input.name);
     if (!name) throw new BadRequestException('Company name is required');
