@@ -4,7 +4,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { LicenseImages } from '../components/LicenseImages';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
-import { Badge, Button, Empty, Input, PageHeader, Select, Table, Textarea } from '../components/ui';
+import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { fmtDate } from '../util/yangonTime';
 
 interface License {
@@ -72,15 +72,28 @@ function daysLeft(due: string | null, today: string): number | null {
   return Math.round((dueMs - todayMs) / 86_400_000);
 }
 
+type BadgeColor = 'green' | 'red' | 'gray' | 'blue' | 'yellow' | 'orange' | 'teal';
+
+/** One colour scale for every due-date pill (table and phone cards). */
+function dueColor(days: number | null): BadgeColor {
+  if (days === null) return 'gray';
+  if (days < 0) return 'red';
+  return days <= 60 ? 'orange' : days <= 180 ? 'yellow' : 'green';
+}
+
+function dueLabel(days: number | null): string {
+  if (days === null) return 'No due date';
+  if (days < 0) return `Expired ${Math.abs(days)} d ago`;
+  return days === 0 ? 'Expires today' : `${days} d left`;
+}
+
 function DueBadge({ due, today }: { due: string | null; today: string }) {
   const days = daysLeft(due, today);
   if (!due || days === null) return <span className="text-xs text-gray-400">No due date</span>;
-  const color = days < 0 ? 'red' : days <= 60 ? 'orange' : days <= 180 ? 'yellow' : 'green';
-  const label = days < 0 ? `Expired ${Math.abs(days)} d ago` : days === 0 ? 'Expires today' : `${days} d left`;
   return (
     <div className="flex flex-col gap-1">
       <span className="text-gray-800">{fmtDate(due)}</span>
-      <Badge color={color}>{label}</Badge>
+      <Badge color={dueColor(days)}>{dueLabel(days)}</Badge>
     </div>
   );
 }
@@ -284,41 +297,118 @@ export default function Licenses() {
       ) : visible.length === 0 ? (
         <Empty label={rows.length === 0 ? 'No license yet — use “+ Add license”' : 'No license matches this filter'} />
       ) : (
-        <Table head={['COMPANY', 'REGISTRATION NO.', 'START', 'DUE', 'PICTURES', 'ACTIONS']}>
-          {visible.map((row) => (
-            <tr key={row.id} className="hover:bg-gray-50">
-              <td className="px-4 py-3 first:pl-5">
-                <button type="button" onClick={() => void openDetail(row)} className="text-left font-medium text-gray-800 hover:underline">
-                  {row.name}
-                </button>
-                {row.myanmarName && <div className="text-xs text-gray-500">{row.myanmarName}</div>}
-              </td>
-              <td className="px-4 py-3 text-gray-700">{row.registrationNo || '—'}</td>
-              <td className="px-4 py-3 text-gray-600">{fmtDate(row.startDate)}</td>
-              <td className="px-4 py-3"><DueBadge due={row.dueDate} today={today} /></td>
-              <td className="px-4 py-3 text-center">
-                <button
-                  type="button"
-                  onClick={() => void openDetail(row)}
-                  title="Open the license card to add or view its pictures"
-                  className="text-gray-700 hover:underline"
-                >
-                  🗂️ {row._count?.images ?? 0}/5
-                </button>
-              </td>
-              <td className="px-4 py-3">
-                {canManage ? (
-                  <div className="flex justify-center gap-2">
-                    <Button variant="ghost" onClick={() => void openEdit(row)}>Edit</Button>
-                    <Button variant="danger" onClick={() => setDeleting(row)}>Delete</Button>
+        <>
+          {/* Phones: six columns never fit 349px — one card per licence. */}
+          <ul className="space-y-2 sm:hidden">
+            {visible.map((row) => {
+              const days = daysLeft(row.dueDate, today);
+              return (
+                <li key={row.id} className="rounded-xl border border-gray-200 bg-white p-3 shadow-card">
+                  <div className="flex items-start justify-between gap-2">
+                    <button type="button" onClick={() => void openDetail(row)} className="min-w-0 text-left">
+                      <span className="block truncate font-medium text-gray-800">{row.name}</span>
+                      <span className="block truncate text-xs text-gray-500">
+                        {row.registrationNo || 'No registration no.'}
+                        {row.myanmarName ? ` · ${row.myanmarName}` : ''}
+                      </span>
+                    </button>
+                    <Badge color={dueColor(days)}>{days === null ? 'No due' : days < 0 ? `${-days} d ago` : `${days} d`}</Badge>
                   </div>
-                ) : (
-                  <span className="block text-center text-gray-400">—</span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </Table>
+                  <div className="mt-2 flex items-center justify-between text-xs text-gray-500">
+                    <span>Due {fmtDate(row.dueDate)}</span>
+                    <button type="button" onClick={() => void openDetail(row)} className="hover:underline">
+                      🗂️ {row._count?.images ?? 0}/5
+                    </button>
+                  </div>
+                  {canManage && (
+                    <div className="mt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void openEdit(row)}
+                        className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDeleting(row)}
+                        className="rounded-lg border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+
+          {/* Tablet + desktop: registration and start date return at lg, where
+              there is finally room for all six columns. */}
+          <div className="hidden sm:block">
+            <Card>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50/70 text-left text-xs uppercase tracking-wider text-gray-500">
+                    <th className="px-3 py-2.5 pl-4 font-semibold">Company</th>
+                    <th className="hidden px-3 py-2.5 font-semibold lg:table-cell">Registration No.</th>
+                    <th className="hidden px-3 py-2.5 font-semibold lg:table-cell">Start</th>
+                    <th className="px-3 py-2.5 font-semibold">Due</th>
+                    <th className="px-3 py-2.5 text-center font-semibold">Pics</th>
+                    <th className="px-3 py-2.5 pr-4 text-center font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {visible.map((row) => (
+                    <tr key={row.id} className="hover:bg-gray-50">
+                      <td className="px-3 py-2.5 pl-4">
+                        <button type="button" onClick={() => void openDetail(row)} className="text-left font-medium text-gray-800 hover:underline">
+                          {row.name}
+                        </button>
+                        {row.myanmarName && <div className="text-xs text-gray-500">{row.myanmarName}</div>}
+                      </td>
+                      <td className="hidden px-3 py-2.5 text-gray-700 lg:table-cell">{row.registrationNo || '—'}</td>
+                      <td className="hidden px-3 py-2.5 text-gray-600 lg:table-cell">{fmtDate(row.startDate)}</td>
+                      <td className="px-3 py-2.5"><DueBadge due={row.dueDate} today={today} /></td>
+                      <td className="px-3 py-2.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => void openDetail(row)}
+                          title="Open the license card to add or view its pictures"
+                          className="text-gray-700 hover:underline"
+                        >
+                          🗂️ {row._count?.images ?? 0}/5
+                        </button>
+                      </td>
+                      <td className="px-3 py-2.5 pr-4">
+                        {canManage ? (
+                          <div className="flex justify-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => void openEdit(row)}
+                              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleting(row)}
+                              className="rounded-lg border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="block text-center text-gray-400">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          </div>
+        </>
       )}
 
       {/* ---------------- create / edit ---------------- */}
