@@ -114,10 +114,11 @@ export function LicenseImages({ licenseId, canManage, onChanged }: {
   const [preview, setPreview] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // Never clears `error` here: an upload finishes with a message of its own
+  // ("the rest were skipped") that the reload that follows must not wipe.
   const reload = useCallback(async () => {
     try {
       setImages(await api<LicenseImageMeta[]>(`/licenses/${licenseId}/images`));
-      setError('');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load pictures');
       setImages([]);
