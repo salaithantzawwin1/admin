@@ -43,3 +43,25 @@ export function fmtShort(v: D): string {
   const parts = Object.fromEntries(fShort.formatToParts(new Date(v)).map((p) => [p.type, p.value]));
   return `${parts.day}/${parts.month} ${parts.hour}:${parts.minute}`;
 }
+/** "2026-11-20T11:30" — a <input type="datetime-local"> value in Yangon wall
+ * clock. Slicing the ISO string would put UTC in the field, so every save would
+ * shift the time by the office offset. */
+export function fmtDateTimeInput(v: D): string {
+  if (!v) return '';
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: YANGON_TZ,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+      .formatToParts(new Date(v))
+      .map((p) => [p.type, p.value]),
+  );
+  // some engines render midnight as 24
+  const hour = parts.hour === '24' ? '00' : parts.hour;
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}`;
+}

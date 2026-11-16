@@ -7,7 +7,7 @@ import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AnnouncementCalendar } from '../components/AnnouncementCalendar';
 import { toast } from '../components/Toast';
-import { fmtDate as fmtDateYgn, fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
+import { fmtDate as fmtDateYgn, fmtDateTime as fmtDateTimeYgn, fmtDateTimeInput } from '../util/yangonTime';
 import { useLiveReload } from '../hooks/useLiveReload';
 import AnnouncementMessages, { ThreadsResponse } from './AnnouncementMessages';
 
@@ -162,6 +162,9 @@ interface ReadStats {
   /** every target with their own read/ack time — the chase list (F3) */
   people?: ReadPerson[];
 }
+
+/** The server refuses anything larger; checking here keeps it visible. */
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 const fmtSize = (n: number) => (n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 
@@ -763,6 +766,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   const [publishFor, setPublishFor] = useState<Announcement | null>(null);
   const [statsFor, setStatsFor] = useState<Announcement | null>(null);
   const [stats, setStats] = useState<ReadStats | null>(null);
+  const [statsError, setStatsError] = useState('');
   const [peopleFilter, setPeopleFilter] = useState<'ALL' | 'NOT_ACKED' | 'UNREAD'>('ALL');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -853,18 +857,29 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   /** Upload files for a created/edited announcement (best-effort — name+content already saved). */
   const uploadFiles = async (announcementId: string) => {
+    // the notice is already saved, so a failed upload must be reported by name —
+    // otherwise the admin believes the photo went out with it
+    const failed: string[] = [];
     for (const f of pendingFiles) {
       const fd = new FormData();
       fd.append('file', f);
       try {
-        await fetch(`/api/attachments/upload?announcementId=${announcementId}`, {
+        const res = await fetch(`/api/attachments/upload?announcementId=${announcementId}`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${getToken()}` },
           body: fd,
         });
-      } catch { /* surface nothing — the announcement itself is saved */ }
+        if (!res.ok) failed.push(f.name);
+      } catch {
+        failed.push(f.name);
+      }
     }
     setPendingFiles([]);
+    if (failed.length > 0) {
+      toast(
+        `Announcement saved, but ${failed.length} file${failed.length === 1 ? '' : 's'} could not be uploaded: ${failed.join(', ')}`,
+      );
+    }
   };
 
   const openEdit = (a: Announcement) => {
@@ -872,7 +887,8 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     setPreview(null);
     setForm({
       title: a.title, content: a.content, category: a.category, priority: a.priority,
-      publishAt: '', endAt: a.endAt ? a.endAt.slice(0, 16) : '',
+      // keep both in Yangon wall clock — the expiry is compared against publishAt
+      publishAt: fmtDateTimeInput(a.publishAt), endAt: fmtDateTimeInput(a.endAt),
       picks: emptyPicks(),
     });
     setPendingFiles([]);
@@ -889,6 +905,9 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     loadFiles(a.id);
   };
 
+  // the shared ?ann=<id> link is copied from this very list, so it has to open here
+  useDeepLink(items, (a) => openDetail(a));
+
   // end-before-publish is mirrored client-side so the To field flags instantly;
   // the same server message is attributed to the field when the API rejects it
   const endAtFieldError =
@@ -901,7 +920,8 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     try {
       const body: Record<string, unknown> = {
         title: form.title, content: form.content, category: form.category, priority: form.priority,
-        ...(form.publishAt ? { publishAt: new Date(form.publishAt).toISOString() } : {}),
+        // publishAt is fixed once the notice exists: the PATCH does not accept it
+        ...(!editing && form.publishAt ? { publishAt: new Date(form.publishAt).toISOString() } : {}),
         ...(form.endAt ? { endAt: new Date(form.endAt).toISOString() } : {}),
       };
       if (!editing) {
@@ -948,6 +968,9 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     try {
       await api(`/announcements/${deleteFor.id}`, { method: 'DELETE' });
       toast('Deleted');
+      // anything still showing this notice must go with it
+      if (detailFor?.id === deleteFor.id) setDetailFor(null);
+      if (statsFor?.id === deleteFor.id) setStatsFor(null);
       setDeleteFor(null);
       reload();
     } catch (e) {
@@ -959,10 +982,13 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   const showStats = async (a: Announcement) => {
     setStatsFor(a);
     setStats(null);
+    setStatsError('');
     setPeopleFilter('ALL');
     try {
       setStats(await api<ReadStats>(`/announcements/${a.id}/read-stats`));
-    } catch { /* modal shows null state */ }
+    } catch (e) {
+      setStatsError(e instanceof Error ? e.message : 'Could not load the read stats');
+    }
   };
 
   const togglePin = async (a: Announcement) => {
@@ -1425,6 +1451,17 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             <div role="tabpanel" id="ann-panel-delivery" aria-labelledby="ann-tab-delivery" className="space-y-4">
               {editing && (
                 <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  {editing.status === 'SCHEDULED' ? (
+                    <>Scheduled to go out {fmtDate(editing.publishAt)} — “Publish now” sends it immediately.</>
+                  ) : editing.status === 'PUBLISHED' ? (
+                    <>Published {fmtDate(editing.publishAt)} — the send date cannot be moved afterwards.</>
+                  ) : (
+                    <>Still a draft — publish it from the list when you are ready.</>
+                  )}
+                </div>
+              )}
+              {editing && (
+                <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
                   Audience is fixed after creation:{' '}
                   <span className="font-medium">
                     {(editing.targets ?? []).map((t) => t.targetLabel).join(', ') || 'no target'}
@@ -1454,13 +1491,17 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                     className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-gray-100 file:text-gray-700 file:cursor-pointer hover:file:bg-gray-200"
                     onChange={(e) => {
                       const picked = Array.from(e.target.files ?? []);
-                      if (picked.length + pendingFiles.length > 10) {
+                      e.target.value = '';
+                      const tooBig = picked.filter((f) => f.size > MAX_FILE_BYTES);
+                      if (tooBig.length > 0) {
+                        toast(`Max 10 MB each — skipped ${tooBig.map((f) => f.name).join(', ')}`);
+                      }
+                      const fits = picked.filter((f) => f.size <= MAX_FILE_BYTES);
+                      if (fits.length + pendingFiles.length > 10) {
                         toast('Up to 10 files per announcement');
-                        e.target.value = '';
                         return;
                       }
-                      setPendingFiles((prev) => [...prev, ...picked]);
-                      e.target.value = '';
+                      if (fits.length > 0) setPendingFiles((prev) => [...prev, ...fits]);
                     }}
                   />
                   {pendingFiles.length > 0 && (
@@ -1666,6 +1707,13 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                   </div>
                 </div>
               )}
+            </div>
+          ) : statsError ? (
+            <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              {statsError}{' '}
+              <button className="underline" onClick={() => statsFor && showStats(statsFor)}>
+                Retry
+              </button>
             </div>
           ) : (
             <div className="text-sm text-gray-400">Loading…</div>
