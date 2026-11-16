@@ -9,6 +9,7 @@ import { PERMISSIONS } from '../auth/permissions';
 import { Actor } from '../org/org.service';
 import { sniffImageType } from '../util/image-sniff';
 import { stripPhotoMetadata } from '../assets/photo-metadata';
+import { daysUntilExpiry, ymd } from '../fleet/expiry';
 
 /** Scans kept per license — mirrors the "up to 5" promise in the UI. */
 export const LICENSE_IMAGE_MAX = 5;
@@ -138,6 +139,56 @@ export class LicensesService {
       include: { _count: { select: { images: true } } },
     });
     return rows.map((row) => this.stripSecrets(row));
+  }
+
+  /** Licences due within `days` — including any already overdue — soonest
+   *  first, for the dashboard card and the reminder sweep. */
+  async upcoming(days: number) {
+    const now = new Date();
+    const rows = await this.prisma.importExportLicense.findMany({
+      where: { dueDate: { not: null } },
+      orderBy: { dueDate: 'asc' },
+      select: { id: true, name: true, registrationNo: true, dueDate: true, status: true },
+    });
+    return rows
+      .map((row) => ({ ...row, daysLeft: daysUntilExpiry(row.dueDate as Date, now) }))
+      .filter((row) => row.daysLeft <= days);
+  }
+
+  /** Renewal planning: every licence in due-date order as CSV (BOM so Excel
+   *  reads the Burmese names). The portal logins are deliberately left out —
+   *  a planning sheet gets mailed around. */
+  async csv() {
+    const now = new Date();
+    const rows = await this.prisma.importExportLicense.findMany({
+      orderBy: [{ dueDate: { sort: 'asc', nulls: 'last' } }, { name: 'asc' }],
+      include: { _count: { select: { images: true } } },
+    });
+    const head = ['Company', 'Myanmar name', 'Registration No.', 'Company Limited', 'Start date', 'Due date', 'Days left', 'Status', 'Email', 'Pictures'];
+    const cell = (value: unknown) => {
+      const text = value === null || value === undefined ? '' : String(value);
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const lines = [head.map(cell).join(',')];
+    for (const row of rows) {
+      lines.push(
+        [
+          row.name,
+          row.myanmarName,
+          row.registrationNo,
+          row.companyLimited,
+          row.startDate ? ymd(row.startDate) : '',
+          row.dueDate ? ymd(row.dueDate) : '',
+          row.dueDate ? daysUntilExpiry(row.dueDate, now) : '',
+          row.status,
+          row.email,
+          row._count.images,
+        ]
+          .map(cell)
+          .join(','),
+      );
+    }
+    return '\uFEFF' + lines.join('\r\n') + '\r\n';
   }
 
   /** One licence — with its portal logins when the caller may edit the register. */

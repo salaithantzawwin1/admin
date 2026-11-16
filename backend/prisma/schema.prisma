@@ -328,6 +328,8 @@ enum NotificationType {
   CANCELLED
   ANNOUNCEMENT
   VEHICLE_DOC_EXPIRY
+  /// import/export licence nearing its due date (60/30-day sweep)
+  LICENSE_EXPIRY
   /// approved car request passed its start time with no vehicle — one ping to Administration
   ADMIN_UNASSIGNED
 }

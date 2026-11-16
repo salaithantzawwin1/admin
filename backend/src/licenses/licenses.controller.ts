@@ -70,6 +70,23 @@ export class LicensesController {
     return this.licenses.list(q || undefined);
   }
 
+  /** Renewal planning download — due-date order, before the :id routes. */
+  @RequirePermissions(PERMISSIONS.LICENSES_READ)
+  @Get('export.csv')
+  async csv(@Res() res: Response) {
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="import-export-licenses-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(await this.licenses.csv());
+  }
+
+  /** Dashboard feed: licences due within (and including) `days`. */
+  @RequirePermissions(PERMISSIONS.LICENSES_READ)
+  @Get('upcoming')
+  upcoming(@Query('days') days?: string) {
+    const window = Number(days);
+    return this.licenses.upcoming(Number.isFinite(window) && window > 0 ? window : 60);
+  }
+
   @RequirePermissions(PERMISSIONS.LICENSES_READ)
   @Get(':id')
   detail(@Req() req, @Param('id') id: string) {

@@ -1,5 +1,5 @@
 import { ComponentProps, useCallback, useEffect, useMemo, useState } from 'react';
-import { api, hasPermission } from '../api';
+import { api, getToken, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { LicenseImages } from '../components/LicenseImages';
 import { Modal } from '../components/Modal';
@@ -209,6 +209,24 @@ export default function Licenses() {
     load();
   };
 
+  /** Renewal planning: the whole register as CSV, due-date order (server). */
+  const downloadCsv = async () => {
+    try {
+      const res = await fetch('/api/licenses/export.csv', {
+        headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+      });
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      const url = URL.createObjectURL(await res.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `import-export-licenses-${today}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Download failed');
+    }
+  };
+
   const openDetail = async (row: License) => {
     setShowSecrets(false);
     setDetail(row);
@@ -235,7 +253,12 @@ export default function Licenses() {
       <PageHeader
         title="Import / Export Licenses"
         subtitle="Company licenses, registration dates and the scanned certificate pictures"
-        actions={canManage ? <Button onClick={openCreate}>+ Add license</Button> : undefined}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
+            {canManage && <Button onClick={openCreate}>+ Add license</Button>}
+          </div>
+        }
       />
 
       <div className="mb-4 flex flex-wrap items-end gap-3">

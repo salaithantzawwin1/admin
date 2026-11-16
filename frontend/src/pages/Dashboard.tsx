@@ -2,10 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, getUser, hasPermission } from '../api';
 import { Badge, Card } from '../components/ui';
+import { fmtDate } from '../util/yangonTime';
 
 interface AnnouncementItem {
   id: string; code: string; title: string; priority: string;
   requiresAck: boolean; read?: boolean; acked?: string | null;
+}
+
+interface LicenseAlert {
+  id: string;
+  name: string;
+  registrationNo: string | null;
+  dueDate: string;
+  daysLeft: number;
 }
 
 interface MovementRow {
@@ -27,6 +36,7 @@ export default function Dashboard() {
   const [docAlertCount, setDocAlertCount] = useState<number | null>(null);
   const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
   const [movements, setMovements] = useState<MovementRow[] | null>(null);
+  const [licenseAlerts, setLicenseAlerts] = useState<LicenseAlert[] | null>(null);
 
   const load = useCallback(() => {
     if (hasPermission('approvals.act')) {
@@ -61,6 +71,12 @@ export default function Dashboard() {
         .then((r) => setMovements(r.top))
         .catch(() => setMovements(null));
     }
+    // import/export licences due in the next 60 days (the reminder window)
+    if (hasPermission('licenses.read')) {
+      api<LicenseAlert[]>('/licenses/upcoming?days=60')
+        .then(setLicenseAlerts)
+        .catch(() => setLicenseAlerts(null));
+    }
     // VMS spec §13.1 — document-expiry alerts (reg / insurance / driver licences)
     if (hasPermission('fleet.read')) {
       api<{ status: string }[]>('/fleet/expiry-alerts')
@@ -81,6 +97,7 @@ export default function Dashboard() {
   const canAssign = hasPermission('cars.assign');
   const canAssignRooms = hasPermission('meeting-rooms.assign');
   const canSeeFleet = hasPermission('fleet.read');
+  const canSeeLicenses = hasPermission('licenses.read');
 
   return (
     <div>
@@ -119,6 +136,15 @@ export default function Dashboard() {
               </Card>
             </Link>
           )}
+          {canSeeLicenses && (
+            <Link to="/licenses" className="block">
+              <Card className="p-5 hover:border-blue-300 transition-colors h-full">
+                <div className="text-sm text-gray-500">🛂 Licenses renewing (60d)</div>
+                <div className="text-2xl font-bold text-gray-800 mt-1">{licenseAlerts?.length ?? '—'}</div>
+                <div className="text-xs text-gray-400 mt-2">Import/export licenses due soon →</div>
+              </Card>
+            </Link>
+          )}
           {hasPermission('meeting-rooms.assign') && (
             <Link to="/meeting-rooms" className="block">
               <Card className="p-5 hover:border-blue-300 transition-colors h-full">
@@ -154,6 +180,35 @@ export default function Dashboard() {
           </Link>
         )}
       </div>
+
+      {/* Import/export licenses due soon — the renewal list the reminder sweep feeds */}
+      {canSeeLicenses && licenseAlerts !== null && licenseAlerts.length > 0 && (
+        <div className="mt-8">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-600">🛂 Licenses renewing soon</h2>
+            <Link to="/licenses" className="text-xs text-blue-600 hover:underline">Open register →</Link>
+          </div>
+          <Card className="p-4">
+            <ul className="divide-y divide-gray-100">
+              {licenseAlerts.slice(0, 5).map((a) => (
+                <li key={a.id} className="flex items-center gap-3 py-2 text-sm">
+                  <span className="min-w-0 flex-1 truncate">
+                    <span className="font-medium text-gray-800">{a.name}</span>
+                    {a.registrationNo && <span className="ml-2 text-xs text-gray-400">{a.registrationNo}</span>}
+                  </span>
+                  <span className="shrink-0 text-xs text-gray-500">{fmtDate(a.dueDate)}</span>
+                  <Badge color={a.daysLeft < 0 ? 'red' : a.daysLeft <= 30 ? 'orange' : 'yellow'}>
+                    {a.daysLeft < 0 ? `expired ${-a.daysLeft}d ago` : `${a.daysLeft} d`}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+            {licenseAlerts.length > 5 && (
+              <p className="pt-3 text-xs text-gray-400">+{licenseAlerts.length - 5} more in the register</p>
+            )}
+          </Card>
+        </div>
+      )}
 
       {/* Inventory stock movement — top-5 most-issued items in the last 30 days */}
       {hasPermission('inventory.read') && movements !== null && movements.length > 0 && (
