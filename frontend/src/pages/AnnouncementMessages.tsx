@@ -4,6 +4,7 @@ import { api, getToken } from '../api';
 import { Badge, Button, Empty, Input, PageLoader } from '../components/ui';
 import { toast } from '../components/Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
+import { useFocusTrap, useScrollLock } from '../components/Modal';
 import { fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
 
 /** One announcement thread (or the General bucket) as `GET /messages/threads` returns it. */
@@ -71,6 +72,21 @@ const HANDLED_LABEL: Record<string, string> = {
   COMMAND: 'command',
 };
 
+/** ENUM_VALUE → "Enum value": a badge should read like a word, not a database dump. */
+const titleCase = (s: string) => s.toLowerCase().replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+
+/** What the bot did with a message, in words — a reply to a notice has no bot action of its own. */
+const handledText = (handledBy: string) =>
+  HANDLED_LABEL[handledBy] ?? (handledBy === 'ANNOUNCEMENT_REPLY' ? 'reply to a notice' : 'nothing yet');
+
+/** Priority → badge colour; an EMERGENCY must never look like a NORMAL. */
+const PRIORITY_COLOR: Record<string, 'gray' | 'blue' | 'orange' | 'red'> = {
+  NORMAL: 'gray',
+  IMPORTANT: 'blue',
+  URGENT: 'orange',
+  EMERGENCY: 'red',
+};
+
 /** "2h ago" with the full Yangon timestamp on hover. */
 const relTime = (s: string | null) => {
   if (!s) return '';
@@ -85,6 +101,76 @@ const relTime = (s: string | null) => {
 };
 
 const initial = (name: string | null) => (name?.trim()?.[0] ?? '?').toUpperCase();
+
+/** One label/value pair in the preview's fact grid. */
+function PreviewFact({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400">{label}</dt>
+      <dd className={`mt-0.5 break-words ${mono ? 'font-mono text-[11px] text-gray-500' : 'text-xs text-gray-700'}`}>
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * The message itself. The value is what the admin opened the panel for, so a
+ * short one (an odometer reading, an ETA, a reject code) is set large and
+ * tabular; prose keeps the normal reading size.
+ */
+function MessageBody({ message }: { message: MessageRow }) {
+  const text = message.text?.trim() ?? '';
+  if (text) {
+    const hero = text.length <= 24;
+    return (
+      <p
+        className={
+          hero
+            ? 'whitespace-pre-wrap break-words text-2xl font-semibold leading-tight tracking-tight text-gray-900 tabular-nums'
+            : 'whitespace-pre-wrap break-words text-[15px] leading-relaxed text-gray-800'
+        }
+      >
+        {text}
+      </p>
+    );
+  }
+  if (message.photo) {
+    const size =
+      message.photo.width && message.photo.height ? `${message.photo.width}×${message.photo.height}px · ` : '';
+    return (
+      <div className="flex items-center gap-3">
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white text-lg ring-1 ring-gray-200"
+          aria-hidden="true"
+        >
+          🖼
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-gray-800">Photo</div>
+          <div className="text-xs text-gray-400">{size}the bot keeps the file reference, not the image</div>
+        </div>
+      </div>
+    );
+  }
+  if (message.documentName) {
+    return (
+      <div className="flex items-center gap-3">
+        <span
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white text-lg ring-1 ring-gray-200"
+          aria-hidden="true"
+        >
+          📄
+        </span>
+        <div className="min-w-0">
+          <div className="break-words text-sm font-semibold text-gray-800">{message.documentName}</div>
+          <div className="text-xs text-gray-400">the bot keeps the file reference, not the file</div>
+        </div>
+      </div>
+    );
+  }
+  return <p className="text-sm text-gray-400">No text — the bot stored only the file reference.</p>;
+}
 
 /**
  * Subscriber messages tab (plan §9.3 / P6).
@@ -134,9 +220,15 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
   const [busy, setBusy] = useState(false);
   // selected message → preview panel (clicking a bubble means "show me this")
   const [previewId, setPreviewId] = useState<string | null>(null);
+  // both drawers behave like every other dialog in the app: page scroll locked
+  // while either is open, Tab trapped inside, focus returned to its trigger
+  const previewTrap = useFocusTrap<HTMLDivElement>(!!previewId);
 
   // ---- notice side panel: read the announcement without leaving the inbox
   const noticeId = searchParams.get('notice');
+
+  const noticeTrap = useFocusTrap<HTMLDivElement>(!!noticeId);
+  useScrollLock(!!previewId || !!noticeId);
   const [notice, setNotice] = useState<NoticeDetail | null>(null);
   const [noticeError, setNoticeError] = useState('');
 
@@ -586,15 +678,30 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
         )}
       </section>
 
-      {/* ---------- one message, in full ---------- */}
+                  {/* ---------- one message, in full ---------- */}
       {previewMessage && (
-        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label="Message preview">
-          <div className="absolute inset-0 bg-black/20" onClick={() => setPreviewId(null)} />
-          <aside className="relative flex h-full w-full max-w-sm flex-col overflow-y-auto border-l border-gray-200 bg-white shadow-2xl">
-            <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-gray-100 bg-white px-4 py-3">
-              <h2 className="flex-1 text-sm font-semibold text-gray-900">Message preview</h2>
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-3 sm:p-4"
+          onMouseDown={() => setPreviewId(null)}
+        >
+          <div
+            ref={previewTrap}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="message-preview-title"
+            className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-xl bg-white shadow-xl outline-none animate-[modalIn_.15s_ease-out]"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-start gap-2 border-b border-gray-100 px-4 py-3 sm:px-5">
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Message preview</div>
+                <h2 id="message-preview-title" className="truncate text-sm font-semibold text-gray-900">
+                  {headerTitle}
+                </h2>
+              </div>
               <button
-                className="h-8 w-8 rounded-lg text-lg leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                className="h-9 w-9 shrink-0 rounded-lg text-xl leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                 onClick={() => setPreviewId(null)}
                 aria-label="Close the preview"
               >
@@ -602,65 +709,59 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
               </button>
             </header>
 
-            <div className="px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600">
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gold/15 text-sm font-semibold text-gold-dark">
                   {initial(previewMessage.sender.name)}
                 </span>
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-gray-900">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-semibold text-gray-900">
                     {previewMessage.sender.name ?? 'Unlinked chat'}
                   </div>
-                  <div className="text-xs text-gray-400">
-                    {previewMessage.sender.department ?? 'no department'}
-                    {!previewMessage.sender.linked && ' · not linked to an AMS user'}
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-gray-500">
+                    <span>{previewMessage.sender.department ?? 'No department'}</span>
+                    {!previewMessage.sender.linked && (
+                      <Badge color="orange" title="This Telegram chat is not bound to an AMS user or driver">
+                        Not linked
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
 
-              <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
-                <span className="rounded bg-gray-100 px-1.5 py-0.5">{previewMessage.kind}</span>
-                {HANDLED_LABEL[previewMessage.handledBy] && (
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5">
-                    {HANDLED_LABEL[previewMessage.handledBy]}
-                  </span>
-                )}
-                {previewMessage.state === 'NEW' ? (
-                  <span className="rounded bg-blue-50 px-1.5 py-0.5 font-medium text-blue-700">NEW</span>
-                ) : (
-                  <span className="rounded bg-gray-100 px-1.5 py-0.5">read</span>
-                )}
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                <Badge color="gray">{titleCase(previewMessage.kind)}</Badge>
+                {previewMessage.state === 'NEW' ? <Badge color="blue">New</Badge> : <Badge color="gray">Read</Badge>}
+                {previewMessage.ackAt && <Badge color="green">✓ Acknowledged</Badge>}
+              </div>
+
+              <div className="mt-3 rounded-xl border border-gray-200 border-l-4 border-l-gold bg-gray-50/70 px-4 py-3">
+                <MessageBody message={previewMessage} />
+              </div>
+
+              <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                <PreviewFact
+                  label="Received"
+                  value={fmtDateTimeYgn(previewMessage.receivedAt)}
+                />
+                <PreviewFact
+                  label="Read"
+                  value={previewMessage.readAt ? fmtDateTimeYgn(previewMessage.readAt) : 'Not read yet'}
+                />
+                <PreviewFact label="Handled by" value={handledText(previewMessage.handledBy)} />
                 {previewMessage.ackAt && (
-                  <span className="rounded bg-green-50 px-1.5 py-0.5 text-green-700">✓ acked</span>
+                  <PreviewFact label="Acknowledged" value={fmtDateTimeYgn(previewMessage.ackAt)} />
                 )}
-              </div>
+                <PreviewFact label="Telegram chat" value={previewMessage.chatId} mono />
+                {previewMessage.messageId && <PreviewFact label="Message id" value={previewMessage.messageId} mono />}
+              </dl>
+            </div>
 
-              <div className="mt-2 text-xs text-gray-400">
-                {fmtDateTimeYgn(previewMessage.receivedAt)}
-                <span className="text-gray-300"> · chat {previewMessage.chatId}</span>
-              </div>
-
-              <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2 text-sm text-gray-800">
-                {previewMessage.text ? (
-                  <p className="whitespace-pre-wrap break-words">{previewMessage.text}</p>
-                ) : previewMessage.photo ? (
-                  <p className="text-gray-500">
-                    🖼 Photo
-                    {previewMessage.photo.width && previewMessage.photo.height
-                      ? ` · ${previewMessage.photo.width}×${previewMessage.photo.height}`
-                      : ''}
-                  </p>
-                ) : previewMessage.documentName ? (
-                  <p className="text-gray-500">📄 {previewMessage.documentName}</p>
-                ) : (
-                  <p className="text-gray-400">No text — the bot stored only the file reference.</p>
-                )}
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
+            {(previewMessage.state === 'NEW' || (previewMessage.announcementId && canManage)) && (
+              <footer className="flex flex-wrap gap-2 border-t border-gray-100 px-4 py-3 sm:px-5">
                 {previewMessage.state === 'NEW' && (
                   <button
-                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
                     onClick={() => void markOne(previewMessage.id)}
                   >
                     Mark as read
@@ -668,32 +769,44 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                 )}
                 {previewMessage.announcementId && canManage && (
                   <button
-                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100"
                     onClick={() => openNotice(previewMessage.announcementId!)}
                   >
                     Open the notice ⇥
                   </button>
                 )}
-              </div>
-            </div>
-          </aside>
+              </footer>
+            )}
+          </div>
         </div>
       )}
 
       {/* ---------- the notice, read without leaving the conversation ---------- */}
       {noticeId && (
-        <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Announcement">
-          <div className="absolute inset-0 bg-black/30" onClick={closeNotice} />
-          <aside className="relative flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-gray-200 bg-white shadow-2xl">
-            <header className="sticky top-0 z-10 flex items-start gap-2 border-b border-gray-100 bg-white px-4 py-3">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4"
+          onMouseDown={closeNotice}
+        >
+          <div
+            ref={noticeTrap}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="notice-title"
+            className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-xl outline-none animate-[modalIn_.15s_ease-out]"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <header className="flex items-start gap-2 border-b border-gray-100 px-4 py-3 sm:px-5">
               <div className="min-w-0 flex-1">
                 <div className="text-[11px] font-medium uppercase tracking-wide text-gray-400">
                   {notice?.code ?? 'Announcement'}
                 </div>
-                <h2 className="truncate text-sm font-semibold text-gray-900">{notice?.title ?? 'Loading…'}</h2>
+                <h2 id="notice-title" className="truncate text-sm font-semibold text-gray-900">
+                  {notice?.title ?? 'Loading…'}
+                </h2>
               </div>
               <button
-                className="h-8 w-8 shrink-0 rounded-lg text-lg leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                className="h-9 w-9 shrink-0 rounded-lg text-xl leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                 onClick={closeNotice}
                 aria-label="Close the notice"
               >
@@ -701,18 +814,18 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
               </button>
             </header>
 
-            <div className="px-4 py-3">
-              {noticeError && <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{noticeError}</div>}
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+              {noticeError && (
+                <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{noticeError}</div>
+              )}
               {notice && (
                 <>
-                  <div className="mb-3 flex flex-wrap items-center gap-1.5 text-xs">
-                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">{notice.status}</span>
-                    <span className="rounded bg-orange-100 px-1.5 py-0.5 text-orange-700">{notice.priority}</span>
-                    <span className="text-gray-400">{notice.category}</span>
+                  <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                    <Badge color={notice.status === 'PUBLISHED' ? 'green' : 'gray'}>{titleCase(notice.status)}</Badge>
+                    <Badge color={PRIORITY_COLOR[notice.priority] ?? 'gray'}>{titleCase(notice.priority)}</Badge>
+                    <span className="text-xs text-gray-400">{titleCase(notice.category)}</span>
                     {notice.publishAt && (
-                      <span className="text-gray-400" title={fmtDateTimeYgn(notice.publishAt)}>
-                        · {fmtDateTimeYgn(notice.publishAt)}
-                      </span>
+                      <span className="text-xs text-gray-400">· {fmtDateTimeYgn(notice.publishAt)}</span>
                     )}
                   </div>
                   <div
@@ -721,7 +834,9 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                   />
                   {(notice.attachments?.length ?? 0) > 0 && (
                     <div className="mt-3 border-t border-gray-100 pt-3">
-                      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">Attachments</div>
+                      <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                        Attachments
+                      </div>
                       {notice.attachments!.map((f) => (
                         <a
                           key={f.id}
@@ -733,13 +848,11 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                       ))}
                     </div>
                   )}
-                  {notice.createdBy && (
-                    <div className="mt-3 text-[11px] text-gray-400">Sent by {notice.createdBy}</div>
-                  )}
+                  {notice.createdBy && <div className="mt-3 text-[11px] text-gray-400">Sent by {notice.createdBy}</div>}
                 </>
               )}
             </div>
-          </aside>
+          </div>
         </div>
       )}
     </div>
