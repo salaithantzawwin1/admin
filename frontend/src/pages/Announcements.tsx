@@ -348,7 +348,7 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
           key={a.id}
           className={`p-4 ${!a.read && a.priority === 'NORMAL' ? 'border-l-4 border-l-blue-500' : ''} ${!a.read && a.priority !== 'NORMAL' ? 'ring-1 ring-inset ring-blue-300' : ''} ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.acked ? 'opacity-75' : ''}`}
         >
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-2">
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 {a.priority !== 'NORMAL' && <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[a.priority]}`}>{nice(a.priority)}</span>}
@@ -356,7 +356,7 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
                 <span className="text-xs text-gray-300 font-mono">{a.code}</span>
               </div>
               <button
-                className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700 group inline-flex items-center gap-1"
+                className="mt-1 inline-flex items-center gap-1 text-left text-[15px] font-semibold leading-snug text-gray-900 hover:text-blue-700 group sm:text-base"
                 onClick={() => openDetail(a)}
                 title="Open announcement"
               >
@@ -369,7 +369,7 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
                 {a.requiresAck && !a.acked && <span className="text-orange-500 font-medium"> · acknowledgement needed</span>}
               </div>
             </div>
-            <div className="flex flex-col gap-2 items-end shrink-0">
+            <div className="flex shrink-0 flex-col items-end gap-2">
               {!a.read && <Badge color="blue">NEW</Badge>}
               {a.requiresAck && (a.acked
                 ? <Badge color="green">✓ Acked</Badge>
@@ -408,6 +408,111 @@ function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reloa
   );
 }
 
+/**
+ * Multi-select employee picker: the audience field used to take one person per
+ * announcement, which meant the same notice had to be sent again for each
+ * colleague. Ticking is now additive — each tick becomes its own EMPLOYEE
+ * target, and the server de-duplicates people across targets.
+ */
+function EmployeePicker({
+  users,
+  value,
+  onChange,
+}: {
+  users: { id: string; fullName: string; username: string }[];
+  value: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? users.filter((u) => `${u.fullName} ${u.username}`.toLowerCase().includes(needle))
+    : users;
+  const toggle = (id: string) =>
+    onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
+  const chosen = users.filter((u) => value.includes(u.id));
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white">
+      <div className="flex items-center justify-between gap-2 border-b border-gray-100 px-2.5 py-2">
+        <span className="text-xs font-medium text-gray-700">
+          Employees{value.length > 0 && <span className="text-gray-400"> · {value.length} selected</span>}
+        </span>
+        <div className="flex items-center gap-1.5">
+          {shown.length > 0 && (
+            <button
+              type="button"
+              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50"
+              onClick={() => onChange([...new Set([...value, ...shown.map((u) => u.id)])])}
+            >
+              Select all{needle ? ' shown' : ''}
+            </button>
+          )}
+          {value.length > 0 && (
+            <button
+              type="button"
+              className="rounded px-1.5 py-0.5 text-[11px] font-medium text-gray-500 hover:bg-gray-100"
+              onClick={() => onChange([])}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="px-2.5 py-2">
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name or username…"
+          aria-label="Search employees"
+          className="text-xs py-1.5"
+        />
+      </div>
+
+      <div className="max-h-52 overflow-y-auto border-t border-gray-100 px-1 py-1">
+        {shown.length === 0 && <div className="px-2 py-3 text-xs text-gray-400">No employee matches</div>}
+        {shown.map((u) => (
+          <label
+            key={u.id}
+            className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-gray-50"
+          >
+            <input
+              type="checkbox"
+              className="h-4 w-4 shrink-0 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              checked={value.includes(u.id)}
+              onChange={() => toggle(u.id)}
+            />
+            <span className="min-w-0 truncate text-gray-800">{u.fullName}</span>
+            <span className="ml-auto shrink-0 font-mono text-[11px] text-gray-400">{u.username}</span>
+          </label>
+        ))}
+      </div>
+
+      {chosen.length > 0 && (
+        <div className="flex flex-wrap gap-1 border-t border-gray-100 px-2.5 py-2">
+          {chosen.map((u) => (
+            <span
+              key={u.id}
+              className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
+            >
+              {u.fullName}
+              <button
+                type="button"
+                onClick={() => toggle(u.id)}
+                className="text-blue-400 hover:text-blue-700"
+                aria-label={`Remove ${u.fullName}`}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** ============ Administration manage view ============ */
 function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   items: Announcement[];
@@ -434,7 +539,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     title: '', content: '', category: 'GENERAL', priority: 'NORMAL',
     publishAt: '', endAt: '',
     targetType: 'ALL' as 'ALL' | 'DEPARTMENT' | 'ROLE' | 'EMPLOYEE' | 'BRANCH',
-    departmentId: '', roleId: 'EMPLOYEE', userId: '', branchId: '',
+    departmentId: '', roleId: 'EMPLOYEE', userIds: [] as string[], branchId: '',
   });
 
   const [org, setOrg] = useState<{ departments: { id: string; name: string }[]; branches: { id: string; name: string }[]; users: { id: string; fullName: string; username: string }[] }>({
@@ -464,7 +569,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userId: '', branchId: '' });
+    setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userIds: [], branchId: '' });
     setPendingFiles([]);
     setExistingFiles([]);
     setError('');
@@ -492,7 +597,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     setForm({
       title: a.title, content: a.content, category: a.category, priority: a.priority,
       publishAt: '', endAt: a.endAt ? a.endAt.slice(0, 16) : '',
-      targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userId: '', branchId: '',
+      targetType: 'ALL', departmentId: '', roleId: 'EMPLOYEE', userIds: [], branchId: '',
     });
     setPendingFiles([]);
     setExistingFiles([]);
@@ -524,16 +629,17 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
         ...(form.endAt ? { endAt: new Date(form.endAt).toISOString() } : {}),
       };
       if (!editing) {
-        const target: TargetInput = form.targetType === 'ALL'
-          ? { targetType: 'ALL' }
+        // one target per person — ticking five colleagues must reach all five
+        const targets: TargetInput[] = form.targetType === 'ALL'
+          ? [{ targetType: 'ALL' }]
           : form.targetType === 'DEPARTMENT'
-            ? { targetType: 'DEPARTMENT', targetId: form.departmentId }
+            ? [{ targetType: 'DEPARTMENT', targetId: form.departmentId }]
             : form.targetType === 'BRANCH'
-              ? { targetType: 'BRANCH', targetId: form.branchId }
+              ? [{ targetType: 'BRANCH', targetId: form.branchId }]
               : form.targetType === 'ROLE'
-                ? { targetType: 'ROLE', targetId: form.roleId }
-                : { targetType: 'EMPLOYEE', targetId: form.userId };
-        body.targets = [target];
+                ? [{ targetType: 'ROLE', targetId: form.roleId }]
+                : form.userIds.map((id) => ({ targetType: 'EMPLOYEE', targetId: id }));
+        body.targets = targets;
         const created = await api<{ id: string }>('/announcements', { method: 'POST', body });
         setUploadIds([created.id]);
         await uploadFiles(created.id);
@@ -626,28 +732,40 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   return (
     <>
-      <div className="flex justify-between items-center mb-4">
-        <div />
-        <Button onClick={openCreate}>+ New Announcement</Button>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-gray-500">
+          {items.length === 0
+            ? 'No notices yet'
+            : `${items.length} notice${items.length === 1 ? '' : 's'} · ${items.filter((a) => a.status === 'PUBLISHED').length} live · ${items.filter((a) => a.status === 'DRAFT').length} draft`}
+        </p>
+        <Button onClick={openCreate}>+ New announcement</Button>
       </div>
 
       {items.length === 0 && <Empty label="No announcements yet" />}
 
       {items.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 mb-4">
-          {statusChips.map((c) => (
-            <button
-              key={c.key}
-              onClick={() => setStatusFilter(c.key)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                statusFilter === c.key ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
+        <div className="mb-4 rounded-xl border border-gray-200/80 bg-white p-1.5 shadow-sm">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {statusChips.map((c) => (
+              <button
+                key={c.key}
+                onClick={() => setStatusFilter(c.key)}
+                aria-pressed={statusFilter === c.key}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  statusFilter === c.key ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {c.label}
+                <span className={`ml-1.5 tabular-nums ${statusFilter === c.key ? 'text-white/60' : 'text-gray-400'}`}>{c.count}</span>
+              </button>
+            ))}
+            <span className="mx-1 hidden h-5 w-px bg-gray-200 sm:block" aria-hidden="true" />
+            <Select
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              aria-label="Filter by priority"
+              className="!w-auto text-xs py-1.5"
             >
-              {c.label} · {c.count}
-            </button>
-          ))}
-          <div className="ml-auto flex gap-2">
-            <Select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="!w-auto text-xs py-1.5">
               <option value="ALL">All priorities</option>
               {PRIORITIES.map((p) => <option key={p} value={p}>{nice(p)}</option>)}
             </Select>
@@ -655,9 +773,25 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
               placeholder="Search title or text…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="!w-52 text-xs py-1.5"
+              aria-label="Search announcements"
+              className="ml-auto w-full text-xs py-1.5 sm:!w-56"
             />
           </div>
+        </div>
+      )}
+
+      {items.length > 0 && filtered.length === 0 && (
+        <div className="rounded-xl border border-dashed border-gray-200 bg-white px-4 py-10 text-center">
+          <div className="text-sm font-medium text-gray-700">No announcement matches</div>
+          <div className="mt-1 text-xs text-gray-400">
+            {search ? `Nothing for “${search}”` : 'Nothing in this status'} — try another filter.
+          </div>
+          <button
+            className="mt-3 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+            onClick={() => { setStatusFilter('ALL'); setPriorityFilter('ALL'); setSearch(''); }}
+          >
+            Clear filters
+          </button>
         </div>
       )}
 
@@ -667,29 +801,33 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
           const pct = audience > 0 ? Math.round(((a.readCount ?? 0) / audience) * 100) : 0;
           const emptyDept = (a.targetsWithCounts ?? []).find((t) => t.memberCount === 0);
           return (
-          <Card key={a.id} className={`p-4 ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.status === 'EXPIRED' ? 'opacity-70' : ''}`}>
-            <div className="flex items-start justify-between gap-3">
+          <Card key={a.id} className={`px-4 py-3.5 sm:px-5 ${PRIORITY_ACCENT[a.priority] ?? ''} ${a.status === 'EXPIRED' ? 'opacity-70' : ''}`}>
+            <div className="flex flex-col gap-2">
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   {a.pinnedAt && <span title="Pinned" className="text-xs">📌</span>}
                   <span className={`text-xs font-medium px-2 py-0.5 rounded ${STATUS_STYLE[a.status]}`}>{nice(a.status)}</span>
                   {a.priority !== 'NORMAL' && <span className={`text-xs font-medium px-2 py-0.5 rounded ${PRIORITY_STYLE[a.priority]}`}>{nice(a.priority)}</span>}
                   {nice(a.category) !== nice(a.priority) && <span className="text-xs text-gray-400">{nice(a.category)}</span>}
-                  <span className="text-xs text-gray-300 font-mono">{a.code}</span>
+                  <span className="ml-auto font-mono text-[11px] text-gray-300">{a.code}</span>
                 </div>
                 <button
-                  className="text-left font-semibold text-gray-800 mt-1 hover:text-blue-700 group inline-flex items-center gap-1"
+                  className="mt-1 inline-flex items-center gap-1 text-left text-[15px] font-semibold leading-snug text-gray-900 hover:text-blue-700 group sm:text-base"
                   onClick={() => openDetail(a)}
                   title="Open announcement"
                 >
                   {a.title}
                   <span className="text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity">→</span>
                 </button>
-                <p className="text-sm text-gray-500 mt-1 line-clamp-2">{plain(a.content)}</p>
-                <div className="text-xs text-gray-400 mt-1">
-                  {(a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target'}
-                  {' · '}<span title={fmtDate(a.publishAt)}>{relTime(a.publishAt)}</span>
-                  {a.endAt ? ` → ${fmtDate(a.endAt)}` : ''}
+                <p className="mt-1 line-clamp-2 text-sm text-gray-600">{plain(a.content)}</p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-400">
+                  <span className="inline-flex items-center gap-1" title={(a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target'}>
+                    👥 {audience > 0 ? `${audience} ${audience === 1 ? 'person' : 'people'}` : ((a.targets ?? []).map((t) => t.targetLabel).join(', ') || 'No target')}
+                  </span>
+                  <span className="inline-flex items-center gap-1" title={fmtDate(a.publishAt)}>
+                    🗓 {a.status === 'SCHEDULED' ? 'goes out ' : ''}{relTime(a.publishAt) || 'not published'}
+                  </span>
+                  {a.endAt && <span className="inline-flex items-center gap-1">⏳ until {fmtDate(a.endAt)}</span>}
                 </div>
                 {emptyDept && (
                   <div className="text-xs text-orange-600 bg-orange-50 rounded px-2 py-1 mt-1.5 inline-block">
@@ -728,12 +866,12 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                   </button>
                 )}
               </div>
-              <div className="flex flex-col gap-1 items-end shrink-0">
+              <div className="mt-1 flex flex-wrap items-center justify-end gap-1.5 border-t border-gray-100 pt-2.5">
                 {(a.status === 'DRAFT' || a.status === 'SCHEDULED') && <Button onClick={() => setPublishFor(a)}>Publish</Button>}
                 {a.status === 'PUBLISHED' && (
                   <Button variant="ghost" onClick={() => unpublish(a)}>Unpublish</Button>
                 )}
-                <div className="flex gap-1 items-center">
+                <div className="flex flex-wrap items-center gap-1">
                   {(replyCounts[a.id] ?? 0) > 0 && (
                     <>
                       <button
@@ -773,9 +911,22 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
       {/* create / edit modal */}
       {formOpen && (
-        <Modal title={editing ? `Edit ${editing.code}` : 'New announcement'} onClose={() => setFormOpen(false)} error={error && !endAtFieldError ? error : null}>
-          <div className="space-y-3">
-            <Input placeholder="Title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+        <Modal
+          title={editing ? `Edit ${editing.code}` : 'New announcement'}
+          onClose={() => setFormOpen(false)}
+          error={error && !endAtFieldError ? error : null}
+          xl
+        >
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="announcement-title" className="mb-1 block text-xs font-medium text-gray-600">Title *</label>
+              <Input
+                id="announcement-title"
+                placeholder="e.g. Office closed on Friday afternoon"
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+              />
+            </div>
             <div>
               <div className="text-xs text-gray-500 mb-1">Message *</div>
               <RichTextEditor value={form.content} onChange={(html) => setForm((f) => ({ ...f, content: html }))} />
@@ -791,8 +942,11 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             </div>
             {!editing && (
               <div>
-                <div className="text-xs text-gray-500 mb-1">Target audience</div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="mb-1 flex flex-wrap items-baseline gap-2">
+                  <span className="text-xs font-medium text-gray-600">Target audience</span>
+                  <span className="text-[11px] text-gray-400">who receives it, and gets the Telegram card</span>
+                </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <Select value={form.targetType} onChange={(e) => setForm({ ...form, targetType: e.target.value as never })}>
                     <option value="ALL">Everyone</option>
                     <option value="DEPARTMENT">Department</option>
@@ -817,13 +971,21 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                       {['ADMINISTRATION', 'MANAGEMENT', 'DEPARTMENT_HEAD', 'EMPLOYEE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'].map((r) => <option key={r} value={r}>{r.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (ch) => ch.toUpperCase())}</option>)}
                     </Select>
                   )}
-                  {form.targetType === 'EMPLOYEE' && (
-                    <Select value={form.userId} onChange={(e) => setForm({ ...form, userId: e.target.value })}>
-                      <option value="">— choose —</option>
-                      {org.users.map((u) => <option key={u.id} value={u.id}>{u.fullName} ({u.username})</option>)}
-                    </Select>
-                  )}
                 </div>
+                {form.targetType === 'EMPLOYEE' && (
+                  <div className="mt-2">
+                    <EmployeePicker
+                      users={org.users}
+                      value={form.userIds}
+                      onChange={(ids) => setForm((f) => ({ ...f, userIds: ids }))}
+                    />
+                    <p className={`mt-1 text-[11px] ${form.userIds.length === 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                      {form.userIds.length === 0
+                        ? 'Tick at least one employee — a notice with no audience cannot be published.'
+                        : `${form.userIds.length} employee${form.userIds.length === 1 ? '' : 's'} will receive this notice.`}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
             <div className="grid grid-cols-2 gap-3">
@@ -874,7 +1036,12 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             )}
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
-              <Button disabled={busy || !form.title || !plain(form.content)} onClick={submit}>{editing ? 'Save' : 'Create'}</Button>
+              <Button
+                disabled={busy || !form.title || !plain(form.content) || (!editing && form.targetType === 'EMPLOYEE' && form.userIds.length === 0)}
+                onClick={submit}
+              >
+                {editing ? 'Save' : 'Create'}
+              </Button>
             </div>
           </div>
         </Modal>
@@ -1087,7 +1254,7 @@ export default function Announcements() {
     if (!canMessages) return;
     api<ThreadsResponse>('/messages/threads')
       .then((r) => {
-        setUnread(r.general.unread + r.threads.reduce((n, t) => n + t.unread, 0));
+        setUnread(r.general.unread + r.trips.unread + r.threads.reduce((n, t) => n + t.unread, 0));
         setReplyCounts(Object.fromEntries(r.threads.map((t) => [t.announcementId, t.total])));
       })
       .catch(() => { /* the tab still works; the list shows its own error */ });

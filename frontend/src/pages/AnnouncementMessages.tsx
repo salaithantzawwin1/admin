@@ -18,8 +18,16 @@ export interface ThreadRow {
   unread: number;
   lastAt: string | null;
 }
+export interface Bucket {
+  total: number;
+  unread: number;
+  lastAt: string | null;
+}
 export interface ThreadsResponse {
-  general: { total: number; unread: number; lastAt: string | null };
+  /** messages the subscriber wrote to the bot, not tied to a notice */
+  general: Bucket;
+  /** messages a vehicle-trip flow consumed (odometer, ETA, reject reason, …) */
+  trips: Bucket;
   threads: ThreadRow[];
 }
 
@@ -46,12 +54,11 @@ interface ListResponse { items: MessageRow[]; total: number; unread: number; pag
 
 const PAGE_SIZE = 50;
 
-type Filter = 'ALL' | 'NEW' | 'REPLIES' | 'IN_PROGRESS' | 'NOT_ACKED';
+type Filter = 'ALL' | 'NEW' | 'REPLIES' | 'NOT_ACKED';
 const FILTERS: { key: Filter; label: string; hint: string }[] = [
   { key: 'ALL', label: 'All', hint: 'Every stored message' },
   { key: 'NEW', label: 'New', hint: 'Not read yet' },
   { key: 'REPLIES', label: 'Announcement replies', hint: 'Telegram Reply to a notice card' },
-  { key: 'IN_PROGRESS', label: 'In progress', hint: 'The bot already answered these (odometer, car form, …)' },
   { key: 'NOT_ACKED', label: 'Not acked', hint: 'Sender has not acknowledged the notice' },
 ];
 
@@ -97,8 +104,9 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const ann = searchParams.get('ann'); // null = thread list only (mobile) / "All" (desktop)
-  const selected = ann ?? 'all';
-  const onMobileThread = !!ann;
+  const bucket = searchParams.get('bucket'); // 'trips' — the vehicle-trip inbox
+  const selected = ann ?? (bucket === 'trips' ? 'trips' : 'all');
+  const onMobileThread = !!ann || selected === 'trips';
 
   const [threads, setThreads] = useState<ThreadsResponse | null>(null);
   const [threadsError, setThreadsError] = useState('');
@@ -115,7 +123,14 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
 
   const selectThread = (key: string) => {
     // `replace` keeps history clean while still making the URL shareable
-    setSearchParams(key === 'all' ? { tab: 'messages' } : { tab: 'messages', ann: key }, { replace: false });
+    setSearchParams(
+      key === 'all'
+        ? { tab: 'messages' }
+        : key === 'trips'
+          ? { tab: 'messages', bucket: 'trips' }
+          : { tab: 'messages', ann: key },
+      { replace: false },
+    );
   };
 
   const loadThreads = useCallback(() => {
@@ -127,11 +142,13 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
 
   const query = useMemo(() => {
     const p = new URLSearchParams();
-    if (selected === 'general') p.set('announcementId', 'none');
-    else if (selected !== 'all') p.set('announcementId', selected);
+    if (selected === 'trips') p.set('source', 'trips');
+    else if (selected === 'general') {
+      p.set('announcementId', 'none');
+      p.set('source', 'direct');
+    } else if (selected !== 'all') p.set('announcementId', selected);
     if (filter === 'NEW') p.set('state', 'NEW');
     if (filter === 'REPLIES') p.set('handledBy', 'ANNOUNCEMENT_REPLY');
-    if (filter === 'IN_PROGRESS') p.set('handledBy', 'IN_PROGRESS');
     if (filter === 'NOT_ACKED') p.set('ack', 'pending');
     p.set('pageSize', String(PAGE_SIZE));
     return p;
@@ -180,7 +197,8 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
     setBusy(true);
     try {
       const p = new URLSearchParams();
-      if (selected === 'general') p.set('announcementId', 'none');
+      if (selected === 'trips') p.set('source', 'trips');
+      else if (selected === 'general') p.set('source', 'direct');
       else if (selected !== 'all') p.set('announcementId', selected);
       const r = await api<{ updated: number }>(`/messages/read-all?${p.toString()}`, { method: 'POST' });
       toast(r.updated > 0 ? `Marked ${r.updated} message${r.updated === 1 ? '' : 's'} read` : 'Nothing new to read');
@@ -214,19 +232,41 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
     const q = threadSearch.toLowerCase();
     return t.title.toLowerCase().includes(q) || (t.code ?? '').toLowerCase().includes(q);
   });
-  const allUnread = (threads?.general.unread ?? 0) + (threads?.threads ?? []).reduce((n, t) => n + t.unread, 0);
-  const allTotal = (threads?.general.total ?? 0) + (threads?.threads ?? []).reduce((n, t) => n + t.total, 0);
+  const allUnread =
+    (threads?.general.unread ?? 0) +
+    (threads?.trips.unread ?? 0) +
+    (threads?.threads ?? []).reduce((n, t) => n + t.unread, 0);
+  const allTotal =
+    (threads?.general.total ?? 0) +
+    (threads?.trips.total ?? 0) +
+    (threads?.threads ?? []).reduce((n, t) => n + t.total, 0);
 
   const headerTitle =
-    selected === 'all' ? 'All messages' : selected === 'general' ? 'General' : (currentThread?.title ?? 'Announcement');
+    selected === 'all'
+      ? 'All messages'
+      : selected === 'general'
+        ? 'Direct messages'
+        : selected === 'trips'
+          ? 'Vehicle trips'
+          : (currentThread?.title ?? 'Announcement');
   const headerSub =
     selected === 'all'
       ? `${allTotal} message${allTotal === 1 ? '' : 's'} from Telegram`
       : selected === 'general'
-        ? 'Not linked to any announcement'
-        : [currentThread?.code, currentThread?.publishAt ? fmtDateTimeYgn(currentThread.publishAt) : null]
-            .filter(Boolean)
-            .join(' · ');
+        ? 'Written to the bot — not tied to a notice or a trip'
+        : selected === 'trips'
+          ? 'Odometer, ETA, reject reasons and car-form replies from the trip flow'
+          : [currentThread?.code, currentThread?.publishAt ? fmtDateTimeYgn(currentThread.publishAt) : null]
+              .filter(Boolean)
+              .join(' · ');
+
+  // trip messages are not replies to a notice, so those filters would be empty
+  const visibleFilters =
+    selected === 'trips'
+      ? FILTERS.filter((f) => f.key === 'ALL' || f.key === 'NEW')
+      : selected === 'general'
+        ? FILTERS.filter((f) => f.key !== 'NOT_ACKED')
+        : FILTERS;
 
   // oldest → newest, with album photos that arrived together rendered as one bubble
   const ordered = [...rows].reverse();
@@ -261,13 +301,28 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
             className={`w-full text-left px-3 py-2.5 transition-colors ${selected === 'general' ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
           >
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-800">💬 General</span>
+              <span className="text-sm font-medium text-gray-800">✉️ Direct messages</span>
               {(threads?.general.unread ?? 0) > 0 && (
                 <span className="ml-auto"><Badge color="blue">{threads!.general.unread} new</Badge></span>
               )}
             </div>
             <div className="text-xs text-gray-400 mt-0.5">
-              {threads?.general.total ?? 0} message{(threads?.general.total ?? 0) === 1 ? '' : 's'} · not tied to a notice
+              {threads?.general.total ?? 0} message{(threads?.general.total ?? 0) === 1 ? '' : 's'} · written to the bot
+            </div>
+          </button>
+
+          <button
+            onClick={() => selectThread('trips')}
+            className={`w-full text-left px-3 py-2.5 transition-colors ${selected === 'trips' ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-800">🚗 Vehicle trips</span>
+              {(threads?.trips.unread ?? 0) > 0 && (
+                <span className="ml-auto"><Badge color="blue">{threads!.trips.unread} new</Badge></span>
+              )}
+            </div>
+            <div className="text-xs text-gray-400 mt-0.5">
+              {threads?.trips.total ?? 0} message{(threads?.trips.total ?? 0) === 1 ? '' : 's'} · answered by the trip flow
             </div>
           </button>
 
@@ -291,7 +346,7 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
             </button>
           ))}
 
-          {threads && !threads.general.total && threads.threads.length === 0 && (
+          {threads && !threads.general.total && !threads.trips.total && threads.threads.length === 0 && (
             <div className="px-3 py-6 text-xs text-gray-400 text-center">
               No messages yet — Telegram replies land here
             </div>
@@ -337,7 +392,7 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
           </header>
 
           <div className="px-4 py-2 border-b border-gray-100 flex flex-wrap gap-1.5">
-            {FILTERS.map((f) => (
+            {visibleFilters.map((f) => (
               <button
                 key={f.key}
                 onClick={() => setFilter(f.key)}
@@ -363,7 +418,13 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
             )}
 
             {!loading && !listError && rows.length === 0 && (
-              <Empty label="No messages yet — Telegram replies land here" />
+              <Empty
+                label={
+                  selected === 'trips'
+                    ? 'No vehicle-trip messages in this window'
+                    : 'No messages yet — Telegram replies land here'
+                }
+              />
             )}
 
             {rows.length > 0 && (
@@ -434,7 +495,7 @@ export default function AnnouncementMessages({ canManage, onOpenAnnouncement }: 
             )}
           </div>
         </div>
-        {selected !== 'all' && selected !== 'general' && canManage && currentThread?.requiresAck && (
+        {selected !== 'all' && selected !== 'general' && selected !== 'trips' && canManage && currentThread?.requiresAck && (
           <p className="text-xs text-gray-400 mt-2">
             “Not acked” lists replies from senders who have not acknowledged this notice yet.
           </p>

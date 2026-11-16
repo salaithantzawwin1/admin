@@ -23,7 +23,7 @@ import { MessageQuery, MessagesService } from './messages.service';
 export class MessagesController {
   constructor(private messages: MessagesService) {}
 
-  /** Announcement threads + the General bucket, with total/unread/lastAt. */
+  /** Announcement threads + the direct and vehicle-trip buckets, with totals. */
   @Get('threads')
   threads() {
     return this.messages.threads();
@@ -47,7 +47,7 @@ export class MessagesController {
   }
 
   @Post('read-all')
-  readAll(@Req() req, @Query('announcementId') announcementId?: string) {
-    return this.messages.readAll(announcementId, req.user.id);
+  readAll(@Req() req, @Query('announcementId') announcementId?: string, @Query('source') source?: string) {
+    return this.messages.readAll(announcementId, req.user.id, source);
   }
 }

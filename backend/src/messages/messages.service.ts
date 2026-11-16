@@ -11,6 +11,8 @@ export interface MessageQuery {
   state?: string;
   /** `pending` = messages in an ack-requiring thread whose sender never acked */
   ack?: string;
+  /** `trips` = consumed by a vehicle-trip flow; `direct` = written to the bot */
+  source?: string;
   page?: string;
   pageSize?: string;
 }
@@ -126,31 +128,45 @@ export class MessagesService {
 
   // ---------- GET /messages/threads ----------
 
+  /** Totals for a fixed slice of the inbox (used by the two non-announcement buckets). */
+  private async bucket(where: Prisma.TelegramInboundMessageWhereInput) {
+    const [total, unread, last] = await Promise.all([
+      this.prisma.telegramInboundMessage.count({ where }),
+      this.prisma.telegramInboundMessage.count({ where: { ...where, state: 'NEW' } }),
+      this.prisma.telegramInboundMessage.aggregate({ where, _max: { receivedAt: true } }),
+    ]);
+    return { total, unread, lastAt: last._max.receivedAt ?? null };
+  }
+
   /**
-   * One row per announcement that has at least one reply, plus the General
-   * bucket (everything not linked to an announcement). Threads are ordered by
-   * their newest message, so a fresh reply lifts its notice to the top.
+   * One row per announcement that has at least one reply, plus the two buckets
+   * that are not tied to a notice: **direct messages** the subscriber wrote to
+   * the bot, and **vehicle trips** — the messages a trip flow consumed (car
+   * form, reject reason, odometer, ETA, command). Keeping them apart means the
+   * inbox no longer mixes driver chatter with things people actually wrote.
+   * Threads are ordered by their newest message, so a fresh reply lifts its
+   * notice to the top.
    */
   async threads() {
     const groups = await this.prisma.telegramInboundMessage.groupBy({
       by: ['announcementId', 'state'],
+      where: { announcementId: { not: null } },
       _count: { _all: true },
       _max: { receivedAt: true },
     });
 
     const perThread = new Map<string, { total: number; unread: number; lastAt: Date | null }>();
-    const keyOf = (id: string | null) => id ?? GENERAL;
     for (const g of groups) {
-      const key = keyOf(g.announcementId);
-      const agg = perThread.get(key) ?? { total: 0, unread: 0, lastAt: null };
+      if (!g.announcementId) continue;
+      const agg = perThread.get(g.announcementId) ?? { total: 0, unread: 0, lastAt: null };
       agg.total += g._count._all;
       if (g.state === 'NEW') agg.unread += g._count._all;
       const last = g._max.receivedAt;
       if (last && (!agg.lastAt || last > agg.lastAt)) agg.lastAt = last;
-      perThread.set(key, agg);
+      perThread.set(g.announcementId, agg);
     }
 
-    const ids = [...perThread.keys()].filter((k) => k !== GENERAL);
+    const ids = [...perThread.keys()];
     const announcements = ids.length
       ? await this.prisma.announcement.findMany({
           where: { id: { in: ids } },
@@ -178,15 +194,16 @@ export class MessagesService {
       // newest reply first; a thread with no timestamp can only be empty/lost
       .sort((x, y) => (y.lastAt?.getTime() ?? 0) - (x.lastAt?.getTime() ?? 0));
 
-    const generalAgg = perThread.get(GENERAL);
-    return {
-      general: {
-        total: generalAgg?.total ?? 0,
-        unread: generalAgg?.unread ?? 0,
-        lastAt: generalAgg?.lastAt ?? null,
-      },
-      threads,
+    // `GENERAL` is the alias for the direct bucket; `trips` is its own count.
+    const directWhere: Prisma.TelegramInboundMessageWhereInput = {
+      announcementId: null,
+      handledBy: { in: ['GENERAL', 'ANNOUNCEMENT_REPLY'] },
     };
+    const [general, trips] = await Promise.all([
+      this.bucket(directWhere),
+      this.bucket({ handledBy: { notIn: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } }),
+    ]);
+    return { general, trips, threads };
   }
 
   // ---------- GET /messages ----------
@@ -213,9 +230,21 @@ export class MessagesService {
             return h ? { handledBy: h } : {};
           })();
 
+    // Two buckets with the same rule as `threads()`: a message the trip flow
+    // consumed lives under Vehicle trips, everything else the subscriber wrote
+    // to the bot is a direct message.
+    const source = this.oneOf(query.source, ['trips', 'direct'] as const, 'source');
+    const sourceWhere: Prisma.TelegramInboundMessageWhereInput =
+      source === 'trips'
+        ? { handledBy: { notIn: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } }
+        : source === 'direct'
+          ? { announcementId: null, handledBy: { in: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } }
+          : {};
+
     const where: Prisma.TelegramInboundMessageWhereInput = {
-      ...this.threadFilter(query.announcementId),
+      ...(source === 'direct' ? {} : this.threadFilter(query.announcementId)),
       ...handledWhere,
+      ...sourceWhere,
       ...(kind ? { kind } : {}),
       ...(state ? { state } : {}),
       ...(ack === 'pending' ? { AND: [await this.pendingAckFilter()] } : {}),
@@ -335,9 +364,14 @@ export class MessagesService {
    * (no param / `all`). Only NEW rows are touched, so the who/when of an earlier
    * read is never overwritten.
    */
-  async readAll(announcementId: string | undefined, userId: string) {
+  async readAll(announcementId: string | undefined, userId: string, source?: string) {
+    const bucket = this.oneOf(source, ['trips', 'direct'] as const, 'source');
     const where: Prisma.TelegramInboundMessageWhereInput = {
-      ...this.threadFilter(announcementId),
+      ...(bucket === 'direct' ? {} : this.threadFilter(announcementId)),
+      ...(bucket === 'trips' ? { handledBy: { notIn: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } } : {}),
+      ...(bucket === 'direct'
+        ? { announcementId: null, handledBy: { in: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } }
+        : {}),
       state: 'NEW',
     };
     const { count } = await this.prisma.telegramInboundMessage.updateMany({
