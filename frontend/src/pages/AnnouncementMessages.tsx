@@ -192,21 +192,15 @@ function MessageBody({ message }: { message: MessageRow }) {
     );
   }
   if (message.photo) {
-    const size =
-      message.photo.width && message.photo.height ? `${message.photo.width}×${message.photo.height}px · ` : '';
+    // keyed by id: stepping between two photos must reset a previous load failure
     return (
-      <div className="flex items-center gap-3">
-        <span
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-white text-lg ring-1 ring-gray-200"
-          aria-hidden="true"
-        >
-          🖼
-        </span>
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-gray-800">Photo</div>
-          <div className="text-xs text-gray-400">{size}the bot keeps the file reference, not the image</div>
-        </div>
-      </div>
+      <MessagePhoto
+        key={message.id}
+        id={message.id}
+        width={message.photo.width}
+        height={message.photo.height}
+        className="max-h-80 w-auto max-w-full"
+      />
     );
   }
   if (message.documentName) {
@@ -225,7 +219,7 @@ function MessageBody({ message }: { message: MessageRow }) {
       </div>
     );
   }
-  return <p className="text-sm text-gray-400">No text — the bot stored only the file reference.</p>;
+  return <p className="text-sm text-gray-400">No text in this message.</p>;
 }
 
 /**
