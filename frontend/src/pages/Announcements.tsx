@@ -29,6 +29,14 @@ const emptyPicks = (): Picks => ({ ALL: false, DEPARTMENT: [], BRANCH: [], ROLE:
 const countPicks = (p: Picks) =>
   (p.ALL ? 1 : 0) + p.DEPARTMENT.length + p.BRANCH.length + p.ROLE.length + p.EMPLOYEE.length;
 
+
+/** The one thing still missing before this notice can be created (empty = ready). */
+function missingRequirement(title: string, body: string, editing: boolean, picks: Picks): string {
+  if (!title.trim()) return 'Add a title first';
+  if (!body.trim()) return 'Add a message first';
+  if (!editing && countPicks(picks) === 0) return 'Pick at least one recipient on the Audience tab';
+  return '';
+}
 /** Picks → the target array the API takes (one row per tick). */
 const picksToTargets = (p: Picks): { targetType: string; targetId?: string }[] => [
   ...(p.ALL ? [{ targetType: 'ALL' }] : []),
@@ -668,6 +676,10 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   // which step of the compose dialog is showing — a fresh form starts on Content
   const [formTab, setFormTab] = useState<FormTab>('content');
 
+
+  // a picked-but-not-yet-uploaded file, opened in a preview dialog
+  const [pendingPreview, setPendingPreview] = useState<{ url: string; name: string; type: string } | null>(null);
+
   useEffect(() => {
     if (formOpen) setFormTab('content');
   }, [formOpen]);
@@ -1181,7 +1193,8 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             />
           </div>
 
-          {formTab === 'content' && (
+          {/* editing has no audience step — never leave the dialog on an empty panel */}
+          {(formTab === 'content' || (formTab === 'audience' && !!editing)) && (
             <div role="tabpanel" id="ann-panel-content" aria-labelledby="ann-tab-content" className="space-y-4">
               <div>
                 <label htmlFor="announcement-title" className="mb-1 block text-xs font-medium text-gray-600">Title *</label>
@@ -1380,7 +1393,22 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                       {pendingFiles.map((f, i) => (
                         <div key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 text-xs bg-gray-50 rounded px-2 py-1">
                           <span className="truncate">{isImage(f.type) ? '🖼' : '📄'} {f.name} <span className="text-gray-400">({fmtSize(f.size)})</span></span>
-                          <button type="button" className="text-red-500 hover:underline shrink-0" onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}>remove</button>
+                          <span className="flex shrink-0 items-center gap-2">
+                          <button
+                            type="button"
+                            className="text-blue-600 hover:underline"
+                            onClick={() => setPendingPreview({ url: URL.createObjectURL(f), name: f.name, type: f.type })}
+                          >
+                            preview
+                          </button>
+                          <button
+                            type="button"
+                            className="text-red-500 hover:underline"
+                            onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
+                          >
+                            remove
+                          </button>
+                        </span>
                         </div>
                       ))}
                     </div>
@@ -1393,7 +1421,8 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             </div>
           )}
 
-          <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-3">
+          <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-gray-100 pt-3">
+            <span className="mr-auto text-[11px] text-amber-600">{missingRequirement(form.title, plain(form.content), !!editing, form.picks)}</span>
             <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
             <Button
               disabled={busy || !form.title || !plain(form.content) || (!editing && countPicks(form.picks) === 0)}
@@ -1403,6 +1432,32 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             </Button>
           </div>
 </Modal>
+      )}
+
+      {/* a picked file, before it is uploaded */}
+      {pendingPreview && (
+        <Modal
+          title={pendingPreview.name}
+          onClose={() => {
+            URL.revokeObjectURL(pendingPreview.url);
+            setPendingPreview(null);
+          }}
+          wide
+        >
+          {pendingPreview.type.startsWith('image/') ? (
+            <img
+              src={pendingPreview.url}
+              alt={pendingPreview.name}
+              className="mx-auto max-h-[70vh] w-auto rounded-lg ring-1 ring-gray-200"
+            />
+          ) : (
+            <iframe
+              src={pendingPreview.url}
+              title={pendingPreview.name}
+              className="h-[70vh] w-full rounded-lg border border-gray-200"
+            />
+          )}
+        </Modal>
       )}
 
       {/* admin detail modal — photos first, then text, then docs (same as employee view) */}
