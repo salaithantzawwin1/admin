@@ -268,7 +268,7 @@ export default function Licenses() {
         subtitle="Company licenses, registration dates and the scanned certificate pictures"
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
+            <Button variant="ghost" onClick={() => void downloadCsv()}>Download CSV</Button>
             {canManage && <Button onClick={openCreate}>+ Add license</Button>}
           </div>
         }
