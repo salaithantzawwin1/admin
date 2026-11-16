@@ -1508,6 +1508,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Photo bytes for a stored inbox message. The inbound log keeps only the
+   * Telegram file id, so the admin inbox proxy pulls the image on demand.
+   */
+  exportPhoto(fileId: string): Promise<{ buffer: Buffer; size: number } | null> {
+    return this.fetchPhoto(fileId).catch(() => null);
+  }
+
+  /**
    * The newest dashboard photo this chat already sent, from the inbound log.
    *
    * Drivers routinely send the photo a few seconds BEFORE they tap Ready / Back

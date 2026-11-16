@@ -1,8 +1,10 @@
-import { Controller, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
+import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
+import { TelegramService } from '../telegram/telegram.service';
 import { MessageQuery, MessagesService } from './messages.service';
 
 /**
@@ -21,7 +23,10 @@ import { MessageQuery, MessagesService } from './messages.service';
 @RequirePermissions(PERMISSIONS.MESSAGES_READ)
 @Controller('messages')
 export class MessagesController {
-  constructor(private messages: MessagesService) {}
+  constructor(
+    private messages: MessagesService,
+    private telegram: TelegramService,
+  ) {}
 
   /** Announcement threads + the direct and vehicle-trip buckets, with totals. */
   @Get('threads')
@@ -39,6 +44,26 @@ export class MessagesController {
   @Get()
   list(@Query() query: MessageQuery) {
     return this.messages.list(query);
+  }
+
+  /**
+   * The photo bytes themselves.
+   *
+   * The inbound log stores only Telegram's file id, so the image is pulled from
+   * the Bot API on demand. `JwtAuthGuard` already accepts `?token=` for this
+   * exact case (an <img> cannot send an Authorization header), same as
+   * /attachments/:id/download.
+   */
+  @Get(':id/photo')
+  async photo(@Param('id') id: string, @Res() res: Response) {
+    const fileId = await this.messages.photoFileFor(id);
+    if (!fileId) throw new NotFoundException('This message has no photo');
+    const file = await this.telegram.exportPhoto(fileId);
+    if (!file) throw new NotFoundException('Telegram no longer has this photo');
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(file.buffer);
   }
 
   @Post(':id/read')

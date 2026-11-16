@@ -5,7 +5,7 @@ import { Badge, Button, Empty, Input, PageLoader } from '../components/ui';
 import { toast } from '../components/Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
 import { useFocusTrap, useScrollLock } from '../components/Modal';
-import { fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
+import { fmtDate, fmtDateTime as fmtDateTimeYgn } from '../util/yangonTime';
 
 /** One announcement thread (or the General bucket) as `GET /messages/threads` returns it. */
 export interface ThreadRow {
@@ -112,6 +112,62 @@ function PreviewFact({ label, value, mono }: { label: string; value: string; mon
       </dd>
     </div>
   );
+}
+
+/** A Telegram photo, proxied by the API — the inbound log keeps only a file id. */
+function MessagePhoto({
+  id,
+  width,
+  height,
+  className = '',
+}: {
+  id: string;
+  width: number | null;
+  height: number | null;
+  className?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <span
+        className={`flex items-center justify-center rounded-lg bg-white text-gray-400 ring-1 ring-gray-200 ${className}`}
+        aria-hidden="true"
+      >
+        🖼
+      </span>
+    );
+  }
+  return (
+    <img
+      src={`/api/messages/${id}/photo?token=${encodeURIComponent(getToken() ?? '')}`}
+      alt={width && height ? `Telegram photo, ${width}×${height}` : 'Telegram photo'}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className={`rounded-lg bg-white object-cover ring-1 ring-gray-200 ${className}`}
+    />
+  );
+}
+
+/** "Today" / "Yesterday" / "12 Nov 2026", Yangon-anchored like every other date. */
+function dayLabel(iso: string): string {
+  const day = fmtDate(iso);
+  if (day === fmtDate(new Date())) return 'Today';
+  if (day === fmtDate(new Date(Date.now() - 86_400_000))) return 'Yesterday';
+  return day;
+}
+
+/** Odometer movement since the previous numeric reading in the same thread. */
+function odometerDelta(ordered: MessageRow[], index: number): { previous: number; since: number } | null {
+  const current = Number((ordered[index]?.text ?? '').replace(/[,\s]/g, ''));
+  if (index < 0 || !ordered[index].text || !Number.isFinite(current)) return null;
+  for (let i = index - 1; i >= 0; i--) {
+    const raw = (ordered[i].text ?? '').replace(/[,\s]/g, '');
+    if (!/^\d+$/.test(raw)) continue;
+    const previous = Number(raw);
+    if (previous === current) continue;
+    return { previous, since: current - previous };
+  }
+  return null;
 }
 
 /**
@@ -229,6 +285,14 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
 
   const noticeTrap = useFocusTrap<HTMLDivElement>(!!noticeId);
   useScrollLock(!!previewId || !!noticeId);
+
+  // oldest → newest; the preview walks this same list, so ← / → step through it
+  const ordered = [...rows].reverse();
+  const previewMessage = rows.find((r) => r.id === previewId) ?? null;
+  const previewPos = previewMessage ? ordered.findIndex((x) => x.id === previewMessage.id) : -1;
+  const prevPreview = previewPos > 0 ? ordered[previewPos - 1] : null;
+  const nextPreview = previewPos >= 0 && previewPos < ordered.length - 1 ? ordered[previewPos + 1] : null;
+  const distance = odometerDelta(ordered, previewPos);
   const [notice, setNotice] = useState<NoticeDetail | null>(null);
   const [noticeError, setNoticeError] = useState('');
 
@@ -273,14 +337,19 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
     setSearchParams(p, { replace: false });
   };
 
+  // Esc closes; ← / → walk the thread without reopening the modal
   useEffect(() => {
     if (!previewId) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setPreviewId(null);
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const step = e.key === 'ArrowRight' ? nextPreview : prevPreview;
+      if (step) setPreviewId(step.id);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [previewId]);
+  }, [previewId, nextPreview, prevPreview]);
 
   useEffect(() => {
     if (!noticeId) return;
@@ -438,10 +507,6 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
       : selected === 'general'
         ? FILTERS.filter((f) => f.key !== 'NOT_ACKED')
         : FILTERS;
-
-  // oldest → newest, with album photos that arrived together rendered as one bubble
-  const ordered = [...rows].reverse();
-  const previewMessage = rows.find((r) => r.id === previewId) ?? null;
 
   return (
     <div className="flex flex-col md:flex-row gap-4 md:gap-5">
@@ -603,11 +668,28 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
               <div className="space-y-2" role="log" aria-label="Messages">
                 {ordered.map((m, i) => {
                   const prev = ordered[i - 1];
-                  const grouped = !!m.mediaGroupId && prev?.mediaGroupId === m.mediaGroupId;
+                  const startsDay = !prev || fmtDate(m.receivedAt) !== fmtDate(prev.receivedAt);
+                  // one sender on one day is one group: avatar and name print once
+                  const sameSender =
+                    !startsDay &&
+                    !!prev &&
+                    prev.sender.name === m.sender.name &&
+                    prev.sender.linked === m.sender.linked;
+                  const album = !!m.mediaGroupId && prev?.mediaGroupId === m.mediaGroupId;
+                  const grouped = sameSender || album;
                   const needsAck = !!m.announcementId && needAckByAnnouncement.get(m.announcementId) === true;
                   const handled = HANDLED_LABEL[m.handledBy];
                   return (
-                    <div key={m.id} className={grouped ? 'pl-9 -mt-1' : ''}>
+                    <div key={m.id}>
+                      {startsDay && (
+                        <div className="flex items-center gap-3 pb-1 pt-2">
+                          <span className="h-px flex-1 bg-gray-100" />
+                          <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                            {dayLabel(m.receivedAt)}
+                          </span>
+                          <span className="h-px flex-1 bg-gray-100" />
+                        </div>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -615,46 +697,69 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                           if (m.state === 'NEW') void markOne(m.id);
                         }}
                         aria-pressed={previewId === m.id}
-                        className={`w-full text-left rounded-xl border px-3 py-2 transition-colors ${
+                        className={`w-full rounded-xl border px-3 py-2 text-left transition-colors ${
+                          grouped ? '' : 'mt-1'
+                        } ${
                           m.state === 'NEW'
-                            ? 'border-l-4 border-l-blue-500 border-gray-200 bg-white hover:bg-gray-50 cursor-pointer'
+                            ? 'border-l-4 border-l-blue-500 border-gray-200 bg-white hover:bg-gray-50'
                             : 'border-gray-100 bg-gray-50/60 hover:bg-gray-50'
                         } ${previewId === m.id ? 'ring-2 ring-blue-400' : ''}`}
                         aria-label={`Message from ${m.sender.name ?? 'unlinked chat'}`}
                       >
-                        <div className="flex items-center gap-2 flex-wrap text-xs">
-                          {!grouped && (
-                            <span className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 text-[11px] font-semibold flex items-center justify-center shrink-0">
+                        {!grouped && (
+                          <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gray-200 text-[11px] font-semibold text-gray-600">
                               {initial(m.sender.name)}
                             </span>
-                          )}
-                          <span className="font-medium text-gray-800">{m.sender.name ?? 'Unlinked chat'}</span>
-                          {m.sender.department && <span className="text-gray-400">{m.sender.department}</span>}
-                          {!m.sender.linked && <span className="text-amber-600" title="Chat not bound to an AMS user or driver">Not linked</span>}
-                          <span className="text-gray-400" title={fmtDateTimeYgn(m.receivedAt)}>{relTime(m.receivedAt)}</span>
-                          {m.state === 'NEW' && <span className="text-blue-600 font-medium">NEW</span>}
-                          {needsAck && (
-                            m.ackAt
-                              ? <span className="text-green-600 font-medium">✓ acked</span>
-                              : <span className="text-amber-600 font-medium">! not acked</span>
-                          )}
-                          {handled && (
-                            <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500" title="The bot already handled this message">
-                              {handled}
+                            <span className="font-medium text-gray-800">{m.sender.name ?? 'Unlinked chat'}</span>
+                            {m.sender.department && <span className="text-gray-400">{m.sender.department}</span>}
+                            {!m.sender.linked && (
+                              <span className="text-amber-600" title="Chat not bound to an AMS user or driver">
+                                Not linked
+                              </span>
+                            )}
+                            <span className="text-gray-400" title={fmtDateTimeYgn(m.receivedAt)}>
+                              {relTime(m.receivedAt)}
                             </span>
-                          )}
-                        </div>
-                        {m.text && (
-                          <div className="text-sm text-gray-700 mt-1 whitespace-pre-wrap break-words pl-8">{m.text}</div>
-                        )}
-                        {m.photo && (
-                          <div className="text-sm text-gray-500 mt-1 pl-8">
-                            🖼 Photo{m.photo.width && m.photo.height ? ` · ${m.photo.width}×${m.photo.height}` : ''}
+                            {needsAck &&
+                              (m.ackAt ? (
+                                <span className="font-medium text-green-600">✓ acked</span>
+                              ) : (
+                                <span className="font-medium text-amber-600">! not acked</span>
+                              ))}
+                            {handled && (
+                              <span
+                                className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-500"
+                                title="The bot already handled this message"
+                              >
+                                {handled}
+                              </span>
+                            )}
                           </div>
                         )}
-                        {m.documentName && (
-                          <div className="text-sm text-gray-500 mt-1 pl-8">📄 {m.documentName}</div>
-                        )}
+                        <div className="flex items-start gap-3">
+                          {m.photo && (
+                            <MessagePhoto
+                              id={m.id}
+                              width={m.photo.width}
+                              height={m.photo.height}
+                              className="h-14 w-14 shrink-0"
+                            />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            {m.state === 'NEW' && (
+                              <span className="mr-1.5 align-middle text-[11px] font-medium text-blue-600">NEW</span>
+                            )}
+                            {m.text && (
+                              <span className="whitespace-pre-wrap break-words align-middle text-sm text-gray-700">
+                                {m.text}
+                              </span>
+                            )}
+                            {m.documentName && (
+                              <span className="text-sm text-gray-500">📄 {m.documentName}</span>
+                            )}
+                          </div>
+                        </div>
                       </button>
                     </div>
                   );
@@ -678,7 +783,7 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
         )}
       </section>
 
-                  {/* ---------- one message, in full ---------- */}
+      {/* ---------- one message, in full ---------- */}
       {previewMessage && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-3 sm:p-4"
@@ -700,13 +805,33 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                   {headerTitle}
                 </h2>
               </div>
-              <button
-                className="h-9 w-9 shrink-0 rounded-lg text-xl leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-                onClick={() => setPreviewId(null)}
-                aria-label="Close the preview"
-              >
-                ×
-              </button>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <button
+                  className="h-9 w-9 rounded-lg text-lg leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
+                  onClick={() => prevPreview && setPreviewId(prevPreview.id)}
+                  disabled={!prevPreview}
+                  aria-label="Previous message"
+                  title="Previous message (←)"
+                >
+                  ‹
+                </button>
+                <button
+                  className="h-9 w-9 rounded-lg text-lg leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
+                  onClick={() => nextPreview && setPreviewId(nextPreview.id)}
+                  disabled={!nextPreview}
+                  aria-label="Next message"
+                  title="Next message (→)"
+                >
+                  ›
+                </button>
+                <button
+                  className="h-9 w-9 rounded-lg text-xl leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                  onClick={() => setPreviewId(null)}
+                  aria-label="Close the preview"
+                >
+                  ×
+                </button>
+              </div>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
@@ -737,6 +862,15 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
 
               <div className="mt-3 rounded-xl border border-gray-200 border-l-4 border-l-gold bg-gray-50/70 px-4 py-3">
                 <MessageBody message={previewMessage} />
+                {distance && (
+                  <div className="mt-2 border-t border-gray-200/70 pt-2 text-xs text-gray-500">
+                    <span className="font-semibold tabular-nums text-gray-700">
+                      {distance.since > 0 ? '+' : ''}
+                      {distance.since.toLocaleString()}
+                    </span>{' '}
+                    since the previous reading ({distance.previous.toLocaleString()})
+                  </div>
+                )}
               </div>
 
               <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">

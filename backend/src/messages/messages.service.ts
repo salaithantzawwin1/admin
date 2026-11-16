@@ -337,6 +337,17 @@ export class MessagesService {
     return { items, total, unread, page, pageSize };
   }
 
+  // ---------- GET /messages/:id/photo ----------
+
+  /** Telegram file id behind a stored photo message (null = text/doc). */
+  async photoFileFor(id: string): Promise<string | null> {
+    const row = await this.prisma.telegramInboundMessage.findUnique({
+      where: { id },
+      select: { photoFileId: true },
+    });
+    return row?.photoFileId ?? null;
+  }
+
   // ---------- GET /messages/unread-count ----------
 
   /** Badge count for the tab (one number, no page payload). */
