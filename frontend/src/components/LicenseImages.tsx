@@ -133,36 +133,48 @@ export function LicenseImages({ licenseId, canManage, onChanged }: {
     onChanged?.();
   };
 
-  const upload = async (file: File) => {
+  /** One pick may hold several pictures: they are sent one by one, and the
+   *  ones that no longer fit are refused here before the round trip. */
+  const upload = async (picked: File[]) => {
     setError('');
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      setError('Only JPEG, PNG or WebP images are allowed');
-      return;
-    }
-    if (file.size > MAX_BYTES) {
-      setError('Picture too large (max 5 MB)');
-      return;
-    }
+    const room = LICENSE_IMAGE_MAX - (images?.length ?? 0);
+    const files = picked.slice(0, room);
+    if (files.length === 0) return;
     setBusy(true);
-    try {
-      const token = getToken();
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch(`/api/licenses/${licenseId}/images`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: fd,
-      });
-      const body = (await res.json().catch(() => ({}))) as { message?: string };
-      if (!res.ok) throw new Error(body.message ?? `Upload failed (${res.status})`);
-      toast('Picture added');
-      changed();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Upload failed');
-    } finally {
-      setBusy(false);
-      if (inputRef.current) inputRef.current.value = '';
+    let added = 0;
+    let failure = '';
+    for (const file of files) {
+      // mirror the server rules so an obviously wrong file never leaves the browser
+      if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+        failure = 'Only JPEG, PNG or WebP images are allowed';
+        continue;
+      }
+      if (file.size > MAX_BYTES) {
+        failure = 'Picture too large (max 5 MB)';
+        continue;
+      }
+      try {
+        const token = getToken();
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch(`/api/licenses/${licenseId}/images`, {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: fd,
+        });
+        const body = (await res.json().catch(() => ({}))) as { message?: string };
+        if (!res.ok) throw new Error(body.message ?? `Upload failed (${res.status})`);
+        added += 1;
+      } catch (e) {
+        failure = e instanceof Error ? e.message : 'Upload failed';
+      }
     }
+    setBusy(false);
+    if (picked.length > files.length) failure = `Only ${room} more picture${room === 1 ? '' : 's'} fit — the rest were skipped`;
+    if (failure) setError(failure);
+    if (added) toast(added === 1 ? 'Picture added' : `${added} pictures added`);
+    changed();
+    if (inputRef.current) inputRef.current.value = '';
   };
 
   const list = images ?? [];
@@ -182,9 +194,9 @@ export function LicenseImages({ licenseId, canManage, onChanged }: {
             variant="ghost"
             onClick={() => inputRef.current?.click()}
             disabled={full || busy}
-            title={full ? `Up to ${LICENSE_IMAGE_MAX} pictures — remove one first` : undefined}
+            title={full ? `Up to ${LICENSE_IMAGE_MAX} pictures — remove one first` : `Choose up to ${LICENSE_IMAGE_MAX - list.length} picture(s)`}
           >
-            {busy ? 'Uploading…' : '+ Add picture'}
+            {busy ? 'Uploading…' : '+ Add pictures'}
           </Button>
         )}
       </div>
@@ -193,7 +205,7 @@ export function LicenseImages({ licenseId, canManage, onChanged }: {
 
       {list.length === 0 ? (
         <div className="rounded-lg border border-dashed border-gray-200 px-3 py-4 text-center text-xs text-gray-400">
-          {images === null ? 'Loading…' : canManage ? 'No picture yet — use “+ Add picture”.' : 'No picture uploaded.'}
+          {images === null ? 'Loading…' : canManage ? 'No picture yet — use “+ Add pictures”.' : 'No picture uploaded.'}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -214,10 +226,11 @@ export function LicenseImages({ licenseId, canManage, onChanged }: {
         ref={inputRef}
         type="file"
         accept={ACCEPT}
+        multiple
         className="hidden"
         onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) void upload(file);
+          const picked = [...(e.target.files ?? [])];
+          if (picked.length) void upload(picked);
         }}
       />
 

@@ -5,12 +5,12 @@ import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { PermissionsService } from '../auth/permissions.service';
+import { PERMISSIONS } from '../auth/permissions';
 import { Actor } from '../org/org.service';
 import { sniffImageType } from '../util/image-sniff';
 import { stripPhotoMetadata } from '../assets/photo-metadata';
 
-/** Company Import/Export licenses: one row per company licence plus the
- *  scanned certificate itself — at most five pictures per licence. */
+/** Scans kept per license — mirrors the "up to 5" promise in the UI. */
 export const LICENSE_IMAGE_MAX = 5;
 
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -18,6 +18,7 @@ const IMAGE_DIR = 'license-images';
 /** Only the uuid + extension this service writes may ever be opened. */
 const STORED_NAME = /^[0-9a-f-]{36}\.(jpg|png|webp)$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface LicenseInput {
   name?: string;
   registrationNo?: string | null;
@@ -32,12 +33,6 @@ export interface LicenseInput {
   note?: string | null;
 }
 
-/** A row as the browser sees it: secrets replaced by a "does it exist" flag. */
-type PublicRow = Record<string, unknown> & {
-  emailPassword?: string | null;
-  tradenetPassword?: string | null;
-};
-
 @Injectable()
 export class LicensesService {
   private uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
@@ -50,36 +45,47 @@ export class LicensesService {
 
   // ---------------- helpers ----------------
 
-  /** Date-only input (YYYY-MM-DD) or an ISO timestamp; null clears the field. */
+  /** Trimmed text, or null for a blank value (which clears the column). */
+  private clean(value?: string | null): string | null {
+    const trimmed = value?.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  /** Date-only input (YYYY-MM-DD) or an ISO timestamp; blank clears the date. */
   private parseDate(value: string | null | undefined, label: string): Date | null {
-    if (value === null || value === undefined || value === '') return null;
+    if (!value) return null;
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) throw new BadRequestException(`${label} must be a date`);
     return date;
   }
 
-  private text(value: string | null | undefined, max: number, label: string): string | null {
-    if (value === null || value === undefined) return null;
-    const trimmed = value.trim();
-    if (!trimmed) return null;
-    if (trimmed.length > max) throw new BadRequestException(`${label} is too long (max ${max} characters)`);
-    return trimmed;
+  /** Shared column mapping: an omitted key stays untouched on update and falls
+   *  back to the column default on create. */
+  private fields(input: LicenseInput) {
+    const text = (value?: string | null) => (value === undefined ? undefined : this.clean(value));
+    const date = (value: string | null | undefined, label: string) =>
+      value === undefined ? undefined : this.parseDate(value, label);
+    return {
+      name: text(input.name),
+      registrationNo: text(input.registrationNo),
+      companyLimited: text(input.companyLimited),
+      myanmarName: text(input.myanmarName),
+      startDate: date(input.startDate, 'Start date'),
+      dueDate: date(input.dueDate, 'Due date'),
+      email: text(input.email),
+      emailPassword: text(input.emailPassword),
+      tradenetPassword: text(input.tradenetPassword),
+      status: text(input.status) ?? undefined,
+      note: text(input.note),
+    };
   }
 
-  /** Never let a password leave the API for someone who cannot edit it. */
-  private publicRow<T extends PublicRow>(row: T, includeSecrets: boolean): T | PublicRow {
-    if (includeSecrets) return row;
+  /** The portal logins never leave the API for someone who cannot edit them. */
+  private stripSecrets<T extends { emailPassword: string | null; tradenetPassword: string | null }>(row: T) {
     const rest: Record<string, unknown> = { ...row };
-    const emailPassword = rest.emailPassword;
-    const tradenetPassword = rest.tradenetPassword;
     delete rest.emailPassword;
     delete rest.tradenetPassword;
-    return { ...rest, hasEmailPassword: !!emailPassword, hasTradenetPassword: !!tradenetPassword };
-  }
-
-  /** Managers get the stored logins; everyone else sees whether one exists. */
-  private async includeSecrets(userId: string) {
-    return this.permissions.userHas(userId, 'licenses.manage');
+    return rest;
   }
 
   private dir(): string {
@@ -113,53 +119,39 @@ export class LicensesService {
 
   // ---------------- register ----------------
 
-  /** Register list — newest expiry first, so the next renewal is at the top.
-   *  The stored portal logins stay out of this payload entirely: a manager who
-   *  opens one license gets them from the detail route, never 37 at a time. */
+  /** Register list — next renewal first; the stored logins stay out of it. */
   async list(q: string | undefined) {
     const term = q?.trim();
-    const where = term
-      ? {
-          OR: [
-            { name: { contains: term, mode: 'insensitive' as const } },
-            { companyLimited: { contains: term, mode: 'insensitive' as const } },
-            { myanmarName: { contains: term, mode: 'insensitive' as const } },
-            { registrationNo: { contains: term, mode: 'insensitive' as const } },
-            { email: { contains: term, mode: 'insensitive' as const } },
-          ],
-        }
-      : {};
     const rows = await this.prisma.importExportLicense.findMany({
-      where,
+      where: term
+        ? {
+            OR: [
+              { name: { contains: term, mode: 'insensitive' } },
+              { companyLimited: { contains: term, mode: 'insensitive' } },
+              { myanmarName: { contains: term, mode: 'insensitive' } },
+              { registrationNo: { contains: term, mode: 'insensitive' } },
+              { email: { contains: term, mode: 'insensitive' } },
+            ],
+          }
+        : {},
       orderBy: [{ dueDate: { sort: 'asc', nulls: 'last' } }, { name: 'asc' }],
       include: { _count: { select: { images: true } } },
     });
-    return rows.map((row) => this.publicRow(row, false));
+    return rows.map((row) => this.stripSecrets(row));
   }
 
+  /** One licence — with its portal logins when the caller may edit the register. */
   async detail(id: string, userId: string) {
     const license = await this.row(id);
-    return this.publicRow(license, await this.includeSecrets(userId));
+    const manager = await this.permissions.userHas(userId, PERMISSIONS.LICENSES_MANAGE);
+    return manager ? license : this.stripSecrets(license);
   }
 
-  async create(data: LicenseInput, actor: Actor) {
-    const name = this.text(data.name, 160, 'Company name');
+  async create(input: LicenseInput, actor: Actor) {
+    const name = this.clean(input.name);
     if (!name) throw new BadRequestException('Company name is required');
     const license = await this.prisma.importExportLicense.create({
-      data: {
-        name,
-        registrationNo: this.text(data.registrationNo, 60, 'Registration no.'),
-        companyLimited: this.text(data.companyLimited, 200, 'Company Limited'),
-        myanmarName: this.text(data.myanmarName, 200, 'Myanmar name'),
-        startDate: this.parseDate(data.startDate, 'Start date'),
-        dueDate: this.parseDate(data.dueDate, 'Due date'),
-        email: this.text(data.email, 160, 'Email'),
-        emailPassword: this.text(data.emailPassword, 160, 'E-mail password'),
-        tradenetPassword: this.text(data.tradenetPassword, 160, 'TradeNet password'),
-        status: this.text(data.status, 40, 'Status') ?? 'Updated',
-        note: this.text(data.note, 500, 'Note'),
-        createdById: actor.userId,
-      },
+      data: { ...this.fields(input), name, createdById: actor.userId },
     });
     await this.audit.log({
       userId: actor.userId,
@@ -169,34 +161,22 @@ export class LicensesService {
       recordId: license.id,
       newValue: { name: license.name, registrationNo: license.registrationNo, dueDate: license.dueDate },
     });
-    return this.publicRow(license, true);
+    return license;
   }
 
-  async update(id: string, data: LicenseInput, actor: Actor) {
+  async update(id: string, input: LicenseInput, actor: Actor) {
     const before = await this.row(id);
-    if (data.name !== undefined && !this.text(data.name, 160, 'Company name')) {
+    if (input.name !== undefined && !this.clean(input.name)) {
       throw new BadRequestException('Company name is required');
     }
     const updated = await this.prisma.importExportLicense.update({
       where: { id },
-      data: {
-        name: data.name === undefined ? undefined : this.text(data.name, 160, 'Company name')!,
-        registrationNo: data.registrationNo === undefined ? undefined : this.text(data.registrationNo, 60, 'Registration no.'),
-        companyLimited: data.companyLimited === undefined ? undefined : this.text(data.companyLimited, 200, 'Company Limited'),
-        myanmarName: data.myanmarName === undefined ? undefined : this.text(data.myanmarName, 200, 'Myanmar name'),
-        startDate: data.startDate === undefined ? undefined : this.parseDate(data.startDate, 'Start date'),
-        dueDate: data.dueDate === undefined ? undefined : this.parseDate(data.dueDate, 'Due date'),
-        email: data.email === undefined ? undefined : this.text(data.email, 160, 'Email'),
-        emailPassword: data.emailPassword === undefined ? undefined : this.text(data.emailPassword, 160, 'E-mail password'),
-        tradenetPassword:
-          data.tradenetPassword === undefined ? undefined : this.text(data.tradenetPassword, 160, 'TradeNet password'),
-        status: data.status === undefined ? undefined : this.text(data.status, 40, 'Status') ?? 'Updated',
-        note: data.note === undefined ? undefined : this.text(data.note, 500, 'Note'),
-      },
+      // the name is validated above, so an update never blanks it
+      data: { ...this.fields(input), name: input.name === undefined ? undefined : this.clean(input.name)! },
     });
     // Which columns changed — never the password values themselves.
-    const changed = (Object.keys(data) as (keyof LicenseInput)[]).filter(
-      (key) => data[key] !== undefined && String(before[key] ?? '') !== String(data[key] ?? ''),
+    const changed = (Object.keys(input) as (keyof LicenseInput)[]).filter(
+      (key) => input[key] !== undefined && String(before[key] ?? '') !== String(input[key] ?? ''),
     );
     await this.audit.log({
       userId: actor.userId,
@@ -207,7 +187,7 @@ export class LicensesService {
       oldValue: { name: before.name, registrationNo: before.registrationNo, dueDate: before.dueDate },
       newValue: { name: updated.name, registrationNo: updated.registrationNo, dueDate: updated.dueDate, changed },
     });
-    return this.publicRow(updated, true);
+    return updated;
   }
 
   /** Removing a licence also takes its scans off the volume. */
@@ -234,7 +214,7 @@ export class LicensesService {
     await this.row(licenseId);
     return this.prisma.licenseImage.findMany({
       where: { licenseId },
-      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      orderBy: { createdAt: 'asc' },
       select: { id: true, mimeType: true, size: true, createdAt: true },
     });
   }
@@ -258,14 +238,7 @@ export class LicensesService {
     let saved: { id: string; mimeType: string; size: number; createdAt: Date };
     try {
       saved = await this.prisma.licenseImage.create({
-        data: {
-          licenseId,
-          storedName,
-          mimeType: type.mime,
-          size: stored.length,
-          sortOrder: existing,
-          createdById: actor.userId,
-        },
+        data: { licenseId, storedName, mimeType: type.mime, size: stored.length, createdById: actor.userId },
         select: { id: true, mimeType: true, size: true, createdAt: true },
       });
     } catch (e) {

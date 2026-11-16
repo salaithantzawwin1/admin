@@ -2113,7 +2113,6 @@ model LicenseImage {
   storedName  String
   mimeType    String              @db.VarChar(40)
   size        Int
-  sortOrder   Int                 @default(0)
   createdById String?             @db.Uuid
   createdAt   DateTime            @default(now())
 

@@ -18,8 +18,6 @@ interface License {
   email: string | null;
   emailPassword?: string | null;
   tradenetPassword?: string | null;
-  hasEmailPassword?: boolean;
-  hasTradenetPassword?: boolean;
   status: string;
   note: string | null;
   updatedAt: string;
@@ -188,12 +186,16 @@ export default function Licenses() {
       if (form.id) {
         await api(`/licenses/${form.id}`, { method: 'PATCH', body });
         toast('License updated');
+        setForm(null);
+        load();
       } else {
-        await api('/licenses', { method: 'POST', body });
+        // land on the new licence so its pictures can be added straight away
+        const created = await api<License>('/licenses', { method: 'POST', body });
         toast('License added');
+        setForm(null);
+        load();
+        void openDetail(created);
       }
-      setForm(null);
-      load();
     } catch (e) {
       setModalError(e instanceof Error ? e.message : 'Could not save');
     }
@@ -271,7 +273,16 @@ export default function Licenses() {
               <td className="px-4 py-3 text-gray-700">{row.registrationNo || '—'}</td>
               <td className="px-4 py-3 text-gray-600">{fmtDate(row.startDate)}</td>
               <td className="px-4 py-3"><DueBadge due={row.dueDate} today={today} /></td>
-              <td className="px-4 py-3 text-center text-gray-700">{row._count?.images ?? 0}/5</td>
+              <td className="px-4 py-3 text-center">
+                <button
+                  type="button"
+                  onClick={() => void openDetail(row)}
+                  title="Open the license card to add or view its pictures"
+                  className="text-gray-700 hover:underline"
+                >
+                  🗂️ {row._count?.images ?? 0}/5
+                </button>
+              </td>
               <td className="px-4 py-3">
                 {canManage ? (
                   <div className="flex justify-center gap-2">
@@ -351,43 +362,24 @@ export default function Licenses() {
               ))}
             </dl>
 
-            {(detail.emailPassword || detail.tradenetPassword || detail.hasEmailPassword || detail.hasTradenetPassword) && (
+            {canManage && (
               <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-gray-800">🔐 Portal logins</h3>
-                  {canManage && (
-                    <Button variant="ghost" onClick={() => setShowSecrets((v) => !v)}>
-                      {showSecrets ? 'Hide' : 'Show'}
-                    </Button>
-                  )}
+                  <Button variant="ghost" onClick={() => setShowSecrets((v) => !v)}>
+                    {showSecrets ? 'Hide' : 'Show'}
+                  </Button>
                 </div>
                 <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
                   <div>
                     <dt className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">E-mail password</dt>
-                    <dd className="font-mono text-gray-800">
-                      {canManage
-                        ? showSecrets
-                          ? detail.emailPassword || '—'
-                          : '••••••••'
-                        : detail.hasEmailPassword
-                          ? 'Stored (hidden)'
-                          : '—'}
-                    </dd>
+                    <dd className="font-mono text-gray-800">{showSecrets ? detail.emailPassword || '—' : '••••••••'}</dd>
                   </div>
                   <div>
                     <dt className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">TradeNet password</dt>
-                    <dd className="font-mono text-gray-800">
-                      {canManage
-                        ? showSecrets
-                          ? detail.tradenetPassword || '—'
-                          : '••••••••'
-                        : detail.hasTradenetPassword
-                          ? 'Stored (hidden)'
-                          : '—'}
-                    </dd>
+                    <dd className="font-mono text-gray-800">{showSecrets ? detail.tradenetPassword || '—' : '••••••••'}</dd>
                   </div>
                 </dl>
-                {!canManage && <p className="mt-2 text-[11px] text-gray-500">Only users who manage licenses can reveal these.</p>}
               </div>
             )}
 
