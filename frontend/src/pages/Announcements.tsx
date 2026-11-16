@@ -307,6 +307,42 @@ function PhotoStrip({ photos, onOpen, dim }: { photos: Attachment[]; onOpen: () 
 /** ============ Employee view ============ */
 type EmpTab = 'ALL' | 'UNREAD' | 'ACK';
 
+type FormTab = 'content' | 'audience' | 'delivery';
+
+/** One step of the compose dialog. A red dot marks a still-missing requirement. */
+function FormTabButton({
+  id,
+  controls,
+  label,
+  active,
+  warn,
+  onClick,
+}: {
+  id: string;
+  controls: string;
+  label: string;
+  active: boolean;
+  warn?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      id={id}
+      aria-selected={active}
+      aria-controls={controls}
+      onClick={onClick}
+      className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+        active ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+      }`}
+    >
+      {label}
+      {warn && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" title={warn} aria-label={warn} />}
+    </button>
+  );
+}
+
 function EmployeeAnnouncements({ items, reload }: { items: Announcement[]; reload: () => void }) {
   const [open, setOpen] = useState<Announcement | null>(null);
   const [files, setFiles] = useState<Attachment[]>([]);
@@ -628,6 +664,13 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   onOpenMessages: (announcementId: string) => void;
 }) {
   const [formOpen, setFormOpen] = useState(false);
+
+  // which step of the compose dialog is showing — a fresh form starts on Content
+  const [formTab, setFormTab] = useState<FormTab>('content');
+
+  useEffect(() => {
+    if (formOpen) setFormTab('content');
+  }, [formOpen]);
   const [editing, setEditing] = useState<Announcement | null>(null);
   const [deleteFor, setDeleteFor] = useState<Announcement | null>(null);
   const [publishFor, setPublishFor] = useState<Announcement | null>(null);
@@ -1107,219 +1150,259 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
           error={error && !endAtFieldError ? error : null}
           xl
         >
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="announcement-title" className="mb-1 block text-xs font-medium text-gray-600">Title *</label>
-              <Input
-                id="announcement-title"
-                placeholder="e.g. Office closed on Friday afternoon"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-              />
-            </div>
-            <div>
-              <div className="text-xs text-gray-500 mb-1">Message *</div>
-              <RichTextEditor value={form.content} onChange={(html) => setForm((f) => ({ ...f, content: html }))} />
-              <div className="text-xs text-gray-400 mt-1">Bold, italic, underline, headings, lists, and alignment are supported — Telegram shows plain text.</div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{nice(c)}</option>)}
-              </Select>
-              <Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                {PRIORITIES.map((p) => <option key={p} value={p}>{nice(p)}{p !== 'NORMAL' ? ' — requires ack' : ''}</option>)}
-              </Select>
-            </div>
+                    {/* three steps instead of one tall scroll — the audience picker and its
+              head-count sat between the message and the schedule, so nobody
+              could see what they were writing and who would get it at once */}
+          <div role="tablist" aria-label="Announcement sections" className="mb-4 flex flex-wrap gap-1.5">
+            <FormTabButton
+              id="ann-tab-content"
+              controls="ann-panel-content"
+              label="Content"
+              active={formTab === 'content'}
+              warn={!form.title || !plain(form.content) ? 'Title and message are required' : undefined}
+              onClick={() => setFormTab('content')}
+            />
             {!editing && (
+              <FormTabButton
+                id="ann-tab-audience"
+                controls="ann-panel-audience"
+                label="Audience"
+                active={formTab === 'audience'}
+                warn={countPicks(form.picks) === 0 ? 'Pick at least one recipient' : undefined}
+                onClick={() => setFormTab('audience')}
+              />
+            )}
+            <FormTabButton
+              id="ann-tab-delivery"
+              controls="ann-panel-delivery"
+              label="Schedule & files"
+              active={formTab === 'delivery'}
+              onClick={() => setFormTab('delivery')}
+            />
+          </div>
+
+          {formTab === 'content' && (
+            <div role="tabpanel" id="ann-panel-content" aria-labelledby="ann-tab-content" className="space-y-4">
               <div>
-                <div className="mb-1 flex flex-wrap items-baseline gap-2">
-                  <span className="text-xs font-medium text-gray-600">Target audience</span>
-                  <span className="text-[11px] text-gray-400">who receives it, and gets the Telegram card</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    type="button"
-                    aria-pressed={form.picks.ALL}
-                    onClick={() => setForm((f) => ({ ...f, picks: { ...f.picks, ALL: !f.picks.ALL } }))}
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                      form.picks.ALL ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    }`}
-                  >
-                    Everyone
-                  </button>
-                  {KINDS.map((k) => {
-                    const n = form.picks[k.key].length;
-                    return (
-                      <button
-                        key={k.key}
-                        type="button"
-                        aria-pressed={n > 0}
-                        aria-expanded={openKind === k.key}
-                        onClick={() => setOpenKind(openKind === k.key ? null : k.key)}
-                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                          n > 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        }`}
-                      >
-                        {k.label}
-                        {n > 0 && <span className="ml-1 text-white/70">{n}</span>}
-                        <span className="ml-1 text-[10px] opacity-70">{openKind === k.key ? '▴' : '▾'}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                <label htmlFor="announcement-title" className="mb-1 block text-xs font-medium text-gray-600">Title *</label>
+                <Input
+                  id="announcement-title"
+                  placeholder="e.g. Office closed on Friday afternoon"
+                  value={form.title}
+                  onChange={(e) => setForm({ ...form, title: e.target.value })}
+                />
+              </div>
+              <div>
+                <div className="text-xs text-gray-500 mb-1">Message *</div>
+                <RichTextEditor value={form.content} onChange={(html) => setForm((f) => ({ ...f, content: html }))} />
+                <div className="text-xs text-gray-400 mt-1">Bold, italic, underline, headings, lists, and alignment are supported — Telegram shows plain text.</div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  {CATEGORIES.map((c) => <option key={c} value={c}>{nice(c)}</option>)}
+                </Select>
+                <Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+                  {PRIORITIES.map((p) => <option key={p} value={p}>{nice(p)}{p !== 'NORMAL' ? ' — requires ack' : ''}</option>)}
+                </Select>
+              </div>
+            </div>
+          )}
 
-                {form.picks.ALL && (
-                  <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                    Everyone — every active employee, plus anyone already in the audience.
-                  </p>
-                )}
+          {formTab === 'audience' && !editing && (
+            <div role="tabpanel" id="ann-panel-audience" aria-labelledby="ann-tab-audience">
+              <div className="mb-1 flex flex-wrap items-baseline gap-2">
+                <span className="text-xs font-medium text-gray-600">Target audience</span>
+                <span className="text-[11px] text-gray-400">who receives it, and gets the Telegram card</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  aria-pressed={form.picks.ALL}
+                  onClick={() => setForm((f) => ({ ...f, picks: { ...f.picks, ALL: !f.picks.ALL } }))}
+                  className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                    form.picks.ALL ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  Everyone
+                </button>
+                {KINDS.map((k) => {
+                  const n = form.picks[k.key].length;
+                  return (
+                    <button
+                      key={k.key}
+                      type="button"
+                      aria-pressed={n > 0}
+                      aria-expanded={openKind === k.key}
+                      onClick={() => setOpenKind(openKind === k.key ? null : k.key)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                        n > 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                      }`}
+                    >
+                      {k.label}
+                      {n > 0 && <span className="ml-1 text-white/70">{n}</span>}
+                      <span className="ml-1 text-[10px] opacity-70">{openKind === k.key ? '▴' : '▾'}</span>
+                    </button>
+                  );
+                })}
+              </div>
 
-                {openKind === 'DEPARTMENT' && (
-                  <div className="mt-2">
-                    <Picker
-                      items={org.departments.map((d) => ({ id: d.id, label: d.name }))}
-                      value={form.picks.DEPARTMENT}
-                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, DEPARTMENT: ids } }))}
-                      empty="No department loaded"
-                    />
-                  </div>
-                )}
-                {openKind === 'BRANCH' && (
-                  <div className="mt-2">
-                    <Picker
-                      items={org.branches.map((b) => ({ id: b.id, label: b.name }))}
-                      value={form.picks.BRANCH}
-                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, BRANCH: ids } }))}
-                      empty="No branch loaded"
-                    />
-                  </div>
-                )}
-                {openKind === 'ROLE' && (
-                  <div className="mt-2">
-                    <Picker
-                      items={ROLES.map((r) => ({ id: r, label: nice(r) }))}
-                      value={form.picks.ROLE}
-                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, ROLE: ids } }))}
-                    />
-                  </div>
-                )}
-                {openKind === 'EMPLOYEE' && (
-                  <div className="mt-2">
-                    <EmployeePicker
-                      users={org.users}
-                      value={form.picks.EMPLOYEE}
-                      onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, EMPLOYEE: ids } }))}
-                    />
-                  </div>
-                )}
-
-                <p className={`mt-1.5 text-[11px] ${countPicks(form.picks) === 0 ? 'text-amber-600' : 'text-gray-400'}`}>
-                  {countPicks(form.picks) === 0
-                    ? 'Pick at least one group or employee — a notice with no audience cannot be published.'
-                    : audienceSummary(form.picks, org)}
+              {form.picks.ALL && (
+                <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  Everyone — every active employee, plus anyone already in the audience.
                 </p>
+              )}
 
-                {/* the real head-count, before anything is sent */}
-                <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-900" aria-live="polite">
-                  {countPicks(form.picks) === 0 ? (
-                    <span className="text-blue-700/70">Pick a group or employee to see how many people this reaches.</span>
-                  ) : preview ? (
-                    <>
-                      <div className="flex flex-wrap items-baseline gap-x-2">
-                        <span>
-                          👥 <strong className="text-sm">{preview.total}</strong>{' '}
-                          {preview.total === 1 ? 'person' : 'people'} will receive this
-                        </span>
-                        {preview.duplicates > 0 && (
-                          <span className="text-[11px] text-blue-700/80">
-                            · {preview.duplicates} duplicate{preview.duplicates === 1 ? '' : 's'} removed
-                          </span>
-                        )}
-                        {previewBusy && <span className="text-[11px] text-blue-700/60">updating…</span>}
-                      </div>
-                      {preview.groups.length > 0 && (
-                        <div className="mt-0.5 text-[11px] text-blue-700/80">
-                          {preview.groups.map((g) => `${g.label} (${g.count})`).join(' · ')}
-                        </div>
-                      )}
-                      {preview.total === 0 && (
-                        <div className="mt-0.5 text-[11px] text-amber-700">
-                          Nobody matches these picks — check the department has members.
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <span className="text-blue-700/70">Counting recipients…</span>
-                  )}
-                </div>
-              </div>
-            )}
-            {editing && (
-              <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                Audience is fixed after creation:{' '}
-                <span className="font-medium">
-                  {(editing.targets ?? []).map((t) => t.targetLabel).join(', ') || 'no target'}
-                </span>{' '}
-                — duplicate the notice to send it to someone else.
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              {!editing && (
-                <div>
-                  <label htmlFor="announcements-publish-at-empty-draft" className="text-xs text-gray-500">Publish at (empty = draft)</label>
-                  <Input id="announcements-publish-at-empty-draft" type="datetime-local" value={form.publishAt} onChange={(e) => setForm({ ...form, publishAt: e.target.value })} />
+              {openKind === 'DEPARTMENT' && (
+                <div className="mt-2">
+                  <Picker
+                    items={org.departments.map((d) => ({ id: d.id, label: d.name }))}
+                    value={form.picks.DEPARTMENT}
+                    onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, DEPARTMENT: ids } }))}
+                    empty="No department loaded"
+                  />
                 </div>
               )}
-              <div>
-                <label htmlFor="announcements-expires-at" className="text-xs text-gray-500">Expires at</label>
-                <Input id="announcements-expires-at" type="datetime-local" error={endAtFieldError} value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
-              </div>
-            </div>
-            {!editing && (
-              <div>
-                <label className="text-xs text-gray-500">Photos &amp; documents (optional, up to 10 — images show in the announcement, PDFs ride along as download cards; max 10 MB each)</label>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
-                  className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-gray-100 file:text-gray-700 file:cursor-pointer hover:file:bg-gray-200"
-                  onChange={(e) => {
-                    const picked = Array.from(e.target.files ?? []);
-                    if (picked.length + pendingFiles.length > 10) {
-                      toast('Up to 10 files per announcement');
-                      e.target.value = '';
-                      return;
-                    }
-                    setPendingFiles((prev) => [...prev, ...picked]);
-                    e.target.value = '';
-                  }}
-                />
-                {pendingFiles.length > 0 && (
-                  <div className="mt-2 space-y-1">
-                    {pendingFiles.map((f, i) => (
-                      <div key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 text-xs bg-gray-50 rounded px-2 py-1">
-                        <span className="truncate">{isImage(f.type) ? '🖼' : '📄'} {f.name} <span className="text-gray-400">({fmtSize(f.size)})</span></span>
-                        <button type="button" className="text-red-500 hover:underline shrink-0" onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}>remove</button>
+              {openKind === 'BRANCH' && (
+                <div className="mt-2">
+                  <Picker
+                    items={org.branches.map((b) => ({ id: b.id, label: b.name }))}
+                    value={form.picks.BRANCH}
+                    onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, BRANCH: ids } }))}
+                    empty="No branch loaded"
+                  />
+                </div>
+              )}
+              {openKind === 'ROLE' && (
+                <div className="mt-2">
+                  <Picker
+                    items={ROLES.map((r) => ({ id: r, label: nice(r) }))}
+                    value={form.picks.ROLE}
+                    onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, ROLE: ids } }))}
+                  />
+                </div>
+              )}
+              {openKind === 'EMPLOYEE' && (
+                <div className="mt-2">
+                  <EmployeePicker
+                    users={org.users}
+                    value={form.picks.EMPLOYEE}
+                    onChange={(ids) => setForm((f) => ({ ...f, picks: { ...f.picks, EMPLOYEE: ids } }))}
+                  />
+                </div>
+              )}
+
+              <p className={`mt-1.5 text-[11px] ${countPicks(form.picks) === 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                {countPicks(form.picks) === 0
+                  ? 'Pick at least one group or employee — a notice with no audience cannot be published.'
+                  : audienceSummary(form.picks, org)}
+              </p>
+
+              {/* the real head-count, before anything is sent */}
+              <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-900" aria-live="polite">
+                {countPicks(form.picks) === 0 ? (
+                  <span className="text-blue-700/70">Pick a group or employee to see how many people this reaches.</span>
+                ) : preview ? (
+                  <>
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span>
+                        👥 <strong className="text-sm">{preview.total}</strong>{' '}
+                        {preview.total === 1 ? 'person' : 'people'} will receive this
+                      </span>
+                      {preview.duplicates > 0 && (
+                        <span className="text-[11px] text-blue-700/80">
+                          · {preview.duplicates} duplicate{preview.duplicates === 1 ? '' : 's'} removed
+                        </span>
+                      )}
+                      {previewBusy && <span className="text-[11px] text-blue-700/60">updating…</span>}
+                    </div>
+                    {preview.groups.length > 0 && (
+                      <div className="mt-0.5 text-[11px] text-blue-700/80">
+                        {preview.groups.map((g) => `${g.label} (${g.count})`).join(' · ')}
                       </div>
-                    ))}
-                  </div>
+                    )}
+                    {preview.total === 0 && (
+                      <div className="mt-0.5 text-[11px] text-amber-700">
+                        Nobody matches these picks — check the department has members.
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-blue-700/70">Counting recipients…</span>
                 )}
               </div>
-            )}
-            {editing && existingFiles.length > 0 && (
-              <AttachmentSections files={existingFiles} className="border-t border-gray-100 pt-3" />
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
-              <Button
-                disabled={busy || !form.title || !plain(form.content) || (!editing && countPicks(form.picks) === 0)}
-                onClick={submit}
-              >
-                {editing ? 'Save' : 'Create'}
-              </Button>
             </div>
+          )}
+
+          {formTab === 'delivery' && (
+            <div role="tabpanel" id="ann-panel-delivery" aria-labelledby="ann-tab-delivery" className="space-y-4">
+              {editing && (
+                <div className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  Audience is fixed after creation:{' '}
+                  <span className="font-medium">
+                    {(editing.targets ?? []).map((t) => t.targetLabel).join(', ') || 'no target'}
+                  </span>{' '}
+                  — duplicate the notice to send it to someone else.
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                {!editing && (
+                  <div>
+                    <label htmlFor="announcements-publish-at-empty-draft" className="text-xs text-gray-500">Publish at (empty = draft)</label>
+                    <Input id="announcements-publish-at-empty-draft" type="datetime-local" value={form.publishAt} onChange={(e) => setForm({ ...form, publishAt: e.target.value })} />
+                  </div>
+                )}
+                <div>
+                  <label htmlFor="announcements-expires-at" className="text-xs text-gray-500">Expires at</label>
+                  <Input id="announcements-expires-at" type="datetime-local" error={endAtFieldError} value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
+                </div>
+              </div>
+              {!editing && (
+                <div>
+                  <label className="text-xs text-gray-500">Photos &amp; documents (optional, up to 10 — images show in the announcement, PDFs ride along as download cards; max 10 MB each)</label>
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/jpeg,image/png,image/gif,image/webp,application/pdf"
+                    className="block w-full text-sm text-gray-600 file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-gray-100 file:text-gray-700 file:cursor-pointer hover:file:bg-gray-200"
+                    onChange={(e) => {
+                      const picked = Array.from(e.target.files ?? []);
+                      if (picked.length + pendingFiles.length > 10) {
+                        toast('Up to 10 files per announcement');
+                        e.target.value = '';
+                        return;
+                      }
+                      setPendingFiles((prev) => [...prev, ...picked]);
+                      e.target.value = '';
+                    }}
+                  />
+                  {pendingFiles.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {pendingFiles.map((f, i) => (
+                        <div key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 text-xs bg-gray-50 rounded px-2 py-1">
+                          <span className="truncate">{isImage(f.type) ? '🖼' : '📄'} {f.name} <span className="text-gray-400">({fmtSize(f.size)})</span></span>
+                          <button type="button" className="text-red-500 hover:underline shrink-0" onClick={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}>remove</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {editing && existingFiles.length > 0 && (
+                <AttachmentSections files={existingFiles} className="border-t border-gray-100 pt-3" />
+              )}
+            </div>
+          )}
+
+          <div className="mt-4 flex justify-end gap-2 border-t border-gray-100 pt-3">
+            <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
+            <Button
+              disabled={busy || !form.title || !plain(form.content) || (!editing && countPicks(form.picks) === 0)}
+              onClick={submit}
+            >
+              {editing ? 'Save' : 'Create'}
+            </Button>
           </div>
-        </Modal>
+</Modal>
       )}
 
       {/* admin detail modal — photos first, then text, then docs (same as employee view) */}
