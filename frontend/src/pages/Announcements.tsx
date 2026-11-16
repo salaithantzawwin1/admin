@@ -29,6 +29,15 @@ const emptyPicks = (): Picks => ({ ALL: false, DEPARTMENT: [], BRANCH: [], ROLE:
 const countPicks = (p: Picks) =>
   (p.ALL ? 1 : 0) + p.DEPARTMENT.length + p.BRANCH.length + p.ROLE.length + p.EMPLOYEE.length;
 
+/** Picks → the target array the API takes (one row per tick). */
+const picksToTargets = (p: Picks): { targetType: string; targetId?: string }[] => [
+  ...(p.ALL ? [{ targetType: 'ALL' }] : []),
+  ...p.DEPARTMENT.map((id) => ({ targetType: 'DEPARTMENT', targetId: id })),
+  ...p.BRANCH.map((id) => ({ targetType: 'BRANCH', targetId: id })),
+  ...p.ROLE.map((r) => ({ targetType: 'ROLE', targetId: r })),
+  ...p.EMPLOYEE.map((id) => ({ targetType: 'EMPLOYEE', targetId: id })),
+];
+
 const PRIORITY_STYLE: Record<string, string> = {
   NORMAL: 'bg-gray-100 text-gray-600',
   IMPORTANT: 'bg-blue-100 text-blue-700',
@@ -640,6 +649,42 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   });
   // which audience list is expanded (the selections live in `form.picks`)
   const [openKind, setOpenKind] = useState<Kind | null>('EMPLOYEE');
+  // live head-count of the current picks (union, duplicates removed)
+  const [preview, setPreview] = useState<{ total: number; groups: { label: string; count: number }[]; duplicates: number } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+
+  // Ask the server who the current picks reach — it is the only place that knows
+  // department memberships and roles, and it removes the overlaps for us.
+  useEffect(() => {
+    if (editing) return;
+    const targets = picksToTargets(form.picks);
+    if (targets.length === 0) {
+      setPreview(null);
+      setPreviewBusy(false);
+      return;
+    }
+    let dead = false;
+    setPreviewBusy(true);
+    const timer = setTimeout(() => {
+      api<{ total: number; groups: { label: string; count: number }[]; duplicates: number }>(
+        '/announcements/audience/preview',
+        { method: 'POST', body: { targets } },
+      )
+        .then((r) => {
+          if (!dead) setPreview(r);
+        })
+        .catch(() => {
+          if (!dead) setPreview(null);
+        })
+        .finally(() => {
+          if (!dead) setPreviewBusy(false);
+        });
+    }, 350);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+    };
+  }, [form.picks, editing]);
 
   const [org, setOrg] = useState<{ departments: { id: string; name: string }[]; branches: { id: string; name: string }[]; users: { id: string; fullName: string; username: string }[] }>({
     departments: [], branches: [], users: [],
@@ -668,6 +713,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   const openCreate = () => {
     setEditing(null);
+    setPreview(null);
     setForm({ title: '', content: '', category: 'GENERAL', priority: 'NORMAL', publishAt: '', endAt: '', picks: emptyPicks() });
     setPendingFiles([]);
     setExistingFiles([]);
@@ -693,6 +739,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   const openEdit = (a: Announcement) => {
     setEditing(a);
+    setPreview(null);
     setForm({
       title: a.title, content: a.content, category: a.category, priority: a.priority,
       publishAt: '', endAt: a.endAt ? a.endAt.slice(0, 16) : '',
@@ -730,15 +777,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
       if (!editing) {
         // Every kind becomes its own target row — a department plus a few people
         // is one notice with a union audience (the server de-duplicates them).
-        const p = form.picks;
-        const targets: TargetInput[] = [
-          ...(p.ALL ? [{ targetType: 'ALL' }] : []),
-          ...p.DEPARTMENT.map((id) => ({ targetType: 'DEPARTMENT', targetId: id })),
-          ...p.BRANCH.map((id) => ({ targetType: 'BRANCH', targetId: id })),
-          ...p.ROLE.map((r) => ({ targetType: 'ROLE', targetId: r })),
-          ...p.EMPLOYEE.map((id) => ({ targetType: 'EMPLOYEE', targetId: id })),
-        ];
-        body.targets = targets;
+        body.targets = picksToTargets(form.picks);
         const created = await api<{ id: string }>('/announcements', { method: 'POST', body });
         setUploadIds([created.id]);
         await uploadFiles(created.id);
@@ -1179,6 +1218,40 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                     ? 'Pick at least one group or employee — a notice with no audience cannot be published.'
                     : audienceSummary(form.picks, org)}
                 </p>
+
+                {/* the real head-count, before anything is sent */}
+                <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-900" aria-live="polite">
+                  {countPicks(form.picks) === 0 ? (
+                    <span className="text-blue-700/70">Pick a group or employee to see how many people this reaches.</span>
+                  ) : preview ? (
+                    <>
+                      <div className="flex flex-wrap items-baseline gap-x-2">
+                        <span>
+                          👥 <strong className="text-sm">{preview.total}</strong>{' '}
+                          {preview.total === 1 ? 'person' : 'people'} will receive this
+                        </span>
+                        {preview.duplicates > 0 && (
+                          <span className="text-[11px] text-blue-700/80">
+                            · {preview.duplicates} duplicate{preview.duplicates === 1 ? '' : 's'} removed
+                          </span>
+                        )}
+                        {previewBusy && <span className="text-[11px] text-blue-700/60">updating…</span>}
+                      </div>
+                      {preview.groups.length > 0 && (
+                        <div className="mt-0.5 text-[11px] text-blue-700/80">
+                          {preview.groups.map((g) => `${g.label} (${g.count})`).join(' · ')}
+                        </div>
+                      )}
+                      {preview.total === 0 && (
+                        <div className="mt-0.5 text-[11px] text-amber-700">
+                          Nobody matches these picks — check the department has members.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-blue-700/70">Counting recipients…</span>
+                  )}
+                </div>
               </div>
             )}
             {editing && (
@@ -1431,8 +1504,6 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     </>
   );
 }
-
-interface TargetInput { targetType: string; targetId?: string }
 
 export default function Announcements() {
   const canManage = hasPermission('announcements.manage');

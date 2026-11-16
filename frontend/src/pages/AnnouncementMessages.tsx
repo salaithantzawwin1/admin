@@ -132,6 +132,8 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
   const [loadingMore, setLoadingMore] = useState(false);
   const [listError, setListError] = useState('');
   const [busy, setBusy] = useState(false);
+  // selected message → preview panel (clicking a bubble means "show me this")
+  const [previewId, setPreviewId] = useState<string | null>(null);
 
   // ---- notice side panel: read the announcement without leaving the inbox
   const noticeId = searchParams.get('notice');
@@ -178,6 +180,15 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
     p.delete('notice');
     setSearchParams(p, { replace: false });
   };
+
+  useEffect(() => {
+    if (!previewId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreviewId(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [previewId]);
 
   useEffect(() => {
     if (!noticeId) return;
@@ -338,6 +349,7 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
 
   // oldest → newest, with album photos that arrived together rendered as one bubble
   const ordered = [...rows].reverse();
+  const previewMessage = rows.find((r) => r.id === previewId) ?? null;
 
   return (
     <div className="flex flex-col md:flex-row gap-4 md:gap-5">
@@ -506,12 +518,16 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                     <div key={m.id} className={grouped ? 'pl-9 -mt-1' : ''}>
                       <button
                         type="button"
-                        onClick={() => m.state === 'NEW' && markOne(m.id)}
+                        onClick={() => {
+                          setPreviewId(m.id);
+                          if (m.state === 'NEW') void markOne(m.id);
+                        }}
+                        aria-pressed={previewId === m.id}
                         className={`w-full text-left rounded-xl border px-3 py-2 transition-colors ${
                           m.state === 'NEW'
                             ? 'border-l-4 border-l-blue-500 border-gray-200 bg-white hover:bg-gray-50 cursor-pointer'
-                            : 'border-gray-100 bg-gray-50/60'
-                        }`}
+                            : 'border-gray-100 bg-gray-50/60 hover:bg-gray-50'
+                        } ${previewId === m.id ? 'ring-2 ring-blue-400' : ''}`}
                         aria-label={`Message from ${m.sender.name ?? 'unlinked chat'}`}
                       >
                         <div className="flex items-center gap-2 flex-wrap text-xs">
@@ -569,6 +585,100 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
           </p>
         )}
       </section>
+
+      {/* ---------- one message, in full ---------- */}
+      {previewMessage && (
+        <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true" aria-label="Message preview">
+          <div className="absolute inset-0 bg-black/20" onClick={() => setPreviewId(null)} />
+          <aside className="relative flex h-full w-full max-w-sm flex-col overflow-y-auto border-l border-gray-200 bg-white shadow-2xl">
+            <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-gray-100 bg-white px-4 py-3">
+              <h2 className="flex-1 text-sm font-semibold text-gray-900">Message preview</h2>
+              <button
+                className="h-8 w-8 rounded-lg text-lg leading-none text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                onClick={() => setPreviewId(null)}
+                aria-label="Close the preview"
+              >
+                ×
+              </button>
+            </header>
+
+            <div className="px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-200 text-xs font-semibold text-gray-600">
+                  {initial(previewMessage.sender.name)}
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-gray-900">
+                    {previewMessage.sender.name ?? 'Unlinked chat'}
+                  </div>
+                  <div className="text-xs text-gray-400">
+                    {previewMessage.sender.department ?? 'no department'}
+                    {!previewMessage.sender.linked && ' · not linked to an AMS user'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">
+                <span className="rounded bg-gray-100 px-1.5 py-0.5">{previewMessage.kind}</span>
+                {HANDLED_LABEL[previewMessage.handledBy] && (
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5">
+                    {HANDLED_LABEL[previewMessage.handledBy]}
+                  </span>
+                )}
+                {previewMessage.state === 'NEW' ? (
+                  <span className="rounded bg-blue-50 px-1.5 py-0.5 font-medium text-blue-700">NEW</span>
+                ) : (
+                  <span className="rounded bg-gray-100 px-1.5 py-0.5">read</span>
+                )}
+                {previewMessage.ackAt && (
+                  <span className="rounded bg-green-50 px-1.5 py-0.5 text-green-700">✓ acked</span>
+                )}
+              </div>
+
+              <div className="mt-2 text-xs text-gray-400">
+                {fmtDateTimeYgn(previewMessage.receivedAt)}
+                <span className="text-gray-300"> · chat {previewMessage.chatId}</span>
+              </div>
+
+              <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2 text-sm text-gray-800">
+                {previewMessage.text ? (
+                  <p className="whitespace-pre-wrap break-words">{previewMessage.text}</p>
+                ) : previewMessage.photo ? (
+                  <p className="text-gray-500">
+                    🖼 Photo
+                    {previewMessage.photo.width && previewMessage.photo.height
+                      ? ` · ${previewMessage.photo.width}×${previewMessage.photo.height}`
+                      : ''}
+                  </p>
+                ) : previewMessage.documentName ? (
+                  <p className="text-gray-500">📄 {previewMessage.documentName}</p>
+                ) : (
+                  <p className="text-gray-400">No text — the bot stored only the file reference.</p>
+                )}
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {previewMessage.state === 'NEW' && (
+                  <button
+                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    onClick={() => void markOne(previewMessage.id)}
+                  >
+                    Mark as read
+                  </button>
+                )}
+                {previewMessage.announcementId && canManage && (
+                  <button
+                    className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100"
+                    onClick={() => openNotice(previewMessage.announcementId!)}
+                  >
+                    Open the notice ⇥
+                  </button>
+                )}
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* ---------- the notice, read without leaving the conversation ---------- */}
       {noticeId && (

@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { AnnouncementPriority, AnnouncementStatus, AnnouncementTargetType, Prisma, RoleName } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
@@ -88,39 +89,69 @@ export class AnnouncementsService {
   }
 
   /** All users matching an announcement's targets (computed live — never a stale snapshot). */
-  private async audienceIds(announcementId: string): Promise<string[]> {
-    const targets = await this.prisma.announcementTarget.findMany({ where: { announcementId } });
-    if (targets.length === 0) return [];
-    if (targets.some((t) => t.targetType === 'ALL')) {
-      const all = await this.prisma.user.findMany({ where: { status: 'ACTIVE' }, select: { id: true } });
-      return all.map((u) => u.id);
-    }
-    const ids = new Set<string>();
-    for (const t of targets) {
-      if (t.targetType === 'DEPARTMENT') {
+  /** Active users one target reaches, before any de-duplication across targets. */
+  private async idsForTarget(t: { targetType: AnnouncementTargetType; targetId: string | null }): Promise<string[]> {
+    switch (t.targetType) {
+      case 'ALL': {
+        const all = await this.prisma.user.findMany({ where: { status: 'ACTIVE' }, select: { id: true } });
+        return all.map((u) => u.id);
+      }
+      case 'DEPARTMENT': {
         const rows = await this.prisma.employee.findMany({
-          where: { departmentId: t.targetId!, user: { status: 'ACTIVE' } },
+          where: { departmentId: t.targetId ?? '', user: { status: 'ACTIVE' } },
           select: { userId: true },
         });
-        rows.forEach((r) => r.userId && ids.add(r.userId));
-      } else if (t.targetType === 'BRANCH') {
+        return rows.map((r) => r.userId).filter((v): v is string => !!v);
+      }
+      case 'BRANCH': {
         const rows = await this.prisma.employee.findMany({
-          where: { branchId: t.targetId!, user: { status: 'ACTIVE' } },
+          where: { branchId: t.targetId ?? '', user: { status: 'ACTIVE' } },
           select: { userId: true },
         });
-        rows.forEach((r) => r.userId && ids.add(r.userId));
-      } else if (t.targetType === 'ROLE') {
+        return rows.map((r) => r.userId).filter((v): v is string => !!v);
+      }
+      case 'ROLE': {
         const rows = await this.prisma.userRole.findMany({
           where: { role: { name: t.targetId as never }, user: { status: 'ACTIVE' } },
           select: { userId: true },
         });
-        rows.forEach((r) => ids.add(r.userId));
-      } else if (t.targetType === 'EMPLOYEE') {
-        const u = await this.prisma.user.findUnique({ where: { id: t.targetId! }, select: { id: true, status: true } });
-        if (u?.status === 'ACTIVE') ids.add(u.id);
+        return rows.map((r) => r.userId);
       }
+      case 'EMPLOYEE': {
+        const u = await this.prisma.user.findUnique({ where: { id: t.targetId ?? '' }, select: { id: true, status: true } });
+        return u?.status === 'ACTIVE' ? [u.id] : [];
+      }
+      default:
+        return [];
     }
+  }
+
+  private async audienceIds(announcementId: string): Promise<string[]> {
+    const targets = await this.prisma.announcementTarget.findMany({ where: { announcementId } });
+    if (targets.length === 0) return [];
+    const ids = new Set<string>();
+    for (const t of targets) for (const id of await this.idsForTarget(t)) ids.add(id);
     return [...ids];
+  }
+
+  /**
+   * Who a set of picks would reach, before anything is created. The form calls
+   * this while the manager ticks departments, roles and people so the real
+   * head-count (union, duplicates removed) is visible before publishing.
+   */
+  async previewAudience(targets: TargetInput[]) {
+    if (!targets?.length) return { total: 0, groups: [] as { label: string; count: number }[], duplicates: 0 };
+    const resolved = await Promise.all(targets.map((t) => this.resolveTarget(t)));
+    const seen = new Set<string>();
+    const groups: { label: string; count: number }[] = [];
+    let sum = 0;
+    for (const r of resolved) {
+      const ids = await this.idsForTarget(r);
+      for (const id of ids) seen.add(id);
+      groups.push({ label: r.targetLabel, count: ids.length });
+      sum += ids.length;
+    }
+    return { total: seen.size, groups, duplicates: sum - seen.size };
   }
 
   // ---------- admin CRUD ----------
@@ -241,10 +272,31 @@ export class AnnouncementsService {
       },
       actor,
     );
+    // the pictures come along too, so a repeat notice needs no re-upload: the
+    // bytes are COPIED (new stored name) and the two notices never share a file
+    const files = await this.prisma.attachment.findMany({ where: { announcementId: id } });
+    let copied = 0;
+    for (const f of files) {
+      const src = path.join(this.uploadRoot, f.storedName);
+      if (!fs.existsSync(src)) continue;
+      const storedName = `${randomUUID()}${path.extname(f.storedName)}`;
+      fs.copyFileSync(src, path.join(this.uploadRoot, storedName));
+      await this.prisma.attachment.create({
+        data: {
+          announcementId: copy.id,
+          filename: f.filename,
+          storedName,
+          mimeType: f.mimeType,
+          size: f.size,
+          uploadedById: actor.userId,
+        },
+      });
+      copied += 1;
+    }
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'ANNOUNCEMENT_DUPLICATED', module: 'ANNOUNCEMENT', recordId: copy.id,
-      newValue: { from: a.code, code: copy.code, audience: a.targets.length },
+      newValue: { from: a.code, code: copy.code, audience: a.targets.length, files: copied },
     });
     return copy;
   }

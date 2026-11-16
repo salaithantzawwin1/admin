@@ -20,6 +20,10 @@ export class CreateAnnouncementDto {
   @IsArray() targets!: TargetInput[];
 }
 
+export class PreviewAudienceDto {
+  @IsArray() targets!: TargetInput[];
+}
+
 export class UpdateAnnouncementDto {
   @IsOptional() @IsString() @MinLength(3) @MaxLength(200) title?: string;
   @IsOptional() @IsString() @MinLength(3) @MaxLength(20000) content?: string;
@@ -103,6 +107,13 @@ export class AnnouncementsController {
   @Get(':id/read-stats')
   readStats(@Param('id') id: string) {
     return this.announcements.readStats(id);
+  }
+
+  /** How many people a set of picks reaches (union, duplicates removed). */
+  @RequirePermissions(PERMISSIONS.ANNOUNCEMENTS_MANAGE)
+  @Post('audience/preview')
+  previewAudience(@Body() dto: PreviewAudienceDto) {
+    return this.announcements.previewAudience(dto.targets ?? []);
   }
 
   /** One notice with its audience — the messages tab's side panel reads this. */
