@@ -280,13 +280,18 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
   const noticeTrap = useFocusTrap<HTMLDivElement>(!!noticeId);
   useScrollLock(!!previewId || !!noticeId);
 
-  // oldest → newest; the preview walks this same list, so ← / → step through it
-  const ordered = [...rows].reverse();
+  // newest first, like a chat; the odometer maths still needs the chronological order
+  const ordered = rows;
+  const chronological = [...rows].reverse();
   const previewMessage = rows.find((r) => r.id === previewId) ?? null;
-  const previewPos = previewMessage ? ordered.findIndex((x) => x.id === previewMessage.id) : -1;
-  const prevPreview = previewPos > 0 ? ordered[previewPos - 1] : null;
-  const nextPreview = previewPos >= 0 && previewPos < ordered.length - 1 ? ordered[previewPos + 1] : null;
-  const distance = odometerDelta(ordered, previewPos);
+  const previewPos = previewMessage ? rows.findIndex((x) => x.id === previewMessage.id) : -1;
+  // ← steps up the list (newer), → steps down it (older)
+  const prevPreview = previewPos > 0 ? rows[previewPos - 1] : null;
+  const nextPreview = previewPos >= 0 && previewPos < rows.length - 1 ? rows[previewPos + 1] : null;
+  const distance = odometerDelta(
+    chronological,
+    chronological.findIndex((x) => x.id === previewMessage?.id),
+  );
   const [notice, setNotice] = useState<NoticeDetail | null>(null);
   const [noticeError, setNoticeError] = useState('');
 
@@ -804,8 +809,8 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                   className="h-9 w-9 rounded-lg text-lg leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
                   onClick={() => prevPreview && setPreviewId(prevPreview.id)}
                   disabled={!prevPreview}
-                  aria-label="Previous message"
-                  title="Previous message (←)"
+                  aria-label="Newer message"
+                  title="Newer message (←)"
                 >
                   ‹
                 </button>
@@ -813,8 +818,8 @@ export default function AnnouncementMessages({ canManage }: { canManage: boolean
                   className="h-9 w-9 rounded-lg text-lg leading-none text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
                   onClick={() => nextPreview && setPreviewId(nextPreview.id)}
                   disabled={!nextPreview}
-                  aria-label="Next message"
-                  title="Next message (→)"
+                  aria-label="Older message"
+                  title="Older message (→)"
                 >
                   ›
                 </button>
