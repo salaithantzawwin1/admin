@@ -279,9 +279,11 @@ export default function Messages() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] min-h-[560px] flex-col gap-4 md:flex-row md:gap-6">
+    // two columns only once the app nav AND a 300px bucket rail both fit;
+    // below that the rail stacks on top and the transcript keeps the full width
+    <div className="flex min-h-0 flex-col gap-4 xl:h-[calc(100vh-7rem)] xl:flex-row xl:gap-6">
       {/* ---------------- buckets + threads ---------------- */}
-      <aside className="flex w-full flex-col gap-1.5 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm md:w-[300px] md:flex-none">
+      <aside className="flex w-full flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:w-[300px] xl:flex-none xl:overflow-y-auto">
         <p className="px-2.5 pb-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Inbox</p>
 
         {bucket(
@@ -346,7 +348,7 @@ export default function Messages() {
       </aside>
 
       {/* ---------------- transcript ---------------- */}
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+      <section className="flex min-h-[70vh] flex-1 flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl xl:min-h-0">
         <header className="flex items-start gap-4 border-b border-slate-200 px-6 py-4">
           <div className="min-w-0">
             <h1 className="truncate text-lg font-bold tracking-tight text-slate-900">{title}</h1>
