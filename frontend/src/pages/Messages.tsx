@@ -265,6 +265,9 @@ export default function Messages() {
   const [olderBusy, setOlderBusy] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
+  // the message the admin picked to answer — never inferred from the list order
+  const [replyTarget, setReplyTarget] = useState<MessageRow | null>(null);
+  const replyRef = useRef<HTMLTextAreaElement | null>(null);
   const [canReply, setCanReply] = useState(() => hasPermission('messages.reply'));
   const bodyRef = useRef<HTMLDivElement | null>(null);
   // set before "load older" so the extra slice does not yank the transcript to the end
@@ -376,7 +379,24 @@ export default function Messages() {
   // composer only appears where a reply cannot collide with an armed flow.
   const composerFor: 'direct' | 'thread' | null =
     view.kind === 'thread' ? 'thread' : view.kind === 'bucket' && view.key === 'direct' ? 'direct' : null;
-  const replyTo: MessageRow | null = items.length ? items[items.length - 1] : null;
+  const canAnswer = !!composerFor && canReply;
+
+  // The composer answers the message the admin clicked, so a subscriber writing in
+  // — or a filter change — can never move an unanswered draft to someone else.
+  const replyTo = replyTarget;
+  // The choice outlives a list reload — a new message, a live refresh, or the
+  // refetch after sending all keep it. Only leaving the bucket/thread, changing
+  // the filter, or pressing ✕ drops it. (Watching `items` here would wipe it on
+  // every reload, because the list is emptied before each refetch.)
+  useEffect(() => {
+    setReplyTarget(null);
+  }, [viewKey, filter]);
+
+  /** Pick this message as the one the composer answers. */
+  const pickReply = (m: MessageRow) => {
+    setReplyTarget(m);
+    requestAnimationFrame(() => replyRef.current?.focus());
+  };
 
   const filters = (p: URLSearchParams) => {
     if (filter === 'NEW') p.set('state', 'NEW');
@@ -482,15 +502,13 @@ export default function Messages() {
   return (
     // two columns only once the app nav AND a 300px bucket rail both fit;
     // below that the rail stacks on top and the transcript keeps the full width
-    <div className="flex min-h-0 flex-col gap-4 xl:h-[calc(100vh-7rem)] xl:flex-row xl:gap-6">
+    <div className="flex min-h-0 flex-col gap-4 xl:h-[calc(100vh-7rem)]">
       {/* ---------------- buckets + threads ---------------- */}
-      <aside className="flex w-full flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:w-[300px] xl:flex-none xl:overflow-y-auto">
-        <p className="hidden px-2.5 pb-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400 xl:block">
-          Inbox
-        </p>
-
-        {/* one swipeable strip while the rail is stacked, the 300px list beside it */}
-        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] xl:mx-0 xl:flex-col xl:overflow-visible xl:px-0 xl:pb-0">
+      <aside className="flex w-full flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        {/* The three buckets are filters of one inbox, not separate pages, so they
+            stay a horizontal strip at every width: a vertical rail only took room
+            away from the transcript and left the trips feed half empty. */}
+        <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none]">
         {BUCKETS.map((b) => {
           const active = view.kind === 'bucket' && view.key === b.key;
           const stats = b.key === 'all' ? null : threads?.[b.key === 'direct' ? 'general' : 'trips'];
@@ -502,7 +520,8 @@ export default function Messages() {
               type="button"
               onClick={() => setView({ kind: 'bucket', key: b.key })}
               aria-current={active ? 'page' : undefined}
-              className={`flex shrink-0 items-center gap-2 rounded-[10px] border px-3 py-2.5 text-left transition-colors xl:w-full xl:gap-3 xl:py-3 ${
+              title={b.desc}
+              className={`flex shrink-0 items-center gap-2 rounded-[10px] border px-3 py-2.5 text-left transition-colors ${
                 active ? 'border-blue-200 bg-blue-50' : 'border-transparent hover:bg-slate-100'
               }`}
             >
@@ -524,13 +543,10 @@ export default function Messages() {
                 >
                   {b.label}
                 </span>
-                <span className={`mt-0.5 hidden text-xs xl:block ${active ? 'text-blue-500' : 'text-slate-500'}`}>
-                  {b.desc}
-                </span>
               </span>
               {dot > 0 && <UnreadDot />}
               <span
-                className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-semibold xl:ml-auto ${
+                className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-semibold ${
                   active ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
                 }`}
               >
@@ -546,7 +562,7 @@ export default function Messages() {
             <p className="px-2.5 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
               Announcement replies
             </p>
-            <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] xl:flex-col xl:overflow-visible xl:pb-0">
+            <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none]">
               {threads!.threads.map((t) => {
                 const active = view.kind === 'thread' && view.id === t.announcementId;
                 return (
@@ -555,7 +571,7 @@ export default function Messages() {
                     type="button"
                     onClick={() => setView({ kind: 'thread', id: t.announcementId })}
                     aria-current={active ? 'page' : undefined}
-                    className={`flex shrink-0 items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors xl:w-full ${
+                    className={`flex shrink-0 items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
                       active ? 'border-blue-200 bg-blue-50' : 'border-transparent hover:bg-slate-100'
                     }`}
                   >
@@ -563,7 +579,7 @@ export default function Messages() {
                       <span className={`text-[11px] font-semibold ${active ? 'text-blue-600' : 'text-slate-500'}`}>
                         {t.code ?? '—'}
                       </span>
-                      <span className="max-w-[190px] truncate text-xs text-slate-700 xl:max-w-none">{t.title}</span>
+                      <span className="max-w-[190px] truncate text-xs text-slate-700">{t.title}</span>
                     </span>
                     <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-slate-500">
                       {t.unread > 0 && <UnreadDot />}
@@ -699,6 +715,8 @@ export default function Messages() {
                 const anyUnread = group.messages.some((m) => m.state === 'NEW');
                 const name = group.sender.name ?? 'Unknown sender';
                 const last = group.messages[group.messages.length - 1];
+                // only what the subscriber wrote can be answered
+                const lastIn = [...group.messages].reverse().find((m) => m.direction !== 'OUT');
                 return (
                   <article key={`${group.key}-${gi}`} className="mb-7 flex gap-2.5 sm:gap-3">
                     <span
@@ -727,6 +745,33 @@ export default function Messages() {
                           </span>
                         )}
                         <span className="ml-auto text-xs text-slate-400">{fmtTime(last.receivedAt)}</span>
+                        {canAnswer && lastIn && (
+                          <button
+                            type="button"
+                            onClick={() => pickReply(lastIn)}
+                            aria-pressed={replyTarget?.id === lastIn.id}
+                            title={`Reply to ${name}`}
+                            className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                              replyTarget?.id === lastIn.id
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-700'
+                            }`}
+                          >
+                            <svg
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              aria-hidden="true"
+                              className="h-3 w-3"
+                            >
+                              <path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v3" />
+                            </svg>
+                            {replyTarget?.id === lastIn.id ? 'Replying' : 'Reply'}
+                          </button>
+                        )}
                       </div>
                       <div className="flex flex-col gap-1.5">
                         {group.messages.map((m) => (
@@ -752,10 +797,45 @@ export default function Messages() {
             className="border-t border-slate-200 bg-white px-3 py-2.5 sm:px-6 sm:py-3"
           >
             <label htmlFor="reply-text" className="sr-only">
-              Reply on Telegram
+              {replyTo ? `Reply to ${replyTo.sender.name ?? 'this subscriber'} on Telegram` : 'Pick a message to reply to'}
             </label>
+            {/* who this reply reaches, in words — the composer used to answer
+                whichever message happened to be last in the list */}
+            {replyTo && (
+              <div className="mb-2 flex items-start gap-2 rounded-[10px] border border-blue-200 bg-blue-50 px-2.5 py-2">
+                <span
+                  className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${avatarColor(
+                    replyTo.sender.name ?? 'Unknown sender',
+                  )}`}
+                  aria-hidden="true"
+                >
+                  {initial(replyTo.sender.name)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[12.5px] font-semibold text-blue-900">
+                    Replying to {replyTo.sender.name ?? 'Unknown sender'}
+                    {replyTo.sender.department && (
+                      <span className="font-normal text-blue-600"> · {replyTo.sender.department}</span>
+                    )}
+                  </p>
+                  <p className="truncate text-[11.5px] text-blue-700/80">
+                    {replyTo.text ? replyTo.text.replace(/\s+/g, ' ').slice(0, 140) : (replyTo.documentName ?? 'Photo')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReplyTarget(null)}
+                  aria-label="Cancel reply"
+                  title="Cancel reply"
+                  className="shrink-0 rounded-full px-1.5 text-sm leading-none text-blue-500 transition-colors hover:text-blue-800"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
             <div className="flex items-end gap-2">
               <textarea
+                ref={replyRef}
                 id="reply-text"
                 rows={1}
                 value={replyText}
@@ -767,7 +847,11 @@ export default function Messages() {
                   }
                 }}
                 disabled={sending || !replyTo}
-                placeholder={replyTo ? 'Reply on Telegram…  (Enter sends, Shift+Enter adds a line)' : 'No message to reply to yet'}
+                placeholder={
+                  replyTo
+                    ? `Reply to ${replyTo.sender.name ?? 'this subscriber'} on Telegram…  (Enter sends, Shift+Enter adds a line)`
+                    : 'Pick a message above to reply to'
+                }
                 className="max-h-32 min-h-[42px] flex-1 resize-y rounded-[10px] border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition-colors focus:border-blue-400 disabled:bg-slate-50"
               />
               <button
@@ -779,8 +863,14 @@ export default function Messages() {
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-slate-400">
-              Delivered to this subscriber on Telegram
-              {composerFor === 'thread' ? ' inside this notice thread.' : ' as a direct message.'}
+              {replyTo ? (
+                <>
+                  Delivered to <span className="font-semibold text-slate-500">{replyTo.sender.name ?? 'this subscriber'}</span>{' '}
+                  on Telegram{composerFor === 'thread' ? ' inside this notice thread.' : ' as a direct message.'}
+                </>
+              ) : (
+                'Choose the message you are answering — the reply reaches that sender only.'
+              )}
             </p>
           </form>
         )}
