@@ -154,6 +154,34 @@ export class AnnouncementsService {
     return { total: seen.size, groups, duplicates: sum - seen.size };
   }
 
+  /**
+   * The end-date rule, in exactly one place: create() and update() both call it,
+   * so the two paths cannot disagree. The body carries a `code` because the web
+   * client decides where to show the message — keying that off the wording meant
+   * a copy edit could silently drop the error under the wrong field.
+   */
+  private assertEndDate(publishAt: Date | null, endAt: Date | null, live: boolean) {
+    if (!endAt) return;
+    if (Number.isNaN(endAt.getTime())) {
+      throw new BadRequestException({ code: 'END_AT_INVALID', message: 'Invalid end date' });
+    }
+    if (publishAt && endAt <= publishAt) {
+      throw new BadRequestException({
+        code: 'END_BEFORE_SEND',
+        message: 'End date must be after the send date',
+      });
+    }
+    // Expiring a live notice in the past removes it from every list on the next
+    // sweep, and an EXPIRED notice can no longer be edited — so that one-way door
+    // has to be the confirmed Unpublish, not a typo in a date box.
+    if (live && endAt.getTime() <= Date.now()) {
+      throw new BadRequestException({
+        code: 'END_IN_PAST',
+        message: 'A live notice cannot expire in the past — unpublish it instead',
+      });
+    }
+  }
+
   // ---------- admin CRUD ----------
 
   async create(data: {
@@ -169,7 +197,7 @@ export class AnnouncementsService {
 
     const publishAt = data.publishAt ? new Date(data.publishAt) : null;
     const endAt = data.endAt ? new Date(data.endAt) : null;
-    if (publishAt && endAt && endAt <= publishAt) throw new BadRequestException('End date must be after the send date');
+    this.assertEndDate(publishAt, endAt, false);
 
     // DRAFT if no publish date, SCHEDULED if future publish date
     const status: AnnouncementStatus = !publishAt ? 'DRAFT' : publishAt > new Date() ? 'SCHEDULED' : 'DRAFT';
@@ -208,10 +236,10 @@ export class AnnouncementsService {
 
     // create() has always refused an end date before the publish date; the PATCH
     // path did not, so an edit could store a notice that expires before it is sent.
-    const nextEndAt = data.endAt === null ? null : data.endAt ? new Date(data.endAt) : a.endAt;
-    if (nextEndAt && Number.isNaN(nextEndAt.getTime())) throw new BadRequestException('Invalid end date');
-    if (a.publishAt && nextEndAt && nextEndAt <= a.publishAt) {
-      throw new BadRequestException('End date must be after the send date');
+    // only when this request actually sets the end date: an untouched, already
+        // passed expiry must not block an unrelated edit
+    if (data.endAt !== undefined) {
+      this.assertEndDate(a.publishAt, data.endAt === null ? null : new Date(data.endAt), a.status === 'PUBLISHED');
     }
 
     // content edits after publish stay possible but are audit-logged (decision log 2026-09-23)

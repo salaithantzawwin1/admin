@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { api, getToken, hasPermission } from '../api';
+import { ApiError, api, getToken, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { Modal } from '../components/Modal';
@@ -162,6 +162,10 @@ interface ReadStats {
   /** every target with their own read/ack time — the chase list (F3) */
   people?: ReadPerson[];
 }
+
+/** Same sentences the API uses — the client shows them under the date field. */
+const SEND_RULE = 'End date must be after the send date';
+const LIVE_RULE = 'A live notice cannot expire in the past — unpublish it instead';
 
 /** The server refuses anything larger; checking here keeps it visible. */
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -767,6 +771,8 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   const [statsFor, setStatsFor] = useState<Announcement | null>(null);
   const [stats, setStats] = useState<ReadStats | null>(null);
   const [statsError, setStatsError] = useState('');
+  /** code from the last rejected save — see endAtFieldError */
+  const [errorCode, setErrorCode] = useState('');
   const [peopleFilter, setPeopleFilter] = useState<'ALL' | 'NOT_ACKED' | 'UNREAD'>('ALL');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -910,10 +916,19 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 
   // end-before-publish is mirrored client-side so the To field flags instantly;
   // the same server message is attributed to the field when the API rejects it
-  const endAtFieldError =
-    (form.publishAt && form.endAt && form.endAt <= form.publishAt) || error === 'End date must be after the send date'
-      ? 'End date must be after the send date'
-      : undefined;
+  // Mirrors END_DATE_RULE on the server. Timestamps, not strings, and the server
+  // is asked which rule it broke via the error code — matching on the message
+  // text is what let the two sides drift apart before.
+  const endAtFieldError = (() => {
+    if (!form.endAt) return errorCode === 'END_BEFORE_SEND' ? SEND_RULE : undefined;
+    const end = new Date(form.endAt).getTime();
+    if (Number.isNaN(end)) return 'That is not a valid date';
+    if (form.publishAt && end <= new Date(form.publishAt).getTime()) return SEND_RULE;
+    if (editing?.status === 'PUBLISHED' && end <= Date.now()) return LIVE_RULE;
+    if (errorCode === 'END_BEFORE_SEND') return SEND_RULE;
+    if (errorCode === 'END_IN_PAST') return LIVE_RULE;
+    return undefined;
+  })();
 
   const submit = async () => {
     // the button is already disabled for this — belt and braces, since a PATCH
@@ -922,7 +937,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
       setError(endAtFieldError);
       return;
     }
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setErrorCode('');
     try {
       const body: Record<string, unknown> = {
         title: form.title, content: form.content, category: form.category, priority: form.priority,
@@ -946,6 +961,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
       reload();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+      setErrorCode(e instanceof ApiError ? String((e.details as { code?: string })?.code ?? '') : '');
     } finally {
       setBusy(false);
     }
