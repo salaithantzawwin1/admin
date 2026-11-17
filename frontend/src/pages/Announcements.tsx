@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { ApiError, api, getToken, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select } from '../components/ui';
 import { RichTextEditor } from '../components/RichTextEditor';
@@ -9,7 +9,7 @@ import { AnnouncementCalendar } from '../components/AnnouncementCalendar';
 import { toast } from '../components/Toast';
 import { fmtDate as fmtDateYgn, fmtDateTime as fmtDateTimeYgn, fmtDateTimeInput } from '../util/yangonTime';
 import { useLiveReload } from '../hooks/useLiveReload';
-import AnnouncementMessages, { ThreadsResponse } from './AnnouncementMessages';
+import type { ThreadsResponse } from './Messages';
 
 const CATEGORIES = ['GENERAL', 'OFFICE', 'FACILITY', 'TRANSPORT', 'MEETING_ROOM', 'MAINTENANCE', 'SAFETY', 'HOLIDAY', 'IT', 'EMERGENCY', 'OTHER'];
 const PRIORITIES = ['NORMAL', 'IMPORTANT', 'URGENT', 'EMERGENCY'];
@@ -1244,7 +1244,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                       <button
                         className="text-xs text-blue-600 hover:underline"
                         onClick={() => onOpenMessages(a.id)}
-                        title={`${replyCounts[a.id]} subscriber message(s) — open the Messages tab`}
+                        title={`${replyCounts[a.id]} subscriber message(s) — open Messages`}
                       >
                         💬 {replyCounts[a.id]}
                       </button>
@@ -1799,18 +1799,11 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
 export default function Announcements() {
   const canManage = hasPermission('announcements.manage');
   const canMessages = hasPermission('messages.read');
-  // the active tab lives in the URL (?tab=messages) so refresh/back/shared links
-  // keep it — and `?ann=` then names the conversation instead of a detail view
-  const [searchParams, setSearchParams] = useSearchParams();
-  const tab: 'announcements' | 'messages' =
-    canMessages && searchParams.get('tab') === 'messages' ? 'messages' : 'announcements';
-  const showTab = (t: 'announcements' | 'messages') =>
-    setSearchParams(t === 'messages' ? { tab: 'messages' } : {}, { replace: false });
+  const navigate = useNavigate();
 
   const [items, setItems] = useState<Announcement[]>([]);
   const [mine, setMine] = useState<Announcement[]>([]);
   const [error, setError] = useState('');
-  const [unread, setUnread] = useState(0);
   const [replyCounts, setReplyCounts] = useState<Record<string, number>>({});
 
   /** Tab badge + per-notice reply counts (they share one call). */
@@ -1818,7 +1811,6 @@ export default function Announcements() {
     if (!canMessages) return;
     api<ThreadsResponse>('/messages/threads')
       .then((r) => {
-        setUnread(r.general.unread + r.trips.unread + r.threads.reduce((n, t) => n + t.unread, 0));
         setReplyCounts(Object.fromEntries(r.threads.map((t) => [t.announcementId, t.total])));
       })
       .catch(() => { /* the tab still works; the list shows its own error */ });
@@ -1848,45 +1840,15 @@ export default function Announcements() {
     <div>
       <PageHeader title="Announcements" subtitle="Company and office notices (Plan §18)" />
 
-      {canMessages && (
-        <div className="flex gap-1 border-b border-gray-200 mb-5" role="tablist" aria-label="Announcements sections">
-          <button
-            role="tab"
-            aria-selected={tab === 'announcements'}
-            className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
-              tab === 'announcements'
-                ? 'border-blue-600 text-blue-700 bg-blue-50/60'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-            }`}
-            onClick={() => showTab('announcements')}
-          >
-            Announcements
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'messages'}
-            className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
-              tab === 'messages'
-                ? 'border-blue-600 text-blue-700 bg-blue-50/60'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
-            }`}
-            onClick={() => showTab('messages')}
-          >
-            💬 Messages{unread > 0 ? ` (${unread})` : ''}
-          </button>
-          {/* screen readers hear the badge change when a reply arrives */}
-          <span className="sr-only" aria-live="polite">
-            {unread > 0 ? `${unread} unread subscriber message${unread === 1 ? '' : 's'}` : 'No unread subscriber messages'}
-          </span>
-        </div>
-      )}
-
       {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-4">{error}</div>}
 
-      {tab === 'messages' && canMessages ? (
-        <AnnouncementMessages canManage={canManage} />
-      ) : canManage ? (
-        <AdminAnnouncements items={items} reload={load} replyCounts={replyCounts} onOpenMessages={(id) => setSearchParams({ tab: 'messages', ann: id })} />
+      {canManage ? (
+        <AdminAnnouncements
+          items={items}
+          reload={load}
+          replyCounts={replyCounts}
+          onOpenMessages={(id) => navigate(`/messages?ann=${id}`)}
+        />
       ) : (
         <EmployeeAnnouncements items={mine} reload={load} />
       )}

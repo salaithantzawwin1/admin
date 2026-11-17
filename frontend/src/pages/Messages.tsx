@@ -1,44 +1,92 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, getToken } from '../api';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { api } from '../api';
 import { PageLoader } from '../components/ui';
 import { toast } from '../components/Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDate, fmtTime } from '../util/yangonTime';
-// The tab inside Announcements already declares the API shapes — importing them
-// (type-only, erased at build) is one less place for the payload to drift.
-import type { MessageRow, ThreadRow, ThreadsResponse } from './AnnouncementMessages';
 
 /**
- * The Messages inbox (plan §7–§8 / P5), as a page of its own.
+ * The Messages inbox (plan §7–§8 / P5) — the only inbox in the app.
  *
- * The three buckets the API exposes, side by side with the transcript:
+ * Three buckets the API exposes, side by side with the transcript:
  *   • All messages    — every stored subscriber message;
  *   • Direct messages — what people wrote to the bot (no announcement);
  *   • Vehicle trips   — what a trip flow consumed (odometer, ETA, reject…);
- * plus one thread per notice that has replies.
+ * plus one thread per notice that has replies, reachable by `?ann=<id>`.
  *
  * Read-only by design: the capture path writes these rows from Telegram, so this
- * page only lists them and sets the read flag. `Mark all read` clears the current
- * bucket through POST /messages/read-all, exactly like the tab does.
+ * page only lists them and sets the read flag.
  */
+
+/** One announcement thread (or a bucket) as `GET /messages/threads` returns it. */
+export interface ThreadRow {
+  announcementId: string;
+  code: string | null;
+  title: string;
+  status: string | null;
+  publishAt: string | null;
+  requiresAck: boolean;
+  total: number;
+  unread: number;
+  lastAt: string | null;
+}
+export interface Bucket {
+  total: number;
+  unread: number;
+  lastAt: string | null;
+}
+export interface ThreadsResponse {
+  /** messages the subscriber wrote to the bot, not tied to a notice */
+  general: Bucket;
+  /** messages a vehicle-trip flow consumed (odometer, ETA, reject reason, …) */
+  trips: Bucket;
+  threads: ThreadRow[];
+}
+
+/** A subscriber message as `GET /messages` returns it. */
+export interface MessageRow {
+  id: string;
+  chatId: string;
+  messageId: string | null;
+  replyToMessageId: string | null;
+  mediaGroupId: string | null;
+  sender: { userId: string | null; driverId: string | null; name: string | null; department: string | null; linked: boolean };
+  kind: 'TEXT' | 'PHOTO' | 'DOCUMENT';
+  text: string | null;
+  photo: { fileId: string; width: number | null; height: number | null } | null;
+  documentName: string | null;
+  announcementId: string | null;
+  handledBy: string;
+  state: 'NEW' | 'READ';
+  readAt: string | null;
+  receivedAt: string;
+  ackAt: string | null;
+}
 
 const BUCKETS = [
   {
     key: 'all',
     label: 'All messages',
     desc: 'Everything in your inbox',
+    title: 'All Messages',
+    sub: 'Everything the bot has received',
     icon: 'M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5v11A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5zM3.6 6.2 12 12.6l8.4-6.4',
   },
   {
     key: 'direct',
     label: 'Direct messages',
     desc: 'Written to the bot',
+    title: 'Direct Messages',
+    sub: 'Written to the bot — not tied to a notice or a trip',
     icon: 'M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-3.9-.8L3 21l1.9-4.6a8.2 8.2 0 0 1-1-3.9 8.4 8.4 0 0 1 8.4-8.4h.5A8.4 8.4 0 0 1 21 11.5z',
   },
   {
     key: 'trips',
     label: 'Vehicle trips',
     desc: 'Answered by the trip flow',
+    title: 'Vehicle Trips',
+    sub: 'Messages a trip flow consumed',
     icon: 'M5 17h14l-1.6-2.4V9a5.4 5.4 0 0 0-10.8 0v5.6zM5 17a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2M9.5 19.5h5',
   },
 ] as const;
@@ -46,11 +94,14 @@ const BUCKETS = [
 type BucketKey = (typeof BUCKETS)[number]['key'];
 type View = { kind: 'bucket'; key: BucketKey } | { kind: 'thread'; id: string };
 
-const HEADINGS: Record<BucketKey, { title: string; sub: string }> = {
-  all: { title: 'All Messages', sub: 'Everything the bot has received' },
-  direct: { title: 'Direct Messages', sub: 'Written to the bot — not tied to a notice or a trip' },
-  trips: { title: 'Vehicle Trips', sub: 'Messages a trip flow consumed' },
-};
+/** The inbox slices the old Announcements tab offered, now as one chip row. */
+type Filter = 'ALL' | 'NEW' | 'NOT_ACKED' | 'REPLIES';
+const FILTERS: { key: Filter; label: string; hint: string }[] = [
+  { key: 'ALL', label: 'All', hint: 'Every stored message in this view' },
+  { key: 'NEW', label: 'New', hint: 'Not read yet' },
+  { key: 'NOT_ACKED', label: 'Not acked', hint: 'Sender has not acknowledged the notice' },
+  { key: 'REPLIES', label: 'Announcement replies', hint: 'Sent with Telegram Reply to a notice card' },
+];
 
 const PAGE_SIZE = 100; // the API's maximum — a transcript, not a paged table
 
@@ -117,8 +168,9 @@ function UnreadDot() {
   return <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-600" aria-hidden="true" />;
 }
 
-function Bubble({ m, unread, token }: { m: MessageRow; unread: boolean; token: string }) {
-  const photoUrl = `/api/messages/${m.id}/photo?token=${encodeURIComponent(token)}`;
+function Bubble({ m, unread }: { m: MessageRow; unread: boolean }) {
+  // the proxy accepts ?token= because an <img> cannot send a header
+  const photoUrl = `/api/messages/${m.id}/photo?token=${encodeURIComponent(localStorage.getItem('ams_token') ?? '')}`;
   return (
     <div
       className={`border px-4 py-3.5 text-[14px] leading-relaxed break-words text-slate-700 shadow-sm ${
@@ -164,22 +216,32 @@ function Bubble({ m, unread, token }: { m: MessageRow; unread: boolean; token: s
 }
 
 export default function Messages() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const annParam = searchParams.get('ann');
+
   const [threads, setThreads] = useState<ThreadsResponse | null>(null);
   const [items, setItems] = useState<MessageRow[]>([]);
   const [total, setTotal] = useState(0);
   const [unread, setUnread] = useState(0);
-  const [view, setView] = useState<View>({ kind: 'bucket', key: 'direct' });
+  const [view, setView] = useState<View>(annParam ? { kind: 'thread', id: annParam } : { kind: 'bucket', key: 'direct' });
+  const [filter, setFilter] = useState<Filter>('ALL');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const token = getToken() ?? '';
 
   // One key for the open view: the effect refetches when it changes and not when
   // a click re-selects the bucket already showing.
   const viewKey = view.kind === 'bucket' ? `bucket:${view.key}` : `thread:${view.id}`;
   const reload = useCallback(() => setTick((t) => t + 1), []);
+
+  // a thread is shareable and survives a reload
+  useEffect(() => {
+    const want = view.kind === 'thread' ? `?ann=${encodeURIComponent(view.id)}` : '';
+    if (window.location.search !== want) navigate({ pathname: '/messages', search: want }, { replace: true });
+  }, [view, navigate]);
 
   useEffect(() => {
     // The previous bucket's rows must not linger under the new heading, and a
@@ -195,6 +257,9 @@ export default function Messages() {
     const p = new URLSearchParams({ page: '1', pageSize: String(PAGE_SIZE) });
     if (viewKey.startsWith('thread:')) p.set('announcementId', viewKey.slice('thread:'.length));
     else if (viewKey !== 'bucket:all') p.set('source', viewKey.slice('bucket:'.length));
+    if (filter === 'NEW') p.set('state', 'NEW');
+    if (filter === 'NOT_ACKED') p.set('ack', 'pending');
+    if (filter === 'REPLIES') p.set('handledBy', 'ANNOUNCEMENT_REPLY');
 
     Promise.all([
       api<ThreadsResponse>('/messages/threads'),
@@ -217,9 +282,9 @@ export default function Messages() {
     return () => {
       live = false;
     };
-  }, [viewKey, tick]);
+  }, [viewKey, filter, tick]);
 
-  // a subscriber messaged the bot: refetch whichever bucket is open
+  // a subscriber messaged the bot: refetch whichever slice is open
   useLiveReload(['message.new'], reload);
 
   // a transcript belongs at its newest end
@@ -230,20 +295,21 @@ export default function Messages() {
 
   const days = useMemo(() => buildDays(items), [items]);
 
-  const counts = useMemo(() => {
-    const sum = (pick: (b: { total: number; unread: number }) => number) =>
-      pick(threads?.general ?? { total: 0, unread: 0 }) +
-      pick(threads?.trips ?? { total: 0, unread: 0 }) +
-      (threads?.threads ?? []).reduce((n, t) => n + pick(t), 0);
-    return { all: sum((b) => b.total), allUnread: sum((b) => b.unread) };
-  }, [threads]);
+  const totalAll =
+    (threads?.general.total ?? 0) +
+    (threads?.trips.total ?? 0) +
+    (threads?.threads ?? []).reduce((n, t) => n + t.total, 0);
+  const unreadAll =
+    (threads?.general.unread ?? 0) +
+    (threads?.trips.unread ?? 0) +
+    (threads?.threads ?? []).reduce((n, t) => n + t.unread, 0);
 
   const thread: ThreadRow | undefined =
     view.kind === 'thread' ? threads?.threads.find((t) => t.announcementId === view.id) : undefined;
 
   const heading =
     view.kind === 'bucket'
-      ? HEADINGS[view.key]
+      ? BUCKETS.find((b) => b.key === view.key)!
       : {
           title: thread?.title ?? 'Announcement thread',
           sub: [thread?.code, thread?.publishAt ? fmtDate(thread.publishAt) : null].filter(Boolean).join(' · '),
@@ -269,6 +335,9 @@ export default function Messages() {
 
   if (loading && !threads) return <PageLoader />;
 
+  // read-all only knows a bucket, not a filter, so it must not claim to clear a slice
+  const canMarkAll = filter === 'ALL';
+
   return (
     // two columns only once the app nav AND a 300px bucket rail both fit;
     // below that the rail stacks on top and the transcript keeps the full width
@@ -279,8 +348,9 @@ export default function Messages() {
 
         {BUCKETS.map((b) => {
           const active = view.kind === 'bucket' && view.key === b.key;
-          const count = b.key === 'all' ? counts.all : threads?.[b.key === 'direct' ? 'general' : 'trips']?.total ?? 0;
-          const dot = b.key === 'all' ? counts.allUnread : threads?.[b.key === 'direct' ? 'general' : 'trips']?.unread ?? 0;
+          const stats = b.key === 'all' ? null : threads?.[b.key === 'direct' ? 'general' : 'trips'];
+          const count = stats ? stats.total : totalAll;
+          const dot = stats ? stats.unread : unreadAll;
           return (
             <button
               key={b.key}
@@ -365,9 +435,10 @@ export default function Messages() {
           <button
             type="button"
             onClick={() => void markAllRead()}
-            disabled={busy || unread === 0}
+            disabled={busy || unread === 0 || !canMarkAll}
+            title={canMarkAll ? undefined : 'Filtered view — clear the filter to mark everything read'}
             className={`ml-auto inline-flex shrink-0 items-center gap-2 rounded-[10px] border px-3 py-2 text-[13px] font-semibold leading-none transition-colors ${
-              unread === 0
+              unread === 0 && canMarkAll
                 ? 'cursor-default border-green-200 bg-green-50 text-green-700'
                 : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
             } disabled:cursor-default`}
@@ -387,6 +458,26 @@ export default function Messages() {
             <span className="whitespace-nowrap">{unread === 0 ? 'All read' : `Mark all read${unread ? ` (${unread})` : ''}`}</span>
           </button>
         </header>
+
+        <div className="flex flex-wrap gap-1.5 border-b border-slate-200 px-4 py-2 sm:px-6" role="group" aria-label="Filter messages">
+          {FILTERS.map((f) => {
+            const active = filter === f.key;
+            return (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setFilter(f.key)}
+                aria-pressed={active}
+                title={f.hint}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                  active ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {f.label}
+              </button>
+            );
+          })}
+        </div>
 
         {error && <div className="border-b border-red-100 bg-red-50 px-4 py-2 text-sm text-red-600 sm:px-6">{error}</div>}
 
@@ -418,7 +509,7 @@ export default function Messages() {
                 Acknowledgement pending — {thread?.code}
               </span>
               <a
-                href={`/announcements?tab=announcements&ann=${view.id}`}
+                href={`/announcements?ann=${view.id}`}
                 className="ml-auto whitespace-nowrap text-[12.5px] font-semibold text-amber-700 hover:underline"
               >
                 Open announcement →
@@ -428,8 +519,10 @@ export default function Messages() {
 
           {loading && <p className="py-12 text-center text-sm text-slate-500">Loading messages…</p>}
 
-          {!loading && days.length === 0 && (
-            <p className="py-16 text-center text-sm text-slate-500">No messages in this bucket yet.</p>
+          {!loading && !error && days.length === 0 && (
+            <p className="py-16 text-center text-sm text-slate-500">
+              {filter === 'ALL' ? 'No messages in this bucket yet.' : 'Nothing matches this filter.'}
+            </p>
           )}
 
           {days.map((day) => (
@@ -470,7 +563,7 @@ export default function Messages() {
                       </div>
                       <div className="flex flex-col gap-1.5">
                         {group.messages.map((m) => (
-                          <Bubble key={m.id} m={m} unread={m.state === 'NEW'} token={token} />
+                          <Bubble key={m.id} m={m} unread={m.state === 'NEW'} />
                         ))}
                       </div>
                     </div>
