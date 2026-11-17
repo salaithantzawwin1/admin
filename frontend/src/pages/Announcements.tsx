@@ -919,12 +919,14 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   // Mirrors END_DATE_RULE on the server. Timestamps, not strings, and the server
   // is asked which rule it broke via the error code — matching on the message
   // text is what let the two sides drift apart before.
+  // an expiry the admin did not touch is not re-sent, so it must not be judged
+  const endAtUnchanged = !!editing && form.endAt === fmtDateTimeInput(editing.endAt);
   const endAtFieldError = (() => {
     if (!form.endAt) return errorCode === 'END_BEFORE_SEND' ? SEND_RULE : undefined;
     const end = new Date(form.endAt).getTime();
     if (Number.isNaN(end)) return 'That is not a valid date';
     if (form.publishAt && end <= new Date(form.publishAt).getTime()) return SEND_RULE;
-    if (editing?.status === 'PUBLISHED' && end <= Date.now()) return LIVE_RULE;
+    if (editing?.status === 'PUBLISHED' && end <= Date.now() && !endAtUnchanged) return LIVE_RULE;
     if (errorCode === 'END_BEFORE_SEND') return SEND_RULE;
     if (errorCode === 'END_IN_PAST') return LIVE_RULE;
     return undefined;
@@ -954,6 +956,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
         await uploadFiles(created.id);
       } else {
         if (form.endAt === '' && editing.endAt) body.endAt = null; // explicit clear
+        else if (endAtUnchanged) delete body.endAt; // untouched — leave the stored one alone
         await api(`/announcements/${editing.id}`, { method: 'PATCH', body });
       }
       toast(editing ? 'Announcement updated' : 'Announcement created (draft — publish when ready)');
