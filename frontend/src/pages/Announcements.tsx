@@ -858,6 +858,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     setPendingFiles([]);
     setExistingFiles([]);
     setError('');
+    setErrorCode('');
     setFormOpen(true);
   };
 
@@ -901,6 +902,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
     setExistingFiles([]);
     api<Attachment[]>(`/attachments/announcement/${a.id}`).then(setExistingFiles).catch(() => {});
     setError('');
+    setErrorCode('');
     setFormOpen(true);
   };
 
@@ -914,23 +916,26 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   // the shared ?ann=<id> link is copied from this very list, so it has to open here
   useDeepLink(items, (a) => openDetail(a));
 
-  // end-before-publish is mirrored client-side so the To field flags instantly;
-  // the same server message is attributed to the field when the API rejects it
-  // Mirrors END_DATE_RULE on the server. Timestamps, not strings, and the server
-  // is asked which rule it broke via the error code — matching on the message
-  // text is what let the two sides drift apart before.
-  // an expiry the admin did not touch is not re-sent, so it must not be judged
+  // The end date is judged by one rule on each side and both compare timestamps:
+  // endRule() mirrors assertEndDate() on the server. A rejection the local rule
+  // cannot see — a clock, or a status that moved since the list was loaded — arrives
+  // as an error code and stays on the field until one of the dates is edited.
+  // An expiry the admin did not touch is not re-sent, so it must not be judged.
+  const SERVER_RULE: Record<string, string> = { END_BEFORE_SEND: SEND_RULE, END_IN_PAST: LIVE_RULE };
   const endAtUnchanged = !!editing && form.endAt === fmtDateTimeInput(editing.endAt);
-  const endAtFieldError = (() => {
-    if (!form.endAt) return errorCode === 'END_BEFORE_SEND' ? SEND_RULE : undefined;
-    const end = new Date(form.endAt).getTime();
+  const endRule = (endAt: string, publishAt: string, live: boolean): string | undefined => {
+    if (!endAt) return undefined;
+    const end = new Date(endAt).getTime();
     if (Number.isNaN(end)) return 'That is not a valid date';
-    if (form.publishAt && end <= new Date(form.publishAt).getTime()) return SEND_RULE;
-    if (editing?.status === 'PUBLISHED' && end <= Date.now() && !endAtUnchanged) return LIVE_RULE;
-    if (errorCode === 'END_BEFORE_SEND') return SEND_RULE;
-    if (errorCode === 'END_IN_PAST') return LIVE_RULE;
+    if (publishAt && end <= new Date(publishAt).getTime()) return SEND_RULE;
+    if (live && end <= Date.now()) return LIVE_RULE;
     return undefined;
-  })();
+  };
+  const endAtFieldError =
+    endRule(form.endAt, form.publishAt, editing?.status === 'PUBLISHED' && !endAtUnchanged)
+    ?? SERVER_RULE[errorCode];
+  // a date edit is the answer to a rejected date, so its code and banner go with it
+  const clearDateError = () => { setErrorCode(''); setError(''); };
 
   const submit = async () => {
     // the button is already disabled for this — belt and braces, since a PATCH
@@ -1498,12 +1503,12 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                 {!editing && (
                   <div>
                     <label htmlFor="announcements-publish-at-empty-draft" className="text-xs text-gray-500">Publish at (empty = draft)</label>
-                    <Input id="announcements-publish-at-empty-draft" type="datetime-local" value={form.publishAt} onChange={(e) => setForm({ ...form, publishAt: e.target.value })} />
+                    <Input id="announcements-publish-at-empty-draft" type="datetime-local" value={form.publishAt} onChange={(e) => { setForm({ ...form, publishAt: e.target.value }); clearDateError(); }} />
                   </div>
                 )}
                 <div>
                   <label htmlFor="announcements-expires-at" className="text-xs text-gray-500">Expires at</label>
-                  <Input id="announcements-expires-at" type="datetime-local" error={endAtFieldError} value={form.endAt} onChange={(e) => setForm({ ...form, endAt: e.target.value })} />
+                  <Input id="announcements-expires-at" type="datetime-local" error={endAtFieldError} value={form.endAt} onChange={(e) => { setForm({ ...form, endAt: e.target.value }); clearDateError(); }} />
                 </div>
               </div>
               {!editing && (
