@@ -955,7 +955,7 @@ export class AnnouncementsService {
     return sent;
   }
 
-  /** Hourly: SCHEDULED → PUBLISHED when publishAt arrives; PUBLISHED → EXPIRED after endAt. */
+  /** Every minute: SCHEDULED → PUBLISHED when publishAt arrives; PUBLISHED → EXPIRED after endAt. */
   // Every minute, on the minute. This used to be '0 5 * * * *', which is not
   // "every minute" but "once an hour at :05" — so a notice scheduled for 08:01
   // went out at 09:05, and the publish time shown to the admin was a lie.
