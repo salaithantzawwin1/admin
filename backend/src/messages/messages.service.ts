@@ -241,13 +241,19 @@ export class MessagesService {
           ? { announcementId: null, handledBy: { in: ['GENERAL', 'ANNOUNCEMENT_REPLY'] } }
           : {};
 
+    // handledBy and source describe the same column, so they cannot be spread
+    // into one object: whichever came last silently won, and a filtered inbox
+    // returned everything ("Announcement replies" under Direct showed all of
+    // it). They compose as AND instead, like the ack filter already does.
+    const and: Prisma.TelegramInboundMessageWhereInput[] = [handledWhere, sourceWhere].filter(
+      (w) => Object.keys(w).length > 0,
+    );
+    if (ack === 'pending') and.push(await this.pendingAckFilter());
     const where: Prisma.TelegramInboundMessageWhereInput = {
       ...(source === 'direct' ? {} : this.threadFilter(query.announcementId)),
-      ...handledWhere,
-      ...sourceWhere,
       ...(kind ? { kind } : {}),
       ...(state ? { state } : {}),
-      ...(ack === 'pending' ? { AND: [await this.pendingAckFilter()] } : {}),
+      ...(and.length ? { AND: and } : {}),
     };
 
     const [total, unread, rows] = await Promise.all([
