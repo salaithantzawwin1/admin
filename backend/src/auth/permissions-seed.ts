@@ -13,7 +13,7 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   // messages.read → the Messages tab of /announcements: what subscribers sent
   // the bot. Administration handles inboxes, so it is the only default grant;
   // any other role can be given it from the RBAC matrix.
-  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'suppliers.read', 'suppliers.manage', 'procurement.read', 'procurement.manage', 'assets.read', 'assets.manage', 'maintenance.read', 'maintenance.manage', 'pettycash.read', 'announcements.read', 'announcements.manage', 'messages.read', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
+  ADMINISTRATION: ['inventory.read', 'inventory.manage', 'suppliers.read', 'suppliers.manage', 'procurement.read', 'procurement.manage', 'assets.read', 'assets.manage', 'maintenance.read', 'maintenance.manage', 'pettycash.read', 'announcements.read', 'announcements.manage', 'messages.read', 'messages.reply', 'fleet.types.manage', 'meeting-rooms.facilities.manage', 'org.read', 'departments.manage', 'employees.manage'],
   EMPLOYEE: ['inventory.read', 'announcements.read'],
   DEPARTMENT_HEAD: ['inventory.read', 'announcements.read'],
   MANAGEMENT: ['inventory.read', 'announcements.read', 'assets.read', 'maintenance.read', 'pettycash.read', 'payments.read'],

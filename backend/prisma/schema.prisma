@@ -757,6 +757,13 @@ model AnnouncementChatSend {
 /// Everything the audience sends the bot is kept here — text and photos, even
 /// when a vehicle-trip conversation (odometer / reject reason / ETA / /car
 /// form) consumed it, so nothing a subscriber writes is lost.
+/// A message that came from Telegram (IN) or was sent to a subscriber from
+/// the Messages page (OUT). Both live here so one transcript reads in order.
+enum MessageDirection {
+  IN
+  OUT
+}
+
 model TelegramInboundMessage {
   id                String                  @id @default(uuid()) @db.Uuid
   chatId            String
@@ -775,6 +782,7 @@ model TelegramInboundMessage {
   announcementId    String?                 @db.Uuid // null = general (not linked)
   handledBy         InboundMessageHandledBy @default(GENERAL)
   state             InboundMessageState     @default(NEW)
+  direction         MessageDirection        @default(IN) // OUT = an admin reply
   readById          String?                 @db.Uuid
   readAt            DateTime?
   receivedAt        DateTime                @default(now())

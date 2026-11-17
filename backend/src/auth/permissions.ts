@@ -39,6 +39,7 @@ export const PERMISSIONS = {
   ANNOUNCEMENTS_READ: 'announcements.read',
   ANNOUNCEMENTS_MANAGE: 'announcements.manage',
   MESSAGES_READ: 'messages.read',
+  MESSAGES_REPLY: 'messages.reply',
   AUDIT_READ: 'audit.read',
   ATTACHMENTS_USE: 'attachments.use',
 } as const;

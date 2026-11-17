@@ -1,4 +1,4 @@
-import { Controller, Get, NotFoundException, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -69,6 +69,13 @@ export class MessagesController {
   @Post(':id/read')
   markRead(@Req() req, @Param('id') id: string) {
     return this.messages.markRead(id, req.user.id);
+  }
+
+  /** Answer a direct message or an announcement reply (never a trip flow). */
+  @Post(':id/reply')
+  @RequirePermissions(PERMISSIONS.MESSAGES_REPLY)
+  reply(@Req() req, @Param('id') id: string, @Body() body: { text?: string }) {
+    return this.messages.reply(id, body?.text ?? '', { userId: req.user.id, username: req.user.username });
   }
 
   @Post('read-all')

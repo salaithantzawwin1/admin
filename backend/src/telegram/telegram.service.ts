@@ -1516,6 +1516,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Plain text to a chat we already know. No parse mode: an admin's reply is
+   * free text, and Telegram would read `_` or `*` in it as markup.
+   */
+  async sendText(chatId: string, text: string): Promise<{ messageId: number | null } | null> {
+    const res = await this.call<{ message_id?: number }>('sendMessage', { chat_id: chatId, text });
+    if (!res) return null;
+    return { messageId: res.message_id ?? null };
+  }
+
+  /**
    * The newest dashboard photo this chat already sent, from the inbound log.
    *
    * Drivers routinely send the photo a few seconds BEFORE they tap Ready / Back

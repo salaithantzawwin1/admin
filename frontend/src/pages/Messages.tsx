@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { api } from '../api';
+import { api, hasPermission, refreshSession } from '../api';
 import { PageLoader } from '../components/ui';
 import { toast } from '../components/Toast';
 import { useLiveReload } from '../hooks/useLiveReload';
@@ -15,8 +15,10 @@ import { fmtDate, fmtTime } from '../util/yangonTime';
  *   • Vehicle trips   — what a trip flow consumed (odometer, ETA, reject…);
  * plus one thread per notice that has replies, reachable by `?ann=<id>`.
  *
- * Read-only by design: the capture path writes these rows from Telegram, so this
- * page only lists them and sets the read flag.
+ * The caption path writes rows from Telegram; this page lists them, sets the read
+ * flag, and — for a direct message or an announcement thread — answers them.
+ * Vehicle trips stay read-only: an armed flow is waiting for the driver's next
+ * answer in that chat, so an admin reply there would be read as one.
  */
 
 /** One announcement thread (or a bucket) as `GET /messages/threads` returns it. */
@@ -59,6 +61,8 @@ export interface MessageRow {
   announcementId: string | null;
   handledBy: string;
   state: 'NEW' | 'READ';
+  /** IN = the subscriber wrote it; OUT = an admin answered from this page */
+  direction?: 'IN' | 'OUT';
   readAt: string | null;
   receivedAt: string;
   ackAt: string | null;
@@ -103,7 +107,9 @@ const FILTERS: { key: Filter; label: string; hint: string }[] = [
   { key: 'REPLIES', label: 'Announcement replies', hint: 'Sent with Telegram Reply to a notice card' },
 ];
 
-const PAGE_SIZE = 100; // the API's maximum — a transcript, not a paged table
+// One page of a transcript, not a whole mailbox: "Load older" asks for the next
+// slice, so a chat with thousands of rows still opens fast.
+const PAGE_SIZE = 50;
 
 interface Group {
   key: string;
@@ -168,17 +174,42 @@ function UnreadDot() {
   return <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-600" aria-hidden="true" />;
 }
 
-function Bubble({ m, unread }: { m: MessageRow; unread: boolean }) {
+function Bubble({ m, unread, onRead }: { m: MessageRow; unread: boolean; onRead: (m: MessageRow) => void }) {
   // the proxy accepts ?token= because an <img> cannot send a header
   const photoUrl = `/api/messages/${m.id}/photo?token=${encodeURIComponent(localStorage.getItem('ams_token') ?? '')}`;
+  const out = m.direction === 'OUT';
   return (
     <div
-      className={`border px-4 py-3.5 text-[14px] leading-relaxed break-words text-slate-700 shadow-sm ${
-        unread ? 'border-blue-100 bg-blue-50' : 'border-slate-200/80 bg-white'
-      }`}
-      style={{ borderRadius: '2px 16px 16px 16px' }}
+      className={`border px-4 py-3.5 text-[14px] leading-relaxed break-words shadow-sm ${
+        out
+          ? 'border-blue-600 bg-blue-600 text-white'
+          : unread
+            ? 'border-blue-100 bg-blue-50 text-slate-700'
+            : 'border-slate-200/80 bg-white text-slate-700'
+      } ${unread ? 'cursor-pointer' : ''}`}
+      style={{ borderRadius: out ? '16px 2px 16px 16px' : '2px 16px 16px 16px' }}
+      // one click reads this message only — the bucket-wide clear keeps its own button
+      onClick={unread ? () => onRead(m) : undefined}
+      onKeyDown={
+        unread
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onRead(m);
+              }
+            }
+          : undefined
+      }
+      role={unread ? 'button' : undefined}
+      tabIndex={unread ? 0 : undefined}
+      title={unread ? 'Mark this message read' : undefined}
     >
       {m.text && <p className="m-0 whitespace-pre-wrap break-words">{m.text}</p>}
+      {out && (
+        <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.06em] text-blue-100">
+          sent
+        </span>
+      )}
       {m.kind === 'PHOTO' && (
         <a
           href={photoUrl}
@@ -230,7 +261,14 @@ export default function Messages() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [tick, setTick] = useState(0);
+  const [page, setPage] = useState(1);
+  const [olderBusy, setOlderBusy] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [canReply, setCanReply] = useState(() => hasPermission('messages.reply'));
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  // set before "load older" so the extra slice does not yank the transcript to the end
+  const keepScroll = useRef<{ height: number; top: number } | null>(null);
 
   // One key for the open view: the effect refetches when it changes and not when
   // a click re-selects the bucket already showing.
@@ -253,6 +291,7 @@ export default function Messages() {
     setTotal(0);
     setUnread(0);
     setError('');
+    setPage(1);
 
     const p = new URLSearchParams({ page: '1', pageSize: String(PAGE_SIZE) });
     if (viewKey.startsWith('thread:')) p.set('announcementId', viewKey.slice('thread:'.length));
@@ -287,10 +326,26 @@ export default function Messages() {
   // a subscriber messaged the bot: refetch whichever slice is open
   useLiveReload(['message.new'], reload);
 
-  // a transcript belongs at its newest end
+  // an existing session carries the permissions it logged in with, so a freshly
+  // granted messages.reply would stay invisible until the next sign-in
+  useEffect(() => {
+    void refreshSession();
+    const sync = () => setCanReply(hasPermission('messages.reply'));
+    window.addEventListener('ams_session', sync);
+    return () => window.removeEventListener('ams_session', sync);
+  }, []);
+
+  // a transcript belongs at its newest end — unless a slice was just prepended
   useEffect(() => {
     const el = bodyRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const keep = keepScroll.current;
+    if (keep) {
+      el.scrollTop = keep.top + (el.scrollHeight - keep.height);
+      keepScroll.current = null;
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
   }, [items]);
 
   const days = useMemo(() => buildDays(items), [items]);
@@ -315,7 +370,93 @@ export default function Messages() {
           sub: [thread?.code, thread?.publishAt ? fmtDate(thread.publishAt) : null].filter(Boolean).join(' · '),
         };
 
-  const unacked = !!thread?.requiresAck && items.some((m) => !m.ackAt);
+  const unacked = !!thread?.requiresAck && items.some((m) => !m.ackAt && m.direction !== 'OUT');
+
+  // Vehicle trips are never answerable, and "All messages" mixes them in, so the
+  // composer only appears where a reply cannot collide with an armed flow.
+  const composerFor: 'direct' | 'thread' | null =
+    view.kind === 'thread' ? 'thread' : view.kind === 'bucket' && view.key === 'direct' ? 'direct' : null;
+  const replyTo: MessageRow | null = items.length ? items[items.length - 1] : null;
+
+  const filters = (p: URLSearchParams) => {
+    if (filter === 'NEW') p.set('state', 'NEW');
+    if (filter === 'NOT_ACKED') p.set('ack', 'pending');
+    if (filter === 'REPLIES') p.set('handledBy', 'ANNOUNCEMENT_REPLY');
+    return p;
+  };
+
+  /** Ask for the next-oldest page and put it above what is already shown. */
+  const loadOlder = async () => {
+    const el = bodyRef.current;
+    if (el) keepScroll.current = { height: el.scrollHeight, top: el.scrollTop };
+    setOlderBusy(true);
+    try {
+      const p = filters(new URLSearchParams({ page: String(page + 1), pageSize: String(PAGE_SIZE) }));
+      if (viewKey.startsWith('thread:')) p.set('announcementId', viewKey.slice('thread:'.length));
+      else if (viewKey !== 'bucket:all') p.set('source', viewKey.slice('bucket:'.length));
+      const list = await api<{ items: MessageRow[]; total: number }>(`/messages?${p.toString()}`);
+      setItems((prev) => {
+        const have = new Set(prev.map((m) => m.id));
+        const older = [...list.items].reverse().filter((m) => !have.has(m.id));
+        return [...older, ...prev];
+      });
+      setPage((n) => n + 1);
+      setTotal(list.total);
+    } catch (e) {
+      keepScroll.current = null;
+      toast(e instanceof Error ? e.message : 'Could not load older messages');
+    } finally {
+      setOlderBusy(false);
+    }
+  };
+
+  /**
+   * Read this one message. The list already has the wire shape, so the flag flips
+   * here first and is put back if the API refuses — no full refetch, which would
+   * also jump a scrolled transcript.
+   */
+  const readOne = async (m: MessageRow) => {
+    if (m.state !== 'NEW') return;
+    setItems((prev) => prev.map((x) => (x.id === m.id ? { ...x, state: 'READ' as const, readAt: new Date().toISOString() } : x)));
+    setUnread((n) => Math.max(0, n - 1));
+    setThreads((t) => {
+      if (!t) return t;
+      if (m.announcementId) {
+        return {
+          ...t,
+          threads: t.threads.map((x) =>
+            x.announcementId === m.announcementId ? { ...x, unread: Math.max(0, x.unread - 1) } : x,
+          ),
+        };
+      }
+      const dec = (b: Bucket) => ({ ...b, unread: Math.max(0, b.unread - 1) });
+      return m.handledBy === 'GENERAL' ? { ...t, general: dec(t.general) } : { ...t, trips: dec(t.trips) };
+    });
+    try {
+      await api(`/messages/${m.id}/read`, { method: 'POST' });
+    } catch (e) {
+      setItems((prev) => prev.map((x) => (x.id === m.id ? { ...x, state: 'NEW' as const, readAt: null } : x)));
+      setUnread((n) => n + 1);
+      toast(e instanceof Error ? e.message : 'Could not mark the message read');
+    }
+  };
+
+  /** Send the composer's text to the subscriber this transcript belongs to. */
+  const sendReply = async () => {
+    const text = replyText.trim();
+    if (!text || !replyTo) return;
+    setSending(true);
+    try {
+      await api(`/messages/${replyTo.id}/reply`, { method: 'POST', body: { text } });
+      setReplyText('');
+      toast('Reply sent on Telegram');
+      reload(); // brings the new outbound row in from the server, newest end visible
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not send the reply');
+    } finally {
+      setSending(false);
+    }
+  };
 
   const markAllRead = async () => {
     setBusy(true);
@@ -344,8 +485,12 @@ export default function Messages() {
     <div className="flex min-h-0 flex-col gap-4 xl:h-[calc(100vh-7rem)] xl:flex-row xl:gap-6">
       {/* ---------------- buckets + threads ---------------- */}
       <aside className="flex w-full flex-col gap-1.5 rounded-xl border border-slate-200 bg-white p-3 shadow-sm xl:w-[300px] xl:flex-none xl:overflow-y-auto">
-        <p className="px-2.5 pb-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">Inbox</p>
+        <p className="hidden px-2.5 pb-2 pt-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400 xl:block">
+          Inbox
+        </p>
 
+        {/* one swipeable strip while the rail is stacked, the 300px list beside it */}
+        <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 [scrollbar-width:none] xl:mx-0 xl:flex-col xl:overflow-visible xl:px-0 xl:pb-0">
         {BUCKETS.map((b) => {
           const active = view.kind === 'bucket' && view.key === b.key;
           const stats = b.key === 'all' ? null : threads?.[b.key === 'direct' ? 'general' : 'trips'];
@@ -357,7 +502,7 @@ export default function Messages() {
               type="button"
               onClick={() => setView({ kind: 'bucket', key: b.key })}
               aria-current={active ? 'page' : undefined}
-              className={`flex w-full items-center gap-3 rounded-[10px] border px-3 py-3 text-left transition-colors ${
+              className={`flex shrink-0 items-center gap-2 rounded-[10px] border px-3 py-2.5 text-left transition-colors xl:w-full xl:gap-3 xl:py-3 ${
                 active ? 'border-blue-200 bg-blue-50' : 'border-transparent hover:bg-slate-100'
               }`}
             >
@@ -374,12 +519,18 @@ export default function Messages() {
                 <path d={b.icon} />
               </svg>
               <span className="flex min-w-0 flex-col">
-                <span className={`text-sm font-semibold ${active ? 'text-blue-600' : 'text-slate-900'}`}>{b.label}</span>
-                <span className={`mt-0.5 text-xs ${active ? 'text-blue-500' : 'text-slate-500'}`}>{b.desc}</span>
+                <span
+                  className={`whitespace-nowrap text-sm font-semibold ${active ? 'text-blue-600' : 'text-slate-900'}`}
+                >
+                  {b.label}
+                </span>
+                <span className={`mt-0.5 hidden text-xs xl:block ${active ? 'text-blue-500' : 'text-slate-500'}`}>
+                  {b.desc}
+                </span>
               </span>
               {dot > 0 && <UnreadDot />}
               <span
-                className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-semibold ${
+                className={`ml-2 shrink-0 rounded-full px-2 py-0.5 text-center text-xs font-semibold xl:ml-auto ${
                   active ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
                 }`}
               >
@@ -388,13 +539,14 @@ export default function Messages() {
             </button>
           );
         })}
+        </div>
 
         {(threads?.threads.length ?? 0) > 0 && (
           <>
             <p className="px-2.5 pb-1 pt-4 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
               Announcement replies
             </p>
-            <div className="flex flex-col gap-1">
+            <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] xl:flex-col xl:overflow-visible xl:pb-0">
               {threads!.threads.map((t) => {
                 const active = view.kind === 'thread' && view.id === t.announcementId;
                 return (
@@ -403,7 +555,7 @@ export default function Messages() {
                     type="button"
                     onClick={() => setView({ kind: 'thread', id: t.announcementId })}
                     aria-current={active ? 'page' : undefined}
-                    className={`flex w-full items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors ${
+                    className={`flex shrink-0 items-start gap-2 rounded-lg border px-3 py-2 text-left transition-colors xl:w-full ${
                       active ? 'border-blue-200 bg-blue-50' : 'border-transparent hover:bg-slate-100'
                     }`}
                   >
@@ -411,7 +563,7 @@ export default function Messages() {
                       <span className={`text-[11px] font-semibold ${active ? 'text-blue-600' : 'text-slate-500'}`}>
                         {t.code ?? '—'}
                       </span>
-                      <span className="truncate text-xs text-slate-700">{t.title}</span>
+                      <span className="max-w-[190px] truncate text-xs text-slate-700 xl:max-w-none">{t.title}</span>
                     </span>
                     <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-slate-500">
                       {t.unread > 0 && <UnreadDot />}
@@ -486,9 +638,19 @@ export default function Messages() {
           className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-slate-50 p-3 [scrollbar-color:#cbd5e1_transparent] [scrollbar-width:thin] sm:p-6"
         >
           {total > items.length && (
-            <p className="mb-4 rounded-lg bg-white px-3 py-2 text-center text-xs text-slate-500">
-              Showing the newest {items.length} of {total} messages.
-            </p>
+            <div className="mb-4 flex flex-col items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => void loadOlder()}
+                disabled={olderBusy}
+                className="rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 disabled:cursor-default disabled:text-slate-400"
+              >
+                {olderBusy ? 'Loading…' : `Load ${Math.min(PAGE_SIZE, total - items.length)} older`}
+              </button>
+              <p className="text-[11px] text-slate-400">
+                Showing {items.length} of {total}
+              </p>
+            </div>
           )}
 
           {view.kind === 'thread' && unacked && (
@@ -559,11 +721,16 @@ export default function Messages() {
                             {group.sender.department}
                           </span>
                         )}
+                        {group.messages[0].direction === 'OUT' && (
+                          <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                            reply
+                          </span>
+                        )}
                         <span className="ml-auto text-xs text-slate-400">{fmtTime(last.receivedAt)}</span>
                       </div>
                       <div className="flex flex-col gap-1.5">
                         {group.messages.map((m) => (
-                          <Bubble key={m.id} m={m} unread={m.state === 'NEW'} />
+                          <Bubble key={m.id} m={m} unread={m.state === 'NEW'} onRead={readOne} />
                         ))}
                       </div>
                     </div>
@@ -573,6 +740,50 @@ export default function Messages() {
             </div>
           ))}
         </div>
+
+        {/* Vehicle trips and "All messages" never get a composer: a reply there
+            would land in a chat a trip flow is still holding for an answer. */}
+        {composerFor && canReply && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void sendReply();
+            }}
+            className="border-t border-slate-200 bg-white px-3 py-2.5 sm:px-6 sm:py-3"
+          >
+            <label htmlFor="reply-text" className="sr-only">
+              Reply on Telegram
+            </label>
+            <div className="flex items-end gap-2">
+              <textarea
+                id="reply-text"
+                rows={1}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    void sendReply();
+                  }
+                }}
+                disabled={sending || !replyTo}
+                placeholder={replyTo ? 'Reply on Telegram…  (Enter sends, Shift+Enter adds a line)' : 'No message to reply to yet'}
+                className="max-h-32 min-h-[42px] flex-1 resize-y rounded-[10px] border border-slate-200 px-3 py-2.5 text-sm text-slate-800 outline-none transition-colors focus:border-blue-400 disabled:bg-slate-50"
+              />
+              <button
+                type="submit"
+                disabled={sending || !replyTo || !replyText.trim()}
+                className="inline-flex h-[42px] shrink-0 items-center gap-1.5 rounded-[10px] bg-blue-600 px-4 text-sm font-semibold text-white transition-colors hover:bg-blue-700 disabled:cursor-default disabled:bg-slate-200 disabled:text-slate-400"
+              >
+                {sending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] text-slate-400">
+              Delivered to this subscriber on Telegram
+              {composerFor === 'thread' ? ' inside this notice thread.' : ' as a direct message.'}
+            </p>
+          </form>
+        )}
       </section>
     </div>
   );

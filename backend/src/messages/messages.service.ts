@@ -1,7 +1,9 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { InboundMessageHandledBy, InboundMessageKind, InboundMessageState, Prisma } from '@prisma/client';
+import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../prisma/prisma.module';
+import { TelegramService } from '../telegram/telegram.service';
 
 /** The Messages tab filters (plan §8). Unknown values are a 400, not an empty page. */
 export interface MessageQuery {
@@ -45,7 +47,11 @@ const RETENTION_DEFAULT_DAYS = 180;
 export class MessagesService {
   private readonly logger = new Logger(MessagesService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private telegram: TelegramService,
+    private audit: AuditService,
+  ) {}
 
   /**
    * Daily retention purge (plan P9). Announcement replies are historical
@@ -282,6 +288,7 @@ export class MessagesService {
           announcementId: true,
           handledBy: true,
           state: true,
+          direction: true,
           readAt: true,
           receivedAt: true,
         },
@@ -334,6 +341,7 @@ export class MessagesService {
         announcementId: r.announcementId,
         handledBy: r.handledBy,
         state: r.state,
+        direction: r.direction,
         readAt: r.readAt,
         receivedAt: r.receivedAt,
         ackAt: r.announcementId && r.userId ? (acks.get(`${r.announcementId}:${r.userId}`) ?? null) : null,
@@ -341,6 +349,71 @@ export class MessagesService {
     });
 
     return { items, total, unread, page, pageSize };
+  }
+
+
+  // ---------- POST /messages/:id/reply ----------
+
+  /**
+   * Send an admin reply into the conversation a stored message belongs to.
+   *
+   * Only two kinds of row are answerable: a direct message (no notice) and an
+   * announcement reply. A vehicle-trip row is an answer a flow consumed — the bot
+   * has an armed capture waiting in that chat, so an admin message would either be
+   * swallowed as the driver's next answer or read as an instruction from the
+   * system. The guard lives here, not only in the UI.
+   */
+  async reply(id: string, text: string, actor: { userId: string; username: string }) {
+    const body = (text ?? '').trim();
+    if (!body) throw new BadRequestException('Message text is required');
+    if (body.length > 4000) throw new BadRequestException('A reply is limited to 4000 characters');
+
+    const parent = await this.prisma.telegramInboundMessage.findUnique({
+      where: { id },
+      select: { id: true, chatId: true, announcementId: true, handledBy: true },
+    });
+    if (!parent) throw new NotFoundException('Message not found');
+    const answerable =
+      parent.announcementId !== null || ['GENERAL', 'ANNOUNCEMENT_REPLY'].includes(parent.handledBy);
+    if (!answerable) {
+      throw new BadRequestException('Vehicle-trip messages cannot be answered from the inbox');
+    }
+
+    // Telegram refuses a chat the bot has never spoken in; the send comes back null
+    const sent = await this.telegram.sendText(parent.chatId, body);
+    if (!sent) throw new ServiceUnavailableException('Telegram did not accept the message');
+
+    const row = await this.prisma.telegramInboundMessage.create({
+      data: {
+        chatId: parent.chatId,
+        telegramMessageId: sent.messageId != null ? BigInt(sent.messageId) : null,
+        userId: actor.userId,
+        senderName: actor.username,
+        kind: 'TEXT',
+        text: body,
+        announcementId: parent.announcementId,
+        handledBy: parent.announcementId ? 'ANNOUNCEMENT_REPLY' : 'GENERAL',
+        direction: 'OUT',
+        state: 'READ', // our own message is never unread
+        readAt: new Date(),
+        readById: actor.userId,
+      },
+      select: { id: true },
+    });
+    await this.audit.log({
+      userId: actor.userId,
+      username: actor.username,
+      action: 'MESSAGE_REPLIED',
+      module: 'MESSAGES',
+      recordId: row.id,
+      newValue: {
+        inReplyTo: parent.id,
+        chatId: parent.chatId,
+        announcementId: parent.announcementId,
+        length: body.length,
+      },
+    });
+    return { id: row.id };
   }
 
   // ---------- GET /messages/:id/photo ----------
