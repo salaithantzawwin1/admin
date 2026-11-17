@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, getToken, hasPermission } from '../api';
 import { Modal } from '../components/Modal';
@@ -6,8 +6,9 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
 import { Badge, Button, Empty, Input, NumberField, PageHeader, Select, Textarea } from '../components/ui';
 import { fmtDate, fmtDateTime } from '../util/yangonTime';
-// trained a tab at a time, next to the fleet whose dashboards it reads
-import OdometerTraining from './OdometerTraining';
+// trained a tab at a time, next to the fleet whose dashboards it reads — lazy so
+// the Settings chunk (everyone's page) does not carry the training screen
+const OdometerTraining = lazy(() => import('./OdometerTraining'));
 
 interface AdConfig {
   url: string;
@@ -1695,7 +1696,16 @@ export default function Settings() {
       {/* ---------- Tab: Telegram (bot config) ---------- */}
       {tab === 'odometer' && (
         <div className="max-w-6xl">
-          <OdometerTraining embedded />
+          <Suspense
+            fallback={
+              <div className="flex items-center gap-3 text-sm text-gray-500">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-gray-500" />
+                Loading training…
+              </div>
+            }
+          >
+            <OdometerTraining embedded />
+          </Suspense>
         </div>
       )}
 
