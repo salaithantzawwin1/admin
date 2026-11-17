@@ -22,7 +22,10 @@ interface Holiday {
 }
 
 interface TelegramConfig {
+  /** comes back masked from the API — never the real token */
   botToken: string;
+  /** true when a token is stored, so the mask does not have to be interpreted */
+  botTokenSet?: boolean;
   enabled: boolean;
   webUrl: string;
 }
@@ -501,7 +504,11 @@ export default function Settings() {
   };
 
   useEffect(() => {
-    api<TelegramConfig>('/settings/telegram').then(setTgCfg).catch((e) => setTgError(e.message));
+    // the token is masked in the response; the field starts empty so nothing is
+    // saved back unless the admin actually types a new one
+    api<TelegramConfig>('/settings/telegram')
+      .then((c) => setTgCfg({ ...c, botToken: '' }))
+      .catch((e) => setTgError(e.message));
     api<{ botUsername: string | null; configured: boolean }>('/telegram/me')
       .then((b) => setTgBot({ botUsername: b.botUsername, configured: b.configured }))
       .catch(() => {});
@@ -516,11 +523,13 @@ export default function Settings() {
     if (!tgCfg) return;
     setTgBusy(true); setTgMsg(''); setTgError('');
     try {
+      const typed = tgCfg.botToken.trim();
       const saved = await api<TelegramConfig>('/settings/telegram', {
         method: 'PATCH',
-        body: { botToken: tgCfg.botToken.trim(), enabled: tgCfg.enabled },
+        // an empty field means "keep the stored token" — never blank it by accident
+        body: { enabled: tgCfg.enabled, ...(typed ? { botToken: typed } : {}) },
       });
-      setTgCfg(saved);
+      setTgCfg({ ...saved, botToken: '' });
       setTgMsg('Telegram settings saved');
     } catch (e) {
       setTgError(e instanceof Error ? e.message : 'Failed to save Telegram settings');
@@ -1664,7 +1673,7 @@ export default function Settings() {
       <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-semibold text-gray-800">Telegram — Driver Notifications</h2>
-          <Badge color={tgCfg.enabled && tgCfg.botToken ? 'green' : 'gray'}>{tgCfg.enabled && tgCfg.botToken ? 'ENABLED' : 'DISABLED'}</Badge>
+          <Badge color={tgCfg.enabled && tgCfg.botTokenSet ? 'green' : 'gray'}>{tgCfg.enabled && tgCfg.botTokenSet ? 'ENABLED' : 'DISABLED'}</Badge>
         </div>
 
         <p className="text-sm text-gray-500 mb-4">
@@ -1679,10 +1688,15 @@ export default function Settings() {
             <label htmlFor="settings-bot-token-from-botfather" className="block text-xs text-gray-500 mb-1">Bot token (from @BotFather)</label>
             <Input id="settings-bot-token-from-botfather"
               type="password"
-              placeholder="123456789:AAF..."
+              placeholder={tgCfg.botTokenSet ? '•••••••• saved — leave blank to keep it' : '123456789:AAF...'}
               value={tgCfg.botToken}
               onChange={(e) => setTgCfg({ ...tgCfg, botToken: e.target.value })}
             />
+            {tgCfg.botTokenSet && (
+              <div className="mt-1 text-xs text-gray-500">
+                A token is saved. Paste a new one here only to replace it.
+              </div>
+            )}
             {tgBot && (
               <div className="mt-1 text-xs text-gray-500">
                 {tgBot.botUsername

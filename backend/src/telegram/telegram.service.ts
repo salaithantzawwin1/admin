@@ -1519,8 +1519,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
    * Plain text to a chat we already know. No parse mode: an admin's reply is
    * free text, and Telegram would read `_` or `*` in it as markup.
    */
-  async sendText(chatId: string, text: string): Promise<{ messageId: number | null } | null> {
-    const res = await this.call<{ message_id?: number }>('sendMessage', { chat_id: chatId, text });
+  async sendText(
+    chatId: string,
+    text: string,
+    replyToMessageId?: number | null,
+  ): Promise<{ messageId: number | null } | null> {
+    const payload: Record<string, unknown> = { chat_id: chatId, text };
+    if (replyToMessageId != null) {
+      // Telegram's own reply preview: the person sees which message is answered
+      payload.reply_to_message_id = replyToMessageId;
+      // the quoted message may have been deleted from the chat — still deliver,
+      // just without the quote, instead of dropping the admin's answer
+      payload.allow_sending_without_reply = true;
+    }
+    const res = await this.call<{ message_id?: number }>('sendMessage', payload);
     if (!res) return null;
     return { messageId: res.message_id ?? null };
   }

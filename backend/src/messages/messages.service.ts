@@ -370,7 +370,7 @@ export class MessagesService {
 
     const parent = await this.prisma.telegramInboundMessage.findUnique({
       where: { id },
-      select: { id: true, chatId: true, announcementId: true, handledBy: true },
+      select: { id: true, chatId: true, telegramMessageId: true, announcementId: true, handledBy: true },
     });
     if (!parent) throw new NotFoundException('Message not found');
     const answerable =
@@ -379,14 +379,19 @@ export class MessagesService {
       throw new BadRequestException('Vehicle-trip messages cannot be answered from the inbox');
     }
 
+    // Quote the message the admin picked, so the employee sees which message the
+    // answer belongs to instead of a bare message in the chat.
+    const quotedId = parent.telegramMessageId != null ? Number(parent.telegramMessageId) : null;
     // Telegram refuses a chat the bot has never spoken in; the send comes back null
-    const sent = await this.telegram.sendText(parent.chatId, body);
+    const sent = await this.telegram.sendText(parent.chatId, body, quotedId);
     if (!sent) throw new ServiceUnavailableException('Telegram did not accept the message');
 
     const row = await this.prisma.telegramInboundMessage.create({
       data: {
         chatId: parent.chatId,
         telegramMessageId: sent.messageId != null ? BigInt(sent.messageId) : null,
+        // which stored message this row answers, so the inbox can show the link
+        replyToMessageId: parent.telegramMessageId,
         userId: actor.userId,
         senderName: actor.username,
         kind: 'TEXT',
@@ -408,6 +413,7 @@ export class MessagesService {
       recordId: row.id,
       newValue: {
         inReplyTo: parent.id,
+        quotedMessageId: quotedId,
         chatId: parent.chatId,
         announcementId: parent.announcementId,
         length: body.length,

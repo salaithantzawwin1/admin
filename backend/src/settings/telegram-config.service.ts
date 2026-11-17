@@ -5,12 +5,30 @@ import { TelegramService } from '../telegram/telegram.service';
 import { Actor } from '../org/org.service';
 
 export interface TelegramConfig {
+  /** masked for display — the real token never leaves the server */
   botToken: string;
+  /** is a token stored at all (the UI cannot tell from the mask) */
+  botTokenSet: boolean;
   enabled: boolean;
   webUrl: string;
 }
 
 const KEYS = ['telegram.bot_token', 'telegram.enabled', 'telegram.web_url'] as const;
+
+/**
+ * The bot token is a credential: anyone reading it can post as the bot. The API
+ * returns only a hint of it, and a value that comes back still carrying the mask
+ * is treated as "unchanged" — otherwise the Settings form would save its own
+ * placeholder over the real token.
+ */
+const MASK_CHAR = '•';
+
+function maskToken(token: string): string {
+  if (!token) return '';
+  return `${MASK_CHAR.repeat(8)}${token.slice(-4)}`;
+}
+
+const looksMasked = (value: string) => value.includes(MASK_CHAR);
 
 /** Telegram bot configuration — same storage pattern as the AD/LDAP settings. */
 @Injectable()
@@ -20,8 +38,10 @@ export class TelegramConfigService {
   async getConfig(): Promise<TelegramConfig> {
     const rows = await this.prisma.systemSetting.findMany({ where: { key: { in: [...KEYS] } } });
     const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const token = map['telegram.bot_token'] ?? '';
     return {
-      botToken: map['telegram.bot_token'] ?? '',
+      botToken: maskToken(token),
+      botTokenSet: token !== '',
       enabled: map['telegram.enabled'] === 'true',
       webUrl: map['telegram.web_url'] ?? '',
     };
@@ -29,8 +49,11 @@ export class TelegramConfigService {
 
   async setConfig(patch: Partial<TelegramConfig>, actor: Actor): Promise<TelegramConfig> {
     const before = await this.getConfig();
+    const wanted = patch.botToken?.trim();
+    // empty = keep what is stored; masked = the form echoing it back, not a secret
+    const nextToken = wanted && !looksMasked(wanted) ? wanted : undefined;
     const entries: [string, string | undefined][] = [
-      ['telegram.bot_token', patch.botToken],
+      ['telegram.bot_token', nextToken],
       ['telegram.enabled', patch.enabled === undefined ? undefined : String(patch.enabled)],
       ['telegram.web_url', patch.webUrl === undefined ? undefined : patch.webUrl.trim()],
     ];
@@ -43,8 +66,8 @@ export class TelegramConfigService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'TELEGRAM_CONFIG_UPDATED', module: 'SETTINGS',
-      oldValue: { enabled: before.enabled, tokenSet: Boolean(before.botToken), webUrl: before.webUrl },
-      newValue: { enabled: patch.enabled ?? before.enabled, tokenSet: Boolean(patch.botToken ?? before.botToken), webUrl: patch.webUrl ?? before.webUrl },
+      oldValue: { enabled: before.enabled, tokenSet: before.botTokenSet, webUrl: before.webUrl },
+      newValue: { enabled: patch.enabled ?? before.enabled, tokenSet: Boolean(nextToken) || before.botTokenSet, webUrl: patch.webUrl ?? before.webUrl },
     });
     return this.getConfig();
   }
