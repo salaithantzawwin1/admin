@@ -6,6 +6,12 @@ BASE=http://127.0.0.1:3000/api
 q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
 TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
 J() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);console.log(eval(process.argv[1]))}catch(e){console.log('')}})" "$1"; }
+# Bot token comes from the stored settings row (Settings → Telegram) — the repo
+# never carries the literal. The testing stack keeps none, so fall back to prod.
+q_prod() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+TG_TOKEN=$(q "SELECT value FROM system_settings WHERE key='telegram.bot_token'")
+[ -n "$TG_TOKEN" ] || TG_TOKEN=$(q_prod "SELECT value FROM system_settings WHERE key='telegram.bot_token'")
+[ -n "$TG_TOKEN" ] || { echo "ERROR: no Telegram bot token stored (Settings → Telegram)" >&2; exit 1; }
 
 UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
 TTOKEN=$(TOKEN_OF "$UID_" salaithantzawwin)
@@ -14,7 +20,7 @@ STOKEN=$(TOKEN_OF "$SAID" sysadmin)
 ZZ=$(q "SELECT id FROM drivers WHERE name='U Zaw Zaw'")
 
 # old-format message 69 in the chat → delete (replaced by the new-format demo)
-curl -s -X POST "https://api.telegram.org/bot8974826355:AAGbpArifVl40ADaj7Q1NxVkygEOGTMZJrA/deleteMessage" -d 'chat_id=1501493695' -d 'message_id=69' >/dev/null
+curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/deleteMessage" -d 'chat_id=1501493695' -d 'message_id=69' >/dev/null
 echo "old-format msg 69 deleted"
 
 # reset the demo assignment stages (Noted/Ready from the earlier simulation)
