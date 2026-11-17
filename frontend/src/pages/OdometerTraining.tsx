@@ -69,7 +69,7 @@ function normalize(a: { x: number; y: number }, b: { x: number; y: number }): Bo
   };
 }
 
-export default function OdometerTraining() {
+export default function OdometerTraining({ embedded = false }: { embedded?: boolean } = {}) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [selected, setSelected] = useState<Photo | null>(null);
@@ -206,10 +206,16 @@ export default function OdometerTraining() {
 
   return (
     <div>
-      <PageHeader
-        title="Odometer training"
-        subtitle="Teach the offline reader this fleet's seven-segment displays — no API key, no internet."
-      />
+      {embedded ? (
+        <p className="mb-4 max-w-3xl text-sm text-gray-500">
+          Teach the offline reader this fleet's seven-segment displays — no API key, no internet.
+        </p>
+      ) : (
+        <PageHeader
+          title="Odometer training"
+          subtitle="Teach the offline reader this fleet's seven-segment displays — no API key, no internet."
+        />
+      )}
 
       {error && <div className="mb-4 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">{error}</div>}
       {notice && <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm px-3 py-2">{notice}</div>}

@@ -1119,11 +1119,12 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
                   type="button"
                   onClick={() => setView(v)}
                   aria-pressed={view === v}
+                  aria-label={v === 'list' ? 'Show as list' : 'Show as calendar'}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     view === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  {v === 'list' ? '☰ List' : '▦ Schedule'}
+                  {v === 'list' ? '☰ List' : '🗓 Calendar'}
                 </button>
               ))}
             </div>

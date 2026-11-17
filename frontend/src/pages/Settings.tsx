@@ -6,6 +6,8 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { toast } from '../components/Toast';
 import { Badge, Button, Empty, Input, NumberField, PageHeader, Select, Textarea } from '../components/ui';
 import { fmtDate, fmtDateTime } from '../util/yangonTime';
+// trained a tab at a time, next to the fleet whose dashboards it reads
+import OdometerTraining from './OdometerTraining';
 
 interface AdConfig {
   url: string;
@@ -95,7 +97,7 @@ function relTime(iso: string): string {
 
 const ROLES = ['EMPLOYEE', 'ADMINISTRATION', 'DEPARTMENT_HEAD', 'MANAGEMENT', 'PURCHASING', 'FINANCE', 'MAINTENANCE_COORDINATOR', 'SYSTEM_ADMIN'];
 
-type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows' | 'budgets' | 'accounts';
+type SettingsTab = 'ad' | 'timetable' | 'holidays' | 'telegram' | 'joins' | 'fleet' | 'workflows' | 'budgets' | 'accounts' | 'odometer';
 
 /** Company Time Table — office hours the leave windows are derived from. */
 interface Timetable {
@@ -113,7 +115,7 @@ export default function Settings() {
   // active tab lives in the URL (?tab=holidays) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as SettingsTab | null;
-  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' || tabParam === 'budgets' || tabParam === 'accounts' ? tabParam : 'ad';
+  const tab: SettingsTab = tabParam === 'holidays' || tabParam === 'telegram' || tabParam === 'joins' || tabParam === 'timetable' || tabParam === 'fleet' || tabParam === 'workflows' || tabParam === 'budgets' || tabParam === 'accounts' || tabParam === 'odometer' ? tabParam : 'ad';
   const setTab = (t: SettingsTab) => setSearchParams(t === 'ad' ? {} : { tab: t }, { replace: false });
   const [cfg, setCfg] = useState<AdConfig | null>(null);
   const [msg, setMsg] = useState('');
@@ -674,31 +676,54 @@ export default function Settings() {
     }
   };
 
-  if (!cfg) return <div>{error || 'Loading…'}</div>;
+  if (!cfg) {
+    return (
+      <div className="max-w-5xl">
+        <PageHeader title="Settings" subtitle="Company defaults, integrations and access modules" />
+        <div className="rounded-xl border border-gray-200/80 bg-white p-6 shadow-card">
+          {error ? (
+            <div className="text-sm text-red-600">{error}</div>
+          ) : (
+            <div className="flex items-center gap-3 text-sm text-gray-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-200 border-t-gray-500" />
+              Loading settings…
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-5xl">
-      <PageHeader title="Settings" subtitle="System modules — AD/LDAP directory login (Plan: LDAP-ready auth)" />
+      <PageHeader title="Settings" subtitle="Company defaults, integrations and access modules" />
 
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
       {msg && <div className="mb-4 text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">{msg}</div>}
 
       {/* Tabs */}
-      <div className="flex gap-1 border-b border-gray-200 mb-4">
+      <div role="tablist" aria-label="Settings sections" className="mb-4 flex flex-wrap gap-x-1 border-b border-gray-200">
         {([
-          { key: 'ad' as SettingsTab, label: 'AD / LDAP' },
-          { key: 'timetable' as SettingsTab, label: 'Company Time Table' },
-          { key: 'holidays' as SettingsTab, label: 'Public Holidays' },
-          { key: 'fleet' as SettingsTab, label: 'Fleet' },
-          { key: 'workflows' as SettingsTab, label: 'Approval Workflows' },
-          { key: 'accounts' as SettingsTab, label: 'Accounts' },
-          { key: 'budgets' as SettingsTab, label: 'Budgets' },
-          { key: 'telegram' as SettingsTab, label: 'Telegram' },
-          { key: 'joins' as SettingsTab, label: 'Telegram Joins' },
-        ]).map((t) => (
+          { key: 'ad', label: 'AD / LDAP' },
+          { key: 'timetable', label: 'Company Time Table' },
+          { key: 'holidays', label: 'Public Holidays' },
+          { key: 'fleet', label: 'Fleet' },
+          { key: 'workflows', label: 'Approval Workflows' },
+          { key: 'accounts', label: 'Accounts' },
+          { key: 'budgets', label: 'Budgets' },
+          { key: 'telegram', label: 'Telegram' },
+          { key: 'joins', label: 'Telegram Joins' },
+          // only the people who see the dashboard photos can train the reader
+          { key: 'odometer', label: 'Odometer Training', show: () => hasPermission('cars.assign') },
+        ] as { key: SettingsTab; label: string; show?: () => boolean }[])
+          .filter((t) => !t.show || t.show())
+          .map((t) => (
           <button
             key={t.key}
-            className={`px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors ${
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
+            className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
               tab === t.key
                 ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
@@ -1668,6 +1693,12 @@ export default function Settings() {
       )}
 
       {/* ---------- Tab: Telegram (bot config) ---------- */}
+      {tab === 'odometer' && (
+        <div className="max-w-6xl">
+          <OdometerTraining embedded />
+        </div>
+      )}
+
       {tab === 'telegram' && tgCfg && (
       <>
       <div className="bg-white rounded-xl border border-gray-200/80 shadow-card p-5 mb-5">

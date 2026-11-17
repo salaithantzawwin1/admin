@@ -19,7 +19,6 @@ const RequestDetail = lazy(() => import('./pages/RequestDetail'));
 const Delegations = lazy(() => import('./pages/Delegations'));
 const Fleet = lazy(() => import('./pages/Fleet'));
 const CarRequests = lazy(() => import('./pages/CarRequests'));
-const OdometerTraining = lazy(() => import('./pages/OdometerTraining'));
 const MeetingRooms = lazy(() => import('./pages/MeetingRooms'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const Announcements = lazy(() => import('./pages/Announcements'));
@@ -62,7 +61,8 @@ export default function App() {
           <Route path="delegations" element={<Delegations />} />
           <Route path="fleet" element={<Fleet />} />
           <Route path="car-requests" element={<CarRequests />} />
-          <Route path="odometer-training" element={<OdometerTraining />} />
+          {/* odometer training lives in Settings now — keep the old link working */}
+          <Route path="odometer-training" element={<Navigate to="/settings?tab=odometer" replace />} />
           <Route path="meeting-rooms" element={<MeetingRooms />} />
           <Route path="inventory" element={<Inventory />} />
           <Route path="announcements" element={<Announcements />} />
