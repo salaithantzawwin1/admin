@@ -23,6 +23,7 @@ const OdometerTraining = lazy(() => import('./pages/OdometerTraining'));
 const MeetingRooms = lazy(() => import('./pages/MeetingRooms'));
 const Inventory = lazy(() => import('./pages/Inventory'));
 const Announcements = lazy(() => import('./pages/Announcements'));
+const Messages = lazy(() => import('./pages/Messages'));
 const Notifications = lazy(() => import('./pages/Notifications'));
 const Suppliers = lazy(() => import('./pages/Suppliers'));
 const Licenses = lazy(() => import('./pages/Licenses'));
@@ -65,6 +66,7 @@ export default function App() {
           <Route path="meeting-rooms" element={<MeetingRooms />} />
           <Route path="inventory" element={<Inventory />} />
           <Route path="announcements" element={<Announcements />} />
+          <Route path="messages" element={<Messages />} />
           <Route path="notifications" element={<Notifications />} />
           <Route path="suppliers" element={<Suppliers />} />
           <Route path="licenses" element={<Licenses />} />

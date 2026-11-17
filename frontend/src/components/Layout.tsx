@@ -20,6 +20,8 @@ const navGroups = [
       { to: '/approvals', label: 'Pending Approvals', icon: '✅', show: () => hasPermission('approvals.act') },
       { to: '/delegations', label: 'Delegations', icon: '🤝', show: () => hasPermission('approvals.act') },
       { to: '/announcements', label: 'Announcements', icon: '📢', show: () => hasPermission('announcements.read') },
+      // the subscriber inbox — reading it is its own permission, not a notice one
+      { to: '/messages', label: 'Messages', icon: '💬', show: () => hasPermission('messages.read') },
     ],
   },
   {
