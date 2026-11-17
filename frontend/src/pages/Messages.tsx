@@ -258,8 +258,9 @@ function Bubble({
         </span>
       )}
     </div>
-      {/* one control per bubble: pick the exact message to answer, not the newest one */}
-      {onReply && (
+      {/* one control per bubble: pick the exact message to answer, not the newest one.
+          An outgoing row has nothing to answer, so it never gets one. */}
+      {onReply && !out && (
         <button
           type="button"
           onClick={() => onReply(m)}
@@ -309,8 +310,9 @@ export default function Messages() {
   const [olderBusy, setOlderBusy] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [sending, setSending] = useState(false);
-  // the message the admin picked to answer — never inferred from the list order
-  const [replyTarget, setReplyTarget] = useState<MessageRow | null>(null);
+  // The message the admin picked, stamped with the bucket+filter it was picked in:
+  // a pick from another view simply stops matching, so nothing has to clear it.
+  const [picked, setPicked] = useState<{ scope: string; message: MessageRow } | null>(null);
   const replyRef = useRef<HTMLTextAreaElement | null>(null);
   const [canReply, setCanReply] = useState(() => hasPermission('messages.reply'));
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -425,20 +427,16 @@ export default function Messages() {
     view.kind === 'thread' ? 'thread' : view.kind === 'bucket' && view.key === 'direct' ? 'direct' : null;
   const canAnswer = !!composerFor && canReply;
 
-  // The composer answers the message the admin clicked, so a subscriber writing in
-  // — or a filter change — can never move an unanswered draft to someone else.
-  const replyTo = replyTarget;
-  // The choice outlives a list reload — a new message, a live refresh, or the
-  // refetch after sending all keep it. Only leaving the bucket/thread, changing
-  // the filter, or pressing ✕ drops it. (Watching `items` here would wipe it on
-  // every reload, because the list is emptied before each refetch.)
-  useEffect(() => {
-    setReplyTarget(null);
-  }, [viewKey, filter]);
+  // The composer answers the message the admin clicked: a list reload (new message,
+  // live refresh, the refetch after sending) keeps the pick, because only the scope
+  // is compared — leaving the bucket/thread or changing the filter stops it matching.
+  const replyScope = `${viewKey}|${filter}`;
+  const replyTo = picked?.scope === replyScope ? picked.message : null;
 
   /** Pick this message as the one the composer answers. */
   const pickReply = (m: MessageRow) => {
-    setReplyTarget(m);
+    setPicked({ scope: replyScope, message: m });
+    // the textarea is disabled until a target exists, so focus it on the next frame
     requestAnimationFrame(() => replyRef.current?.focus());
   };
 
@@ -795,10 +793,9 @@ export default function Messages() {
                             m={m}
                             unread={m.state === 'NEW'}
                             onRead={readOne}
-                            // an admin answer may only land where a reply is safe, and
-                            // only a message the subscriber wrote can be answered
-                            onReply={canAnswer && m.direction !== 'OUT' ? pickReply : undefined}
-                            selected={replyTarget?.id === m.id}
+                            // only offered where an admin answer may land at all
+                            onReply={canAnswer ? pickReply : undefined}
+                            selected={replyTo?.id === m.id}
                           />
                         ))}
                       </div>
@@ -812,7 +809,7 @@ export default function Messages() {
 
         {/* Vehicle trips and "All messages" never get a composer: a reply there
             would land in a chat a trip flow is still holding for an answer. */}
-        {composerFor && canReply && (
+        {canAnswer && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -848,7 +845,7 @@ export default function Messages() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setReplyTarget(null)}
+                  onClick={() => setPicked(null)}
                   aria-label="Cancel reply"
                   title="Cancel reply"
                   className="shrink-0 rounded-full px-1.5 text-sm leading-none text-blue-500 transition-colors hover:text-blue-800"
