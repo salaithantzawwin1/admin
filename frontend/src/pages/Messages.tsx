@@ -174,19 +174,34 @@ function UnreadDot() {
   return <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-blue-600" aria-hidden="true" />;
 }
 
-function Bubble({ m, unread, onRead }: { m: MessageRow; unread: boolean; onRead: (m: MessageRow) => void }) {
+function Bubble({
+  m,
+  unread,
+  onRead,
+  onReply,
+  selected,
+}: {
+  m: MessageRow;
+  unread: boolean;
+  onRead: (m: MessageRow) => void;
+  /** set only where an answer can land in this chat (direct message / notice thread) */
+  onReply?: (m: MessageRow) => void;
+  /** this exact message is the one the composer answers */
+  selected?: boolean;
+}) {
   // the proxy accepts ?token= because an <img> cannot send a header
   const photoUrl = `/api/messages/${m.id}/photo?token=${encodeURIComponent(localStorage.getItem('ams_token') ?? '')}`;
   const out = m.direction === 'OUT';
   return (
+    <div className="flex items-end gap-1.5">
     <div
-      className={`border px-4 py-3.5 text-[14px] leading-relaxed break-words shadow-sm ${
+      className={`min-w-0 flex-1 border px-4 py-3.5 text-[14px] leading-relaxed break-words shadow-sm ${
         out
           ? 'border-blue-600 bg-blue-600 text-white'
           : unread
             ? 'border-blue-100 bg-blue-50 text-slate-700'
             : 'border-slate-200/80 bg-white text-slate-700'
-      } ${unread ? 'cursor-pointer' : ''}`}
+      } ${unread ? 'cursor-pointer' : ''} ${selected ? 'ring-2 ring-blue-500 ring-offset-1' : ''}`}
       style={{ borderRadius: out ? '16px 2px 16px 16px' : '2px 16px 16px 16px' }}
       // one click reads this message only — the bucket-wide clear keeps its own button
       onClick={unread ? () => onRead(m) : undefined}
@@ -241,6 +256,35 @@ function Bubble({ m, unread, onRead }: { m: MessageRow; unread: boolean; onRead:
         <span className="mt-2 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
           {m.handledBy.toLowerCase().replace(/_/g, ' ')}
         </span>
+      )}
+    </div>
+      {/* one control per bubble: pick the exact message to answer, not the newest one */}
+      {onReply && (
+        <button
+          type="button"
+          onClick={() => onReply(m)}
+          aria-pressed={selected}
+          title={`Reply to this message from ${m.sender.name ?? 'this subscriber'}`}
+          className={`mb-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full border transition-colors ${
+            selected
+              ? 'border-blue-600 bg-blue-600 text-white'
+              : 'border-slate-200 bg-white text-slate-400 hover:border-blue-300 hover:text-blue-600'
+          }`}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            className="h-3.5 w-3.5"
+          >
+            <path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v3" />
+          </svg>
+          <span className="sr-only">Reply</span>
+        </button>
       )}
     </div>
   );
@@ -715,8 +759,6 @@ export default function Messages() {
                 const anyUnread = group.messages.some((m) => m.state === 'NEW');
                 const name = group.sender.name ?? 'Unknown sender';
                 const last = group.messages[group.messages.length - 1];
-                // only what the subscriber wrote can be answered
-                const lastIn = [...group.messages].reverse().find((m) => m.direction !== 'OUT');
                 return (
                   <article key={`${group.key}-${gi}`} className="mb-7 flex gap-2.5 sm:gap-3">
                     <span
@@ -745,37 +787,19 @@ export default function Messages() {
                           </span>
                         )}
                         <span className="ml-auto text-xs text-slate-400">{fmtTime(last.receivedAt)}</span>
-                        {canAnswer && lastIn && (
-                          <button
-                            type="button"
-                            onClick={() => pickReply(lastIn)}
-                            aria-pressed={replyTarget?.id === lastIn.id}
-                            title={`Reply to ${name}`}
-                            className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                              replyTarget?.id === lastIn.id
-                                ? 'border-blue-600 bg-blue-600 text-white'
-                                : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-700'
-                            }`}
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              aria-hidden="true"
-                              className="h-3 w-3"
-                            >
-                              <path d="M9 14 4 9l5-5M4 9h9a7 7 0 0 1 7 7v3" />
-                            </svg>
-                            {replyTarget?.id === lastIn.id ? 'Replying' : 'Reply'}
-                          </button>
-                        )}
                       </div>
                       <div className="flex flex-col gap-1.5">
                         {group.messages.map((m) => (
-                          <Bubble key={m.id} m={m} unread={m.state === 'NEW'} onRead={readOne} />
+                          <Bubble
+                            key={m.id}
+                            m={m}
+                            unread={m.state === 'NEW'}
+                            onRead={readOne}
+                            // an admin answer may only land where a reply is safe, and
+                            // only a message the subscriber wrote can be answered
+                            onReply={canAnswer && m.direction !== 'OUT' ? pickReply : undefined}
+                            selected={replyTarget?.id === m.id}
+                          />
                         ))}
                       </div>
                     </div>
