@@ -7,6 +7,17 @@ q() { printf '%s\n' "$1" | docker exec -i ams-test-db-1 sh -c 'psql -U $POSTGRES
 TOKEN_OF() { docker exec ams-test-backend-1 node -e "const jwt=require('jsonwebtoken');console.log(jwt.sign({sub:process.argv[1],username:process.argv[2]},process.env.JWT_SECRET,{expiresIn:'30m'}))" "$1" "$2"; }
 J() { docker exec -i ams-test-backend-1 node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{const j=JSON.parse(s);console.log(eval(process.argv[1]))}catch(e){console.log('')}})" "$1"; }
 CHAT=1501493695
+# Bot token comes from the stored settings row (Settings → Telegram) — never a
+# literal in the repo. The testing stack keeps none, so fall back to production.
+q_prod() { printf '%s\n' "$1" | docker exec -i ams-db-1 sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -tA' | tr -d '\r\n'; }
+tg_token() {
+  local t
+  t=$(q "SELECT value FROM system_settings WHERE key='telegram.bot_token'")
+  [ -n "$t" ] || t=$(q_prod "SELECT value FROM system_settings WHERE key='telegram.bot_token'")
+  [ -n "$t" ] || { echo "ERROR: no Telegram bot token stored (Settings → Telegram)" >&2; exit 1; }
+  printf '%s' "$t"
+}
+TG_TOKEN=$(tg_token)
 
 UID_=$(q "SELECT id FROM users WHERE username='salaithantzawwin'")
 TTOKEN=$(TOKEN_OF "$UID_" salaithantzawwin)
@@ -24,12 +35,12 @@ sleep 4
 echo "1. $DOC submitted — PENDING: $(q "SELECT status FROM request_documents WHERE id='$RID'")"
 
 # drive the real handler inside the container: approve → pick vehicle → pick driver
-docker exec -i ams-test-backend-1 node - "$RID" <<'EOF' | sed 's/^/  /'
+docker exec -i -e TG_TOKEN="$TG_TOKEN" ams-test-backend-1 node - "$RID" <<'EOF' | sed 's/^/  /'
 const { PrismaClient } = require('@prisma/client');
 const p = new PrismaClient();
 const rid = process.argv[2];
 const CHAT = '1501493695';
-const TOKEN = '8974826355:AAGbpArifVl40ADaj7Q1NxVkygEOGTMZJrA';
+const TOKEN = process.env.TG_TOKEN;
 const send = async (text) => {
   const r = await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
