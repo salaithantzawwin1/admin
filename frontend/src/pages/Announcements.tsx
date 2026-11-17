@@ -911,11 +911,17 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
   // end-before-publish is mirrored client-side so the To field flags instantly;
   // the same server message is attributed to the field when the API rejects it
   const endAtFieldError =
-    (form.publishAt && form.endAt && form.endAt <= form.publishAt) || error === 'End date must be after the publish date'
-      ? 'End date must be after the publish date'
+    (form.publishAt && form.endAt && form.endAt <= form.publishAt) || error === 'End date must be after the send date'
+      ? 'End date must be after the send date'
       : undefined;
 
   const submit = async () => {
+    // the button is already disabled for this — belt and braces, since a PATCH
+    // used to reach the server with an end date before the send date
+    if (endAtFieldError) {
+      setError(endAtFieldError);
+      return;
+    }
     setBusy(true); setError('');
     try {
       const body: Record<string, unknown> = {
@@ -1545,7 +1551,7 @@ function AdminAnnouncements({ items, reload, replyCounts, onOpenMessages }: {
             <span className="mr-auto text-[11px] text-amber-600">{missingRequirement(form.title, plain(form.content), !!editing, form.picks)}</span>
             <Button variant="ghost" onClick={() => setFormOpen(false)}>Cancel</Button>
             <Button
-              disabled={busy || !form.title || !plain(form.content) || (!editing && countPicks(form.picks) === 0)}
+              disabled={busy || !form.title || !plain(form.content) || (!editing && countPicks(form.picks) === 0) || !!endAtFieldError}
               onClick={submit}
             >
               {editing ? 'Save' : 'Create'}

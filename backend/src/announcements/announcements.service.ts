@@ -169,7 +169,7 @@ export class AnnouncementsService {
 
     const publishAt = data.publishAt ? new Date(data.publishAt) : null;
     const endAt = data.endAt ? new Date(data.endAt) : null;
-    if (publishAt && endAt && endAt <= publishAt) throw new BadRequestException('End date must be after the publish date');
+    if (publishAt && endAt && endAt <= publishAt) throw new BadRequestException('End date must be after the send date');
 
     // DRAFT if no publish date, SCHEDULED if future publish date
     const status: AnnouncementStatus = !publishAt ? 'DRAFT' : publishAt > new Date() ? 'SCHEDULED' : 'DRAFT';
@@ -205,6 +205,14 @@ export class AnnouncementsService {
     const a = await this.prisma.announcement.findUnique({ where: { id }, include: { targets: true } });
     if (!a) throw new NotFoundException('Announcement not found');
     if (a.status === 'EXPIRED') throw new ConflictException('Expired announcements cannot be edited');
+
+    // create() has always refused an end date before the publish date; the PATCH
+    // path did not, so an edit could store a notice that expires before it is sent.
+    const nextEndAt = data.endAt === null ? null : data.endAt ? new Date(data.endAt) : a.endAt;
+    if (nextEndAt && Number.isNaN(nextEndAt.getTime())) throw new BadRequestException('Invalid end date');
+    if (a.publishAt && nextEndAt && nextEndAt <= a.publishAt) {
+      throw new BadRequestException('End date must be after the send date');
+    }
 
     // content edits after publish stay possible but are audit-logged (decision log 2026-09-23)
     const updated = await this.prisma.announcement.update({
