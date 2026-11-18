@@ -16,6 +16,7 @@ frontend/node_modules/
 # ============ build output ============
 backend/dist/
 frontend/dist/
+frontend/asset-archive/
 
 # ============ logs / temp ============
 *.log

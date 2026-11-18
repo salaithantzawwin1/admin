@@ -32,6 +32,37 @@ echo "   checkout: $OLD_HEAD -> $NEW_HEAD"
 # older code (the CarPanel #310 lesson, the tb.js stale-bundle lesson).
 export BUILD_COMMIT="$NEW_HEAD"
 
+echo "== 1b. Archive the chunks of the build being replaced =="
+# Every build gives the route chunks new hashes and the new image does not carry
+# the old ones, so a tab that was opened before this deploy asks for a file that
+# no longer exists: "Failed to fetch dynamically imported module", right in the
+# middle of someone's form. Copy the outgoing build's assets into the archive
+# nginx serves at /_archive/assets/ and let the app keep working until the tab is
+# reloaded. -n never overwrites, so a hash keeps the copy of the build that
+# actually shipped it; anything older than ARCHIVE_DAYS is pruned every deploy.
+PC_PRE="docker compose -f compose.yaml -f compose.prod.yaml --env-file .env.prod"
+ARCHIVE_DAYS=4
+if $PC_PRE exec -T frontend sh -c '
+      days="$1"
+      mountpoint -q /usr/share/nginx/html/_archive || exit 7
+      mkdir -p /usr/share/nginx/html/_archive/assets
+      cp -p -n /usr/share/nginx/html/assets/* /usr/share/nginx/html/_archive/assets/ 2>/dev/null
+      find /usr/share/nginx/html/_archive/assets -type f -mtime +"$days" -delete 2>/dev/null
+      echo "   archive: $(ls /usr/share/nginx/html/_archive/assets | wc -l) chunks kept (last $days days)"
+    ' sh "$ARCHIVE_DAYS"; then
+  :
+else
+  # First deploy that adds the mount: the running frontend predates it, so pull
+  # the outgoing build out through docker cp instead of losing it.
+  mkdir -p frontend/asset-archive/assets
+  CID="$($PC_PRE ps -q frontend 2>/dev/null || true)"
+  if [ -n "${CID:-}" ] && docker cp "$CID:/usr/share/nginx/html/assets/." frontend/asset-archive/assets/ 2>/dev/null; then
+    echo "   archive: $(ls frontend/asset-archive/assets | wc -l) chunks kept (pulled from the outgoing container)"
+  else
+    echo "   nothing running to archive yet"
+  fi
+fi
+
 echo "== 2. Deploy PRODUCTION stack (project: ams — UI :80) =="
 BUILD_FLAG="--build"
 [ "${REBUILD:-1}" = "1" ] || BUILD_FLAG=""

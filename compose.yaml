@@ -70,6 +70,13 @@ services:
       - backend
     ports:
       - "80:80"
+    volumes:
+      # Chunks from the last few days of builds. nginx serves them at
+      # /_archive/assets/ when a tab that was opened before a deploy asks for a
+      # hash the current image no longer has, so an open form survives the
+      # deploy instead of dying on "Failed to fetch dynamically imported
+      # module". Filled and pruned by the deploy scripts.
+      - ./frontend/asset-archive:/usr/share/nginx/html/_archive
 
 volumes:
   db_data:
