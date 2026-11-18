@@ -43,6 +43,13 @@ const STATUS_DOT: Record<string, string> = {
 const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 
 /**
+ * Timestamp for a spreadsheet: Yangon wall-clock (what the table shows) in
+ * sortable "2026-11-17 15:51" form rather than the raw UTC ISO string.
+ */
+const stamp = (v: string | null) =>
+  v ? new Date(v).toLocaleString('sv-SE', { timeZone: 'Asia/Yangon' }).slice(0, 16) : '';
+
+/**
  * Trip history of one driver, for the fleet desk's History link.
  *
  * The rows are correlated server-side: everything this driver drove, plus — when
@@ -113,10 +120,10 @@ export function DriverTripHistoryModal({
         r.brandModel,
         r.requester,
         r.driver ?? '',
-        r.assignedAt,
-        r.driverNotedAt ?? '',
-        r.driverArrivedAt ?? '',
-        r.driverBackAtOfficeAt ?? '',
+        stamp(r.assignedAt),
+        stamp(r.driverNotedAt),
+        stamp(r.driverArrivedAt),
+        stamp(r.driverBackAtOfficeAt),
         r.viaEmployee ? 'yes' : 'no',
       ]
         .map(cell)
