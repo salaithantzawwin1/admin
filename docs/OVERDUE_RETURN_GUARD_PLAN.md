@@ -65,8 +65,9 @@ although the only proof of return is the Back tap (or a return odometer).
    the requester's fleet card, the conflict check and Telegram.
 3. Administration is told, in-app and on Telegram, that a manual close is
    required; the driver keeps being nudged.
-4. Administration can close the trip manually with the return odometer, and that
-   close is audited and notified exactly like a driver Back tap.
+4. Administration can close the trip manually with the return odometer; the
+   close is audited, notified like a driver Back tap, and **does not pretend the
+   driver tapped** (the missing tap stays visible to discipline).
 
 **Non-goals**
 
@@ -85,7 +86,7 @@ although the only proof of return is the Back tap (or a return odometer).
 | Window ended + 15 min, ride evidence exists, no Back tap | **Do not close.** Assignment stays live, vehicle stays `IN_USE`, badge shows **Overdue return**, driver nudged (Telegram). |
 | Overdue by ≥ 2 h | Admin alert: in-app notification + Telegram mirror — "manual close needed". Repeats at most every 12 h. |
 | No ride evidence at all (no Ready, no departure km, no STARTED trip) | Release as today: vehicle + driver back to pool, request `APPROVED`. |
-| Admin manual close | Return km (or explicit estimate + reason) → audited BACK odometer → trip/request `COMPLETED` → car freed → requester + driver notified. |
+| Admin manual close | Return km (or explicit estimate + reason) → audited BACK odometer (no fake driver stamp) → trip/request `COMPLETED` → car freed → requester + driver notified. |
 
 Definitions:
 
@@ -150,9 +151,28 @@ if (outOnRoad && !a.driverBackAtOfficeAt) {
 4. Do **not** send a requester notification here (the existing "auto-closed"
    notice disappears naturally; the trip stays open in their view).
 
+5. **The same cron's self-heal must learn the new hold.** `releaseExpired` ends
+   with `renormalizeVehicleStatuses()` (`:484`), which flips any `IN_USE`
+   vehicle back to `AVAILABLE` when it can see no booking `endDate >= now` and
+   no `STARTED` trip. A held ride has neither, so without this the status write
+   above is undone in the same tick (plus a `VEHICLE_AUTO_FREED` audit every
+   30 min). Add the held assignment to `hasLive`:
+
+```ts
+assignments: {
+  where: { releasedAt: null, driverBackAtOfficeAt: null, endOdoAt: null,
+           OR: [{ driverArrivedAt: { not: null } }, { trip: { status: 'STARTED' } }] },
+  select: { id: true },
+},
+```
+
+   `freeOrphanedDrivers()` needs no change: it keeps a driver `ON_TRIP` while an
+   `IN_PROGRESS` assignment with `releasedAt = null` exists, which is exactly the
+   held state.
+
 Acceptance: for a fixture like CAR-202611-0039 the request stays `IN_PROGRESS`,
-`releasedAt` stays `null`, vehicle status is `IN_USE`, one audit row is written,
-and nothing is sent to the requester.
+`releasedAt` stays `null`, vehicle status is `IN_USE` **after the next 30-minute
+sweep too**, one audit row is written, and nothing is sent to the requester.
 
 ### Step 2 — Escalation: driver nudge from +15 min, admin alert at +2 h
 
@@ -161,10 +181,18 @@ and nothing is sent to the requester.
 becomes the single overdue authority:
 
 1. Keep the driver Telegram nudge (hourly). Add a cap: skip nudges after
-   `overMins > 24 * 60` (the daily digest covers multi-day cases).
-2. Admin notification only when `overMins >= 120` (the +2 h point), still
-   throttled to one per request per 12 h.
-3. Update the copy to match the new flow:
+   `overMins > 24 * 60`; from then on the daily digest carries it.
+2. **Two stages, not one.** The cron already alerts Administration on the first
+   hourly tick after the window. Keep that immediate alert for `STARTED` trips
+   (an existing safety net that must not regress) and add a second, distinct
+   "manual close required" alert at `overMins >= 120` for **held** rows.
+   The current 12 h throttle keys on `notifications.type = ESCALATED` for the
+   request, so reusing it would swallow the +2 h alert behind the earlier one.
+   The second stage needs its own marker (audit action
+   `CAR_OVERDUE_CLOSE_REQUIRED`, throttled 12 h) and its own notification title.
+3. After 24 h the admin alert drops to once a day (same marker, 24 h window)
+   instead of staying hourly.
+4. Update the copy to match the new flow:
 
 ```
 title: 🏁 Return overdue — CAR-… (2h 15m)
@@ -173,15 +201,19 @@ body : Naing Naing Tun has not tapped "Back at Office". 9F1213 is still held
        from the request page (Cars → request → Odometer / Close trip).
 ```
 
-4. Mirror the same line to Administration's Telegram (same pattern as
+5. Mirror the same line to Administration's Telegram (same pattern as
    `notifyReadyToAssign`'s `telegram.mirrorToUser` loop).
-5. Keep `dayEndDigest` unchanged, but rename its "auto-closed" bucket to
-   "overdue, still open" once Step 1 lands (it reads `REQUEST_AUTO_COMPLETED`
-   audits; adjust the query to count `CAR_OVERDUE_RETURN_HELD` instead).
+6. `dayEndDigest` needs a **third bucket**. Its current `noBack` filter keeps
+   only `APPROVED`/`COMPLETED` requests with no `STARTED` trip, so a held ride
+   (`IN_PROGRESS`) appears in neither `noBack` nor `mileageOpen` and silently
+   drops out of the digest; the "Auto-closed" heading would also become a lie
+   once Step 1 lands. Add `overdue` (held, `endDate` today, no Back tap) and
+   render it first: `🏁 Overdue returns — close with the return km`.
 
-Acceptance: with `endDate = now − 3 h`, one admin notification + one Telegram
-mirror per 12 h, driver nudge hourly; with `endDate = now − 30 min`, driver
-nudge only.
+Acceptance: with `endDate = now − 30 min`, driver nudge only (plus the existing
+immediate alert for a `STARTED` trip); with `endDate = now − 3 h`, the extra
+`CAR_OVERDUE_CLOSE_REQUIRED` alert + Telegram mirror once, and again only after
+12 h; after 24 h it drops to once a day.
 
 ### Step 3 — Badge: "departure recorded, return missing" holds the car
 
@@ -209,6 +241,10 @@ Then replace the `startedTrips` queries with an OR of both holds:
   `overdueReturn: boolean` to the returned row.
 - `cars.service.ts:405` (`requesterFleetOverview`) — same union, keep
   `effectiveEnd` so an ETA still stretches the coverage; add `overdueReturn`.
+  **Careful:** for an overdue ride `lateEnd` is already in the past, so
+  `lateEnd >= now` is false and the badge would still read AVAILABLE (or BOOKED
+  through the `mine.length` fallback). The hold must force `coversNow = true`
+  directly (`|| heldNow.has(v.id)`), not travel through the ETA map.
 - `fleet.service.ts:734` (busy/availability maps) — same union.
 - `cars.service.ts overlaps()` — after the ETA-stretched conflict filter, add:
 
@@ -223,13 +259,20 @@ if (held) return {
 };
 ```
 
-  This is what stops a new booking that starts *after* the planned end.
+  This is what stops a new booking that starts *after* the planned end. Block
+  only windows that start inside the hand-back buffer
+  (`start < now + bufferMinutes`, 30 min by default): a booking for tomorrow is
+  legitimate business and must not be refused because today's car is late.
+  The synthetic `conflicts[]` entry must carry `requestId`, `startDate`,
+  `endDate`, `sharedTripId` and `request.docNumber` — `assign()` reads
+  `conflicts[0].startDate/endDate` for its 409 message and the form renders them.
 - `cars.service.driverClash` — treat an overdue out-on-road assignment of the
   same driver as a clash (the driver is provably still driving).
 
 Acceptance: a held car reports `IN_USE` + `overdueReturn: true` in both fleet
-endpoints, `checkAvailability` rejects any window that starts now, and a request
-submitted for the same car shows the "still out" conflict instead of "free".
+endpoints, `checkAvailability` rejects a window starting within the hand-back
+buffer (and still accepts a window for tomorrow), and a request submitted for the
+same car now shows the "still out" conflict instead of "free".
 
 ### Step 4 — Telegram picker and assign guard
 
@@ -242,8 +285,16 @@ submitted for the same car shows the "still out" conflict instead of "free".
    when `outOnRoadWhere` matches the vehicle.
 3. `startTrip()` already rejects released assignments; no change.
 
+4. Repeat the hold check **inside** `assign()`'s transaction, beside the
+   existing overlap re-check: the pre-check is not race-safe if the janitor
+   holds the car between the check and the insert.
+5. The shared-trip path (`share: true`) deliberately skips the overlap block —
+   the hold check must **not** be skipped there, the car is physically out.
+6. `CarPanel.tsx:698` and `:772` filter `AVAILABLE || IN_USE` for the assign
+   picker; add the hold flag so the web picker omits it too.
+
 Acceptance: `/assign CAR-…` cannot put a held car on a new request; API `assign`
-returns 409 with the message above.
+returns 409 with the message above; the web picker does not list it.
 
 ### Step 5 — Admin manual close (backend)
 
@@ -265,20 +316,30 @@ body: { endOdoKm: number, reason: string, estimated?: boolean }
    so the audit stays `CAR_ODOMETER_RECORDED` with `{ stage: 'BACK', km,
    source: 'ADMIN_MANUAL', estimated }` and the photo fields are left untouched.
    `captureOdometer` keeps calling the same helper (no behaviour change).
+   The helper takes an optional photo (a manual close usually has none) and
+   never calls `telegram.manualAck` — that is what stamps the driver's tap.
 4. One transaction:
-   - `carAssignments`: `endOdoKm`, `endOdoAt = now` (only if missing),
-     `driverBackAtOfficeAt = now`, `releasedAt = now`, `estimatedReturnAt = null`.
-   - `carTrips` (if a row exists): `status = COMPLETED`, `endMileage = endOdoKm`,
-     `completedAt = now`, `remarks` unchanged.
-   - `vehicles`: `currentMileage = endOdoKm`; `status = AVAILABLE` only when no
-     other live assignment holds it (`otherLiveHolders`, same rule as the janitor).
+   - `carAssignments`: `endOdoKm`, `endOdoAt = now` (only when missing),
+     `releasedAt = now`, `estimatedReturnAt = null`.
+     **Do not set `driverBackAtOfficeAt`** — that column means "the driver
+     tapped 🏁", and it feeds the driver discipline report and the trip chips.
+     Faking it hides exactly the behaviour this feature exists to expose.
+   - `carTrips` (when a row exists): reuse the `completeTrip` body
+     (`status = COMPLETED`, `endMileage = endOdoKm`, `completedAt = now`,
+     `vehicle.currentMileage`, conditional free). Do not copy it: two writers
+     drift, and `completeTrip` already sends its own `TRIP_COMPLETED` bell.
+   - `vehicles`: `currentMileage = endOdoKm`; `status = AVAILABLE` only when
+     `otherLiveHolders()` finds no other live claim.
    - `drivers`: `AVAILABLE` only when no other live assignment holds them.
    - `carRequests` + `requestDocuments`: `COMPLETED`.
+   - Leave `driverNotedAt` / `driverArrivedAt` untouched (real taps).
 5. Audit `CAR_TRIP_MANUALLY_CLOSED` `{ endOdoKm, estimated, reason, minutesOver,
-   closedById }`.
+   closedById, photo: false }`; the reading itself keeps its
+   `CAR_ODOMETER_RECORDED` audit with `source: 'ADMIN_MANUAL'`.
 6. Notify: requester `TRIP_COMPLETED` ("closed by Administration after the
    return window"), driver's Telegram (`✅ … closed by Administration — return
-   341,651 km`), and mirror to admins who hold `cars.assign`.
+   341,651 km`), and mirror to admins who hold `cars.assign`. Send once per
+   close (the endpoint is idempotent, see step 1).
 
 Acceptance: closing CAR-202611-0039-like data writes exactly one new BACK
 odometer audit, sets `driverBackAtOfficeAt`/`releasedAt`, sets vehicle
@@ -296,8 +357,12 @@ odometer audit, sets `driverBackAtOfficeAt`/`releasedAt`, sets vehicle
    - Checkbox **"Return km is an estimate / could not be read"** → shows a
      required Reason field.
    - Shows the current start km and computed distance.
-   - Confirm → `POST …/odometer` (BACK, if not yet recorded) then
-     `POST …/trip/close`; toast, `onSaved`.
+   - Confirm → `POST …/trip/close` only. Do **not** post the odometer first:
+     `captureOdometer` (server) and `OdometerBox` (client) both require a
+     dashboard photo, so a km-only close would be rejected before the close
+     ever ran. `closeTripManually` writes the reading itself; the photo can be
+     attached afterwards through `OdometerBox` when the driver sends it.
+     Toast, then `onSaved`.
 3. Reuse `OdometerBox` for later correction of the km; no second form.
 4. Fleet list and requester fleet card: render `overdueReturn` as a red
    "Overdue return" tag beside the `IN_USE` badge (no new badge enum value, so
@@ -332,7 +397,9 @@ code already does.
 | Driver has no Telegram | Admin alert says "call the driver"; no driver nudge. |
 | Trip row exists and is `STARTED` | Already excluded from the janitor; the hold and escalation cover it. |
 | Ride never happened (no Ready, no km, no trip) | Released as today (`CAR_TRIP_WINDOW_RELEASED`), request back to `APPROVED`. |
-| Multi-day overdue (car missing / accident) | Stays `IN_USE`, admin alert repeats every 12 h, day-end digest lists it; Admin must close with a reason. |
+| Multi-day overdue (car missing / accident) | Stays `IN_USE`, admin alert repeats every 12 h (daily after 24 h), day-end digest lists it; Admin must close with a reason. |
+| Admin uses **Release** on an out-on-road ride | Must be refused. Today `release()` only blocks a `STARTED` trip; releasing sets the request back to `APPROVED` with the car unlinked, which also **wipes every odometer field** on the next `assign()` (the upsert nulls `startOdo*/endOdo*`), and `expireStaleRequests` (window +2 h) then cancels the request as unserved. Guard `release()` with the same ride-evidence test and point the caller at the manual close. |
+| Manual close while a `car_trips` row is `STARTED` | Close through `completeTrip` semantics so the trip row, `vehicle.currentMileage` and the completion bell are not written twice. |
 
 ---
 
@@ -351,10 +418,14 @@ Unit / integration (`backend/test`, run with `node -r ts-node/register/transpile
      driver, notifies requester/driver, second call 409, estimate without reason
      rejected, km below start rejected.
 2. Extend `test/car-odometer.test.ts`: `captureOdometer` still writes the same
-   audit after the shared `writeOdometer` extraction.
+   audit and still stamps the driver stage after the shared `writeOdometer`
+   extraction; a manual close writes the km with no photo and sets **no**
+   `driverBackAtOfficeAt`.
 3. Extend `test/car-lifecycle.test.ts`: fleet + requester fleet report
-   `IN_USE` / `overdueReturn` for a held assignment; `checkAvailability` rejects
-   a window starting now; `assign` returns 409.
+   `IN_USE` / `overdueReturn` for a held assignment; the 30-minute
+   `renormalizeVehicleStatuses` pass leaves it `IN_USE`; `checkAvailability`
+   rejects a window inside the buffer and allows tomorrow; `assign` returns 409
+   (also with `share: true`); `release()` is refused while evidence exists.
 
 Checks before commit:
 
@@ -387,7 +458,35 @@ Manual verification on the testing stack (`:8030`):
 
 ---
 
-## 10. Open questions
+## 10. Review against current code (18 Nov 2026)
+
+Checked against `main@6440a88`. These are the places where the first draft of
+this plan would have collided with existing logic.
+
+| # | Conflict found | Where | Resolution (now in the steps) |
+| --- | --- | --- | --- |
+| 1 | Self-heal frees the held car every 30 min (`hasLive` ignores held rows) | `trip-reminders.service.ts:484 renormalizeVehicleStatuses` | Step 1.5 — held assignment counts as live |
+| 2 | The +2 h admin alert is swallowed by the existing 12 h `ESCALATED` throttle | `trip-reminders.service.ts:1279` | Step 2.2 — separate marker, two stages |
+| 3 | `release()` on an out-on-road ride → `APPROVED` → `expireStaleRequests` cancels it 2 h later | `cars.service.ts:1841 release`, `trip-reminders.service.ts:619` | Step 7 edge case + guard |
+| 4 | `assign()` upsert wipes `startOdo*/endOdo*/driver*At` on a released row | `cars.service.ts:830` | Same guard: no release while ride evidence exists |
+| 5 | `captureOdometer` requires a photo; `manualAck('returned')` fakes the driver's Back tap | `cars.service.ts:1021, 1064` | Step 5.4 — own write, no `driverBackAtOfficeAt` |
+| 6 | `requesterFleetOverview` would still show AVAILABLE: `lateEnd` is in the past | `cars.service.ts:405–433` | Step 3 — `coversNow` forced by the hold |
+| 7 | `overlaps()` callers read `conflicts[0].startDate/endDate` | `cars.service.ts:533, 790` | Step 3 — synthetic conflict carries the full shape |
+| 8 | `dayEndDigest` only lists `APPROVED`/`COMPLETED` and `STARTED` trips → held rides vanish and the "auto-closed" bucket goes empty | `trip-reminders.service.ts:862` | Step 2.5 + a third bucket |
+| 9 | Telegram picker allows `IN_USE` and filters only by window overlap; a held car is listed | `telegram-car-actions.service.ts:714` | Step 4.1 |
+| 10 | Web picker allows `IN_USE` | `CarPanel.tsx:698, 772` | Step 4.6 |
+| 11 | `driverClash` is window-only, so a held driver is free for a new window | `cars.service.ts:617` | Step 3 union |
+| 12 | `completeTrip` requires a `STARTED` trip row, so it cannot close the no-trip rides this feature is about | `cars.service.ts:2420` | Step 5 — new endpoint, reuse only the trip-row body |
+| 13 | Faking `driverBackAtOfficeAt` would hide the miss from the discipline report | `fleet.service.ts:978 driverMisses` | Step 5.4 — leave the stamp null |
+| 14 | `freeOrphanedDrivers` keeps the driver `ON_TRIP` while the request is `IN_PROGRESS` | `trip-reminders.service.ts:454` | No change needed (verified) |
+| 15 | `escalateUnacknowledged` fires only when `driverNotedAt = null` | `trip-reminders.service.ts:95` | No change needed (verified) |
+| 16 | `startPassedNudge` skips requests with a live assignment | `trip-reminders.service.ts:525` | No change needed (verified) |
+
+Not inspected in this pass: the mobile/Telegram **requester** fleet card renderer
+and the PDF/print views — both read the same `requesterFleetOverview` payload, so
+they inherit the fix, but their rendering of `overdueReturn` is unverified.
+
+## 11. Open questions
 
 1. Should a Back tap with a return km **lower** than the departure km be blocked
    (today it is accepted and produces a negative distance)? Not part of this plan.
