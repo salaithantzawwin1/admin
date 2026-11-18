@@ -61,6 +61,8 @@ export default function App() {
           <Route path="delegations" element={<Delegations />} />
           <Route path="fleet" element={<Fleet />} />
           <Route path="car-requests" element={<CarRequests />} />
+          {/* the fleet desk's doc numbers open the same detail page inside its own nav */}
+          <Route path="car-requests/:id" element={<RequestDetail />} />
           {/* odometer training lives in Settings now — keep the old link working */}
           <Route path="odometer-training" element={<Navigate to="/settings?tab=odometer" replace />} />
           <Route path="meeting-rooms" element={<MeetingRooms />} />

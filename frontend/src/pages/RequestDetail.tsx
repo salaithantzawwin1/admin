@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader } from '../components/ui';
 import { CarPanel } from '../components/CarPanel';
@@ -49,6 +49,10 @@ interface Detail {
 
 export default function RequestDetail() {
   const { id } = useParams<{ id: string }>();
+  // the same detail page serves the fleet desk (/car-requests/:id) and My Requests
+  // (/requests/:id) — the back link has to return to whichever one opened it
+  const location = useLocation();
+  const inFleetDesk = location.pathname.startsWith('/car-requests');
   const [detail, setDetail] = useState<Detail | null>(null);
   const [error, setError] = useState('');
   const [comment, setComment] = useState('');
@@ -158,6 +162,16 @@ export default function RequestDetail() {
       <PageHeader
         title={detail.docNumber}
         subtitle={detail.title}
+        actions={
+          inFleetDesk ? (
+            <Link
+              to="/car-requests?tab=requests"
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-50"
+            >
+              ← Car Requests
+            </Link>
+          ) : undefined
+        }
       />
       {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
       {confirmPastApprove && (

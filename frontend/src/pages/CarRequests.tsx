@@ -149,7 +149,7 @@ function QueueRowView({ q, past }: { q: QueueRow; past: boolean }) {
   return (
     <tr className={`hover:bg-gray-50 ${past ? 'bg-red-50/40' : ''}`}>
       <td className="px-3 py-2 font-medium">
-        <Link to={`/requests/${q.id}`} className="text-blue-600 hover:underline">{q.docNumber}</Link>
+        <Link to={`/car-requests/${q.id}`} className="text-blue-600 hover:underline">{q.docNumber}</Link>
         {past && (
           <span className="block text-[11px] font-medium text-red-600 mt-0.5">⌛ window passed</span>
         )}
@@ -334,7 +334,7 @@ export default function CarRequests() {
               {acks.map((a) => (
                 <tr key={a.id} className="hover:bg-gray-50">
                   <td className="px-3 py-2 font-medium">
-                    <Link to={`/requests/${a.id}`} className="text-blue-600 hover:underline">{a.docNumber}</Link>
+                    <Link to={`/car-requests/${a.id}`} className="text-blue-600 hover:underline">{a.docNumber}</Link>
                   </td>
                   <td className="px-3 py-2">
                     {a.requester?.fullName ?? '—'}
@@ -427,7 +427,7 @@ export default function CarRequests() {
               setShowForm(false);
               toast('Car request submitted');
               load();
-              navigate(`/requests/${id}`);
+              navigate(`/car-requests/${id}`);
             }}
           />
         </Modal>
@@ -561,7 +561,7 @@ export default function CarRequests() {
             {rows.map((r) => (
               <tr key={r.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">
-                  <Link to={`/requests/${r.id}`} className="text-blue-600 hover:underline">{r.docNumber}</Link>
+                  <Link to={`/car-requests/${r.id}`} className="text-blue-600 hover:underline">{r.docNumber}</Link>
                 </td>
                 {canAssign && (
                   <td className="px-4 py-3">
@@ -696,7 +696,7 @@ export default function CarRequests() {
                 return (
                 <tr key={t.requestId} className="hover:bg-gray-50">
                   <td className="px-3 py-2 font-medium">
-                    <Link to={`/requests/${t.requestId}`} className="text-blue-600 hover:underline">{t.docNumber}</Link>
+                    <Link to={`/car-requests/${t.requestId}`} className="text-blue-600 hover:underline">{t.docNumber}</Link>
                   </td>
                   <td className="px-3 py-2">{t.vehicle}</td>
                   <td className="px-3 py-2">
@@ -731,7 +731,7 @@ export default function CarRequests() {
             {handover.today.map((t) => (
               <div key={t.requestId} className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-gray-500 w-32 whitespace-nowrap">{fmtDateTime(t.startDate)}</span>
-                <Link to={`/requests/${t.requestId}`} className="text-blue-600 hover:underline font-medium">{t.docNumber}</Link>
+                <Link to={`/car-requests/${t.requestId}`} className="text-blue-600 hover:underline font-medium">{t.docNumber}</Link>
                 <Badge color={t.status === 'IN_PROGRESS' ? 'blue' : 'orange'}>{t.status}</Badge>
                 <span className="text-gray-500">{t.vehicle} · {t.destination}</span>
                 {t.driver && (

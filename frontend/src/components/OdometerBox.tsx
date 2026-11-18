@@ -52,21 +52,48 @@ function useOdoPhoto(assignmentId: string, stage: Stage, version?: string | null
   return url;
 }
 
-/** Small clickable thumbnail of one dashboard photo (opens in a new tab). */
+/** Small clickable thumbnail of one dashboard photo — opens it in a dialog. */
 function OdoThumb({ assignmentId, stage, version, label }: { assignmentId: string; stage: Stage; version?: string | null; label: string }) {
   const url = useOdoPhoto(assignmentId, stage, version);
+  const [open, setOpen] = useState(false);
   if (!version) return null;
+  const caption = `${label} — odometer photo`;
   return (
-    <a
-      href={url ?? '#'}
-      target="_blank"
-      rel="noreferrer"
-      onClick={(e) => !url && e.preventDefault()}
-      title={`${label} — odometer photo`}
-      className="inline-flex items-center gap-1 text-[11px] text-blue-600 hover:underline"
-    >
-      📷 {url ? <img src={url} alt={`${label} odometer`} className="h-8 w-12 object-cover rounded border border-gray-200" /> : 'photo'}
-    </a>
+    <>
+      <button
+        type="button"
+        onClick={() => url && setOpen(true)}
+        disabled={!url}
+        title={url ? `${caption} — click to enlarge` : `${caption} — loading…`}
+        aria-label={caption}
+        className="inline-flex items-center gap-1 rounded text-[11px] text-blue-600 hover:underline disabled:text-gray-400 disabled:no-underline"
+      >
+        📷{' '}
+        {url ? (
+          <img
+            src={url}
+            alt={`${label} odometer`}
+            className="h-8 w-12 rounded border border-gray-200 object-cover transition-shadow hover:ring-2 hover:ring-blue-300"
+          />
+        ) : (
+          'photo'
+        )}
+      </button>
+      {open && url && (
+        <Modal title={caption} onClose={() => setOpen(false)} wide>
+          <div className="flex flex-col items-center gap-2">
+            <img
+              src={url}
+              alt={`${label} odometer`}
+              className="max-h-[70vh] w-auto max-w-full rounded-lg ring-1 ring-gray-200"
+            />
+            <div className="text-xs text-gray-400">
+              {label} — the dashboard photo submitted with this trip
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
