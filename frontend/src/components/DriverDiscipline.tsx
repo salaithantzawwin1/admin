@@ -21,6 +21,8 @@ interface Row {
 interface Data {
   range: Range;
   from: string;
+  /** first Telegram stamp ever recorded — trips before it are not counted */
+  stampSince?: string | null;
   totals: {
     trips: number;
     missedNoted: number;
@@ -173,9 +175,18 @@ export function DriverDiscipline() {
       )}
 
       <p className="px-4 py-3 text-[11px] leading-relaxed text-gray-400">
-        Counted on finished trips only (released, or the request completed) — a car that is still out has no
-        “Back at office” to miss yet. An odometer column counts the trip when either the photo or the kilo is
-        missing, because the reading is only evidence with both.
+        Counted on trips that actually ran — the request completed, or the trip was started and closed.
+        Cancelled and rejected requests are left out even though they are released: a ride that never
+        happened has no stamps to miss, and a car still out has no “Back at office” yet.
+        {data?.stampSince && (
+          <>
+            {' '}
+            Trips assigned before {fmtDate(data.stampSince)} are skipped — the Telegram stamps did not exist
+            yet.
+          </>
+        )}{' '}
+        An odometer column counts a trip when either the photo or the kilo is missing, because the reading is
+        only evidence with both.
       </p>
     </Card>
   );

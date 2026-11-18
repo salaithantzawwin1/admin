@@ -962,11 +962,23 @@ export class FleetService {
    * office" to miss yet, and counting it would read as a driver fault.
    */
   async driverMisses(range: 'week' | 'month' | 'year', now: Date = new Date()) {
-    const from = this.yangonPeriodStart(range, now);
+    // A trip assigned before the first Telegram stamp could not have one —
+    // counting it would blame a driver for a button that did not exist yet.
+    const stampSince = await this.telegramStampSince();
+    const periodStart = this.yangonPeriodStart(range, now);
+    const from = stampSince && stampSince > periodStart ? stampSince : periodStart;
     const rows = await this.prisma.carAssignment.findMany({
       where: {
         assignedAt: { gte: from },
-        OR: [{ releasedAt: { not: null } }, { request: { status: 'COMPLETED' } }],
+        // A trip that actually ran: its request completed, or the trip itself was
+        // started and closed. releasedAt is NOT the test — cancelled and rejected
+        // requests carry it too, and a ride that never happened has no stamps to
+        // miss.
+        OR: [
+          { request: { status: 'COMPLETED' } },
+          { trip: { status: 'COMPLETED' } },
+          { trip: { completedAt: { not: null } } },
+        ],
       },
       select: {
         driverId: true,
@@ -1013,7 +1025,32 @@ export class FleetService {
       }))
       .sort((a, b) => b.missed - a.missed || a.name.localeCompare(b.name));
 
-    return { range, from, to: now, totals, drivers };
+    return { range, from, stampSince, to: now, totals, drivers };
+  }
+
+  /** Timestamp of the very first Telegram driver stamp in this database. */
+  private async telegramStampSince(): Promise<Date | null> {
+    const [noted, ready, back] = await Promise.all([
+      this.prisma.carAssignment.findFirst({
+        where: { driverNotedAt: { not: null } },
+        orderBy: { driverNotedAt: 'asc' },
+        select: { driverNotedAt: true },
+      }),
+      this.prisma.carAssignment.findFirst({
+        where: { driverArrivedAt: { not: null } },
+        orderBy: { driverArrivedAt: 'asc' },
+        select: { driverArrivedAt: true },
+      }),
+      this.prisma.carAssignment.findFirst({
+        where: { driverBackAtOfficeAt: { not: null } },
+        orderBy: { driverBackAtOfficeAt: 'asc' },
+        select: { driverBackAtOfficeAt: true },
+      }),
+    ]);
+    const times = [noted?.driverNotedAt, ready?.driverArrivedAt, back?.driverBackAtOfficeAt]
+      .filter((d): d is Date => !!d)
+      .map((d) => d.getTime());
+    return times.length ? new Date(Math.min(...times)) : null;
   }
 
   /** Yangon has no DST, so +6:30 is exact and the calendar period is arithmetic. */
