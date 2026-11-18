@@ -9,6 +9,7 @@ import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 import { FleetDocumentsModal, FleetDocType } from '../components/FleetDocumentsModal';
 import { DriverTripHistoryModal } from '../components/DriverTripHistoryModal';
+import { DriverDiscipline } from '../components/DriverDiscipline';
 import { VehiclePhotosModal, VehiclePhotoMeta, useVehiclePhotoBlob } from '../components/VehiclePhotosModal';
 
 interface Driver {
@@ -24,6 +25,9 @@ interface Driver {
   telegramChatId?: string | null;
   telegramUsername?: string | null;
   employee?: { id: string; employeeNo: string; fullName: string } | null;
+  /** the office this driver belongs to */
+  departmentId?: string | null;
+  department?: { id: string; code: string; name: string } | null;
   absences?: { startsAt: string; endsAt: string; reason?: string | null }[];
   /** live ⏰ ETA from the driver's Telegram Delay report (present when future-dated) */
   activeEta?: string | null;
@@ -165,7 +169,9 @@ const emptyVForm: Record<string, string | number> = {
 };
 const FUEL_TYPES = ['PETROL', 'DIESEL', 'HYBRID', 'EV'];
 const VIN_RE = /^[A-HJ-NPR-Z0-9]{17}$/i; // same rule as the backend vehicle DTO
-const emptyDForm = { name: '', phone: '', licenseNo: '', licenseExpiry: '', status: 'AVAILABLE' };
+const emptyDForm = { name: '', phone: '', licenseNo: '', licenseExpiry: '', status: 'AVAILABLE', departmentId: '' };
+/** Departments for the driver form — the office a driver belongs to. */
+interface DeptOption { id: string; code: string; name: string }
 
 export default function Fleet() {
   const [bindCodeFor, setBindCodeFor] = useState<string | null>(null);
@@ -185,6 +191,7 @@ export default function Fleet() {
   const vehNoError = vehNoServerError;
   const vehicleBanner = modalError && !vinServerError && !vehNoServerError ? modalError : null;
   const [dForm, setDForm] = useState(emptyDForm);
+  const [deptOptions, setDeptOptions] = useState<DeptOption[]>([]);
   const [showV, setShowV] = useState(false);
   const [showD, setShowD] = useState(false);
   const [editingV, setEditingV] = useState<Vehicle | null>(null);
@@ -239,8 +246,10 @@ export default function Fleet() {
   // fleet view lives in the URL (?tab=absences) so refresh / back / shared links keep it
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
-  const fleetTab: 'main' | 'absences' | 'unavail' | 'setup' = tabParam === 'absences' || tabParam === 'setup' || tabParam === 'unavail' ? tabParam : 'main';
-  const setFleetTab = (t: 'main' | 'absences' | 'unavail' | 'setup') => setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
+  const fleetTab: 'main' | 'absences' | 'unavail' | 'setup' | 'misses' =
+    tabParam === 'absences' || tabParam === 'setup' || tabParam === 'unavail' || tabParam === 'misses' ? tabParam : 'main';
+  const setFleetTab = (t: 'main' | 'absences' | 'unavail' | 'setup' | 'misses') =>
+    setSearchParams(t === 'main' ? {} : { tab: t }, { replace: false });
   // Setup is split into two sub-tabs; the section lives in the URL too so a
   // refresh or a shared link lands on the same half of the page.
   const setupSub: 'types' | 'docs' = searchParams.get('sub') === 'docs' ? 'docs' : 'types';
@@ -263,6 +272,9 @@ export default function Fleet() {
         .catch(() => {});
       api<{ items?: { id: string; employeeNo: string; fullName: string }[] }>('/org/employees?pageSize=200')
         .then((r) => setEmpOptions(r.items ?? []))
+        .catch(() => {});
+      api<DeptOption[] | { items?: DeptOption[] }>('/org/departments')
+        .then((r) => setDeptOptions(Array.isArray(r) ? r : (r.items ?? [])))
         .catch(() => {});
     }
   }, []);
@@ -321,7 +333,14 @@ export default function Fleet() {
       // note: `status` is not part of the create DTO (defaults to AVAILABLE server-side)
       const { status: _status, ...rest } = dForm;
       // licence expiry must be omitted (undefined) when blank — '' fails @IsDateString
-      await api('/fleet/drivers', { method: 'POST', body: { ...rest, ...(rest.licenseExpiry ? { licenseExpiry: rest.licenseExpiry } : {}) } });
+      await api('/fleet/drivers', {
+        method: 'POST',
+        body: {
+          ...rest,
+          departmentId: rest.departmentId || undefined,
+          ...(rest.licenseExpiry ? { licenseExpiry: rest.licenseExpiry } : {}),
+        },
+      });
       setDForm(emptyDForm);
       setShowD(false);
       flash('Driver added');
@@ -377,7 +396,15 @@ export default function Fleet() {
       await api(`/fleet/drivers/${editingD.id}`, {
         method: 'PATCH',
         // null clears the field ("blank") — undefined would leave it unchanged
-        body: { name: dForm.name, phone: dForm.phone || null, licenseNo: dForm.licenseNo || null, licenseExpiry: dForm.licenseExpiry || null, status: dForm.status },
+        body: {
+          name: dForm.name,
+          phone: dForm.phone || null,
+          licenseNo: dForm.licenseNo || null,
+          licenseExpiry: dForm.licenseExpiry || null,
+          status: dForm.status,
+          // null clears the department, '' in the form means "no office"
+          departmentId: dForm.departmentId || null,
+        },
       });
       setEditingD(null);
       setDForm(emptyDForm);
@@ -551,6 +578,14 @@ export default function Fleet() {
           onClick={() => setFleetTab('unavail')}
         >
           {`🛠 Vehicle Blocks (${vUnavails.filter((u) => u.status === 'ACTIVE').length})`}
+        </button>
+        <button
+          className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+            fleetTab === 'misses' ? 'bg-yellow-50 border-yellow-300 text-yellow-800' : 'border-gray-200 text-gray-500 hover:bg-gray-50'
+          }`}
+          onClick={() => setFleetTab('misses')}
+        >
+          📋 Driver discipline
         </button>
         {canSetup && (
           <button
@@ -967,9 +1002,18 @@ export default function Fleet() {
                 <Input id="fleet-license-no" placeholder="DL-xxxx" value={dForm.licenseNo} onChange={(e) => setDForm({ ...dForm, licenseNo: e.target.value })} />
               </div>
             </div>
-            <div>
-              <label htmlFor="fleet-license-expiry" className="block text-xs text-gray-500 mb-1">License expiry</label>
-              <Input id="fleet-license-expiry" type="date" value={dForm.licenseExpiry} onChange={(e) => setDForm({ ...dForm, licenseExpiry: e.target.value })} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="fleet-license-expiry" className="block text-xs text-gray-500 mb-1">License expiry</label>
+                <Input id="fleet-license-expiry" type="date" value={dForm.licenseExpiry} onChange={(e) => setDForm({ ...dForm, licenseExpiry: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-department" className="block text-xs text-gray-500 mb-1">Department</label>
+                <Select id="fleet-department" value={dForm.departmentId} onChange={(e) => setDForm({ ...dForm, departmentId: e.target.value })}>
+                  <option value="">— no department —</option>
+                  {deptOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </Select>
+              </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setShowD(false)}>Cancel</Button>
@@ -1233,9 +1277,18 @@ export default function Fleet() {
                 {DRIVER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
               </Select>
             </div>
-            <div>
-              <label htmlFor="fleet-license-expiry-2" className="block text-xs text-gray-500 mb-1">License expiry</label>
-              <Input id="fleet-license-expiry-2" type="date" value={dForm.licenseExpiry} onChange={(e) => setDForm({ ...dForm, licenseExpiry: e.target.value })} />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label htmlFor="fleet-license-expiry-2" className="block text-xs text-gray-500 mb-1">License expiry</label>
+                <Input id="fleet-license-expiry-2" type="date" value={dForm.licenseExpiry} onChange={(e) => setDForm({ ...dForm, licenseExpiry: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="fleet-department-2" className="block text-xs text-gray-500 mb-1">Department</label>
+                <Select id="fleet-department-2" value={dForm.departmentId} onChange={(e) => setDForm({ ...dForm, departmentId: e.target.value })}>
+                  <option value="">— no department —</option>
+                  {deptOptions.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </Select>
+              </div>
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setEditingD(null)}>Cancel</Button>
@@ -1244,6 +1297,8 @@ export default function Fleet() {
           </div>
         </Modal>
       )}
+
+      {fleetTab === 'misses' && <DriverDiscipline />}
 
       {fleetTab === 'main' && (
       <>
@@ -1373,6 +1428,7 @@ export default function Fleet() {
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
               <th className="px-4 py-3 font-medium">Name</th>
               <th className="px-4 py-3 font-medium">Phone</th>
+              <th className="px-4 py-3 font-medium">Department</th>
               <th className="px-4 py-3 font-medium">License</th>
               <th className="px-4 py-3 font-medium">Vehicles</th>
               <th className="px-4 py-3 font-medium">Employee</th>
@@ -1384,11 +1440,18 @@ export default function Fleet() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {drivers.length === 0 && <tr><td colSpan={canManage ? 9 : 8}><Empty /></td></tr>}
+            {drivers.length === 0 && <tr><td colSpan={canManage ? 10 : 9}><Empty /></td></tr>}
             {drivers.map((d) => (
               <tr key={d.id} className="hover:bg-gray-50">
                 <td className="px-4 py-3 font-medium">{d.name}</td>
                 <td className="px-4 py-3">{d.phone ?? '—'}</td>
+                <td className="px-4 py-3">
+                  {d.department ? (
+                    <span className="text-gray-700" title={d.department.code}>{d.department.name}</span>
+                  ) : (
+                    <span className="text-gray-300">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3">
                   <div>{d.licenseNo ?? '—'}</div>
                   <ExpiryPill label="Expires" date={d.licenseExpiry} status={d.licenseExpiryStatus} />
@@ -1463,7 +1526,14 @@ export default function Fleet() {
                         setEditingV(null);
                         setShowV(false);
                         setShowD(false);
-                        setDForm({ name: d.name, phone: d.phone ?? '', licenseNo: d.licenseNo ?? '', licenseExpiry: d.licenseExpiry ? d.licenseExpiry.slice(0, 10) : '', status: d.status });
+                        setDForm({
+                          name: d.name,
+                          phone: d.phone ?? '',
+                          licenseNo: d.licenseNo ?? '',
+                          licenseExpiry: d.licenseExpiry ? d.licenseExpiry.slice(0, 10) : '',
+                          status: d.status,
+                          departmentId: d.departmentId ?? '',
+                        });
                         window.scrollTo({ top: 0, behavior: 'smooth' });
                       }}
                     >

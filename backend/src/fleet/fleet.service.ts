@@ -711,6 +711,8 @@ export class FleetService {
       select: {
         id: true, name: true, phone: true, licenseNo: true, licenseExpiry: true,
         status: true, notes: true, telegramChatId: true, telegramUsername: true, createdAt: true, updatedAt: true,
+        departmentId: true,
+        department: { select: { id: true, code: true, name: true } },
         vehicles: { select: { vehicleNo: true } },
         employee: { select: { id: true, employeeNo: true, fullName: true } },
         absences: { where: { status: 'ACTIVE', endsAt: { gt: now } }, select: { startsAt: true, endsAt: true, reason: true } },
@@ -877,7 +879,8 @@ export class FleetService {
     return { code };
   }
 
-  async createDriver(data: { name: string; phone?: string; licenseNo?: string; licenseExpiry?: string; notes?: string; employeeId?: string }, actor: Actor) {
+  async createDriver(data: { name: string; phone?: string; licenseNo?: string; licenseExpiry?: string; notes?: string; employeeId?: string; departmentId?: string }, actor: Actor) {
+    if (data.departmentId) await this.assertDepartment(data.departmentId);
     const driver = await this.prisma.driver.create({
       data: {
         name: data.name,
@@ -886,6 +889,7 @@ export class FleetService {
         licenseExpiry: data.licenseExpiry ? new Date(data.licenseExpiry) : undefined,
         notes: data.notes,
         employeeId: data.employeeId || undefined,
+        departmentId: data.departmentId || undefined,
       },
     });
     await this.audit.log({
@@ -898,9 +902,15 @@ export class FleetService {
 
   async updateDriver(id: string, data: {
     name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string | null;
-    status?: string; notes?: string;
+    status?: string; notes?: string; departmentId?: string | null;
   }, actor: Actor) {
     return this.updateDriverCore(id, data, actor);
+  }
+
+  /** A driver's department must exist — the FK would only say so as a 500. */
+  private async assertDepartment(id: string) {
+    const dept = await this.prisma.department.findUnique({ where: { id }, select: { id: true } });
+    if (!dept) throw new BadRequestException('Department not found');
   }
 
   /** Link this driver to an employee record (driver = a staff member). */
@@ -944,6 +954,81 @@ export class FleetService {
    * Correlated assignment history for a linked driver+employee pair —
    * assignments made under EITHER record appear once, merged by time.
    */
+  /**
+   * What the drivers forgot in the current Yangon week / month / year: the three
+   * Telegram stamps, and the odometer (photo *and* kilo, at both ends).
+   *
+   * Only finished trips count — an assignment still on the road has no "Back at
+   * office" to miss yet, and counting it would read as a driver fault.
+   */
+  async driverMisses(range: 'week' | 'month' | 'year', now: Date = new Date()) {
+    const from = this.yangonPeriodStart(range, now);
+    const rows = await this.prisma.carAssignment.findMany({
+      where: {
+        assignedAt: { gte: from },
+        OR: [{ releasedAt: { not: null } }, { request: { status: 'COMPLETED' } }],
+      },
+      select: {
+        driverId: true,
+        driver: { select: { id: true, name: true, department: { select: { name: true } } } },
+        driverNotedAt: true,
+        driverArrivedAt: true,
+        driverBackAtOfficeAt: true,
+        startOdoKm: true,
+        startOdoPhoto: true,
+        endOdoKm: true,
+        endOdoPhoto: true,
+      },
+    });
+
+    type Bucket = {
+      id: string; name: string; department: string | null; trips: number;
+      missedNoted: number; missedReady: number; missedBack: number;
+      missedOdoStart: number; missedOdoEnd: number;
+    };
+    const byDriver = new Map<string, Bucket>();
+    const totals = { trips: 0, missedNoted: 0, missedReady: 0, missedBack: 0, missedOdoStart: 0, missedOdoEnd: 0 };
+
+    for (const a of rows) {
+      if (!a.driver) continue; // nobody assigned — not a driver fault
+      const bucket: Bucket = byDriver.get(a.driver.id) ?? {
+        id: a.driver.id, name: a.driver.name, department: a.driver.department?.name ?? null,
+        trips: 0, missedNoted: 0, missedReady: 0, missedBack: 0, missedOdoStart: 0, missedOdoEnd: 0,
+      };
+      bucket.trips += 1;
+      totals.trips += 1;
+      if (!a.driverNotedAt) { bucket.missedNoted += 1; totals.missedNoted += 1; }
+      if (!a.driverArrivedAt) { bucket.missedReady += 1; totals.missedReady += 1; }
+      if (!a.driverBackAtOfficeAt) { bucket.missedBack += 1; totals.missedBack += 1; }
+      // a reading is evidence only with the photo *and* the number
+      if (a.startOdoKm == null || !a.startOdoPhoto) { bucket.missedOdoStart += 1; totals.missedOdoStart += 1; }
+      if (a.endOdoKm == null || !a.endOdoPhoto) { bucket.missedOdoEnd += 1; totals.missedOdoEnd += 1; }
+      byDriver.set(a.driver.id, bucket);
+    }
+
+    const drivers = [...byDriver.values()]
+      .map((d) => ({
+        ...d,
+        missed: d.missedNoted + d.missedReady + d.missedBack + d.missedOdoStart + d.missedOdoEnd,
+      }))
+      .sort((a, b) => b.missed - a.missed || a.name.localeCompare(b.name));
+
+    return { range, from, to: now, totals, drivers };
+  }
+
+  /** Yangon has no DST, so +6:30 is exact and the calendar period is arithmetic. */
+  private yangonPeriodStart(range: 'week' | 'month' | 'year', now: Date) {
+    const OFFSET = 6.5 * 60 * 60 * 1000;
+    const shifted = new Date(now.getTime() + OFFSET);
+    const y = shifted.getUTCFullYear();
+    let m = shifted.getUTCMonth();
+    let d = shifted.getUTCDate();
+    if (range === 'week') d -= (shifted.getUTCDay() + 6) % 7; // Monday-first week
+    else if (range === 'month') d = 1;
+    else { m = 0; d = 1; }
+    return new Date(Date.UTC(y, m, d) - OFFSET);
+  }
+
   async correlatedHistory(id: string) {
     const driver = await this.prisma.driver.findUnique({
       where: { id },
@@ -996,10 +1081,11 @@ export class FleetService {
 
   private async updateDriverCore(id: string, data: {
     name?: string; phone?: string | null; licenseNo?: string | null; licenseExpiry?: string | null;
-    status?: string; notes?: string;
+    status?: string; notes?: string; departmentId?: string | null;
   }, actor: Actor) {
     const driver = await this.prisma.driver.findUnique({ where: { id } });
     if (!driver) throw new NotFoundException('Driver not found');
+    if (data.departmentId) await this.assertDepartment(data.departmentId);
 
     const updated = await this.prisma.driver.update({
       where: { id },
@@ -1012,12 +1098,15 @@ export class FleetService {
         licenseExpiry: data.licenseExpiry === null ? null : data.licenseExpiry ? new Date(data.licenseExpiry) : undefined,
         status: data.status as DriverStatus | undefined,
         notes: data.notes,
+        // null clears the department, undefined leaves it unchanged
+        departmentId: data.departmentId === null ? null : data.departmentId,
       },
     });
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'DRIVER_UPDATED', module: 'FLEET', recordId: id,
-      oldValue: { status: driver.status }, newValue: { status: updated.status },
+      oldValue: { status: driver.status, departmentId: driver.departmentId },
+      newValue: { status: updated.status, departmentId: updated.departmentId },
     });
     return updated;
   }

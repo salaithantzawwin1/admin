@@ -134,6 +134,8 @@ class DriverDto {
   @IsOptional() @IsString() @MaxLength(64) licenseNo?: string;
   @IsOptional() @IsDateString() licenseExpiry?: string;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  /** the office this driver belongs to (org departments) */
+  @IsOptional() @IsString() departmentId?: string;
 }
 
 class AbsenceDto {
@@ -175,6 +177,8 @@ class DriverUpdateDto {
   @IsOptional() @IsDateString() licenseExpiry?: string | null;
   @IsOptional() @IsIn(Object.values(DriverStatus)) status?: DriverStatus;
   @IsOptional() @IsString() @MaxLength(500) notes?: string;
+  /** null clears the department ("no office yet"); undefined leaves it unchanged */
+  @IsOptional() @IsString() departmentId?: string | null;
 }
 
 @ApiTags('fleet')
@@ -257,6 +261,14 @@ export class FleetController {
   @RequirePermissions(PERMISSIONS.FLEET_MANAGE)
   removeVehiclePhoto(@Req() req, @Param('id') id: string, @Param('photoId') photoId: string) {
     return this.photos.remove(id, photoId, this.actor(req));
+  }
+
+  /** Missed driver stamps + missing odometer, per Yangon week / month / year. */
+  @Get('drivers/misses')
+  @RequirePermissions(PERMISSIONS.FLEET_READ)
+  driverMisses(@Query('range') range?: string) {
+    const r = range === 'month' || range === 'year' ? range : 'week';
+    return this.fleet.driverMisses(r);
   }
 
   @Get('drivers')

@@ -193,6 +193,8 @@ model Department {
   headEmployee Employee?         @relation("DeptHead", fields: [headEmployeeId], references: [id])
   employees    Employee[]        @relation("DeptEmployees")
   requestDocs  RequestDocument[]
+  /// drivers assigned to this department (VMS §6 — fleet master data)
+  drivers      Driver[]          @relation("DriverDepartment")
 
   @@map("departments")
 }
@@ -1325,6 +1327,10 @@ model Driver {
   employee       Employee?       @relation("DriverEmployee", fields: [employeeId], references: [id])
   employeeId     String?         @db.Uuid
   absences       DriverAbsence[]
+  /// the office this driver belongs to — a driver can serve several departments,
+  /// but the desk still asks "whose driver is this"
+  departmentId   String?         @db.Uuid
+  department     Department?     @relation("DriverDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
 
   @@map("drivers")
 }
