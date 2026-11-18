@@ -128,8 +128,9 @@ Definitions:
 2. Insert a hold branch **before** the shared-trip and auto-complete branches:
 
 ```ts
-const outOnRoad =
-  a.startOdoAt != null || a.driverArrivedAt != null || a.trip?.status === 'STARTED';
+const outOnRoad = a.startOdoAt != null || a.driverArrivedAt != null;
+// (a STARTED trip never reaches this loop — the sweep query already excludes it,
+// and `trip` is not part of the include, so do not read a.trip here)
 
 if (outOnRoad && !a.driverBackAtOfficeAt) {
   // still out: keep the assignment live, keep the car held
@@ -268,6 +269,12 @@ if (held) return {
   `conflicts[0].startDate/endDate` for its 409 message and the form renders them.
 - `cars.service.driverClash` — treat an overdue out-on-road assignment of the
   same driver as a clash (the driver is provably still driving).
+- `fleet.service.listDrivers` (`:703`) — its effective-status map turns a DB
+  `ON_TRIP` with no live window into `AVAILABLE`. A held driver would read
+  AVAILABLE on the Fleet page.
+- `fleet.service.busyDriverIds` (`:685`) and the inline busy-driver list in
+  `telegram-car-actions.service.ts:780` — both are window-only, so a held driver
+  is offered for a new trip.
 
 Acceptance: a held car reports `IN_USE` + `overdueReturn: true` in both fleet
 endpoints, `checkAvailability` rejects a window starting within the hand-back
@@ -292,6 +299,11 @@ same car now shows the "still out" conflict instead of "free".
    the hold check must **not** be skipped there, the car is physically out.
 6. `CarPanel.tsx:698` and `:772` filter `AVAILABLE || IN_USE` for the assign
    picker; add the hold flag so the web picker omits it too.
+7. `changeAssignment()` (`cars.service.ts:1610`, the panel's "Change vehicle /
+   driver") must refuse a held ride as well. It only blocks a `STARTED` trip,
+   then frees the old vehicle and **nulls every tap and both odometer readings**
+   on the row — the exact evidence this feature depends on. Route the caller to
+   the manual close.
 
 Acceptance: `/assign CAR-…` cannot put a held car on a new request; API `assign`
 returns 409 with the message above; the web picker does not list it.
@@ -444,6 +456,18 @@ Manual verification on the testing stack (`:8030`):
 
 ---
 
+### Existing tests that will change
+
+- `backend/test/cars-fixes.test.ts:819` — "acknowledged expired trip →
+  COMPLETED …" now expects a hold (no COMPLETED, vehicle stays `IN_USE`,
+  `CAR_OVERDUE_RETURN_HELD` audit, no requester notice).
+- `backend/test/car-lifecycle.test.ts:307` — "janitor auto-close keeps a car
+  IN_USE when another live trip holds it" asserts the request still completes;
+  it must assert the hold instead.
+
+Both encode the behaviour this feature removes, so they are updated in the same
+commit; no other suite touches `releaseExpired`.
+
 ## 9. Rollout
 
 1. Land Steps 1–3 first (backend behaviour + badges), deploy, watch one real
@@ -455,6 +479,11 @@ Manual verification on the testing stack (`:8030`):
    needed.
 4. After a week, review: number of held trips, admin close latency, any car held
    > 24 h (should be zero without an admin reason).
+
+No backfill is needed: production has **0** assignments matching the hold test
+(query run 18 Nov 2026: `releasedAt is null AND driverBackAtOfficeAt is null AND
+endDate < now − 15 min`). The first row that would have been auto-closed after
+the deploy is the first one held.
 
 ---
 
@@ -481,6 +510,10 @@ this plan would have collided with existing logic.
 | 14 | `freeOrphanedDrivers` keeps the driver `ON_TRIP` while the request is `IN_PROGRESS` | `trip-reminders.service.ts:454` | No change needed (verified) |
 | 15 | `escalateUnacknowledged` fires only when `driverNotedAt = null` | `trip-reminders.service.ts:95` | No change needed (verified) |
 | 16 | `startPassedNudge` skips requests with a live assignment | `trip-reminders.service.ts:525` | No change needed (verified) |
+| 17 | **Change vehicle/driver** is allowed on an out-on-road ride and frees the old car, nulls every tap and both odometers | `cars.service.ts:1610 changeAssignment` | Step 4.7 — refuse it while ride evidence exists |
+| 18 | Driver list turns a held driver into `AVAILABLE` (window-only derivation) | `fleet.service.ts:703 listDrivers` | Step 3 — hold union |
+| 19 | Both driver-busy lists are window-only, so a held driver is offered | `fleet.service.ts:685`, `telegram-car-actions.service.ts:780` | Step 3 — hold union |
+| 20 | Two existing tests assert the old auto-complete behaviour | `cars-fixes.test.ts:819`, `car-lifecycle.test.ts:307` | Update them in the same commit (behaviour change is the point) |
 
 Not inspected in this pass: the mobile/Telegram **requester** fleet card renderer
 and the PDF/print views — both read the same `requesterFleetOverview` payload, so
@@ -494,3 +527,10 @@ they inherit the fix, but their rendering of `overdueReturn` is unverified.
    the notification + red tag enough for now?
 3. For a car held over 24 h, should the vehicle be flagged `UNDER_MAINTENANCE`
    automatically after the admin close? Current plan leaves the status to Admin.
+4. `adminCancelApproved()` can already cancel a held `IN_PROGRESS` ride (trip not
+   `STARTED`), which frees the car and closes the request CANCELLED. That is a
+   legitimate "the ride never happened" override with an audit trail; the plan
+   leaves it, but the UI should warn that the return reading will be lost.
+5. Should the Telegram driver card keep the ⏰ ETA button after the hold starts?
+   It still works (`setEstimatedReturn` accepts an `IN_PROGRESS` ride) and pushes
+   the admin alert later, which is useful for a long delay.
