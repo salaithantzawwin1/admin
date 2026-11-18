@@ -1186,6 +1186,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       select: {
         startOdoKm: true,
         endOdoKm: true,
+        startOdoAt: true,
+        endOdoAt: true,
+        assignedAt: true,
         driver: { select: { telegramChatId: true } },
         request: { select: { docNumber: true } },
       },
@@ -1193,14 +1196,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const chatId = a?.driver?.telegramChatId;
     if (!a || !chatId) return;
     if (stage === 'READY' ? a.startOdoKm != null : a.endOdoKm != null) return; // already captured
-    this.armOdo(chatId, assignmentId, stage);
+    // Keep a kilo the driver typed a few seconds BEFORE this tap. It is already in
+    // the inbound log, and asking for it again is how 341,626 on CAR-202611-0039 was
+    // lost (sent 09:29, Ready tapped 09:30, never recorded). A prefilled number turns
+    // the photo into the one-tap confirmation below instead of a two-part answer.
+    const recentKm = await this.recentOdoNumber(chatId, a).catch(() => null);
+    this.armOdo(chatId, assignmentId, stage, undefined, recentKm ?? undefined);
     const head =
       stage === 'READY'
         ? `🚦 Ready ✓ — ${a.request.docNumber}\nကားမထွက်ခွာမီ odometer (ကီလိုမီတာ) ဓာတ်ပုံကို ဒီ chat ထဲ ပို့ပါ 📷`
         : `🏁 ရုံးပြန်ရောက် ✓ — ${a.request.docNumber}\nပြန်ရောက်ချိန် odometer ဓာတ်ပုံကို ဒီ chat ထဲ ပို့ပါ 📷`;
     await this.call('sendMessage', {
       chat_id: chatId,
-      text: `${head}\nပြီးရင် ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)။ /cancel ဖြင့် ပယ်ဖျက်နိုင်သည်။`,
+      text:
+        recentKm != null
+          ? `${head}\nဂဏန်း ${recentKm.toLocaleString()} ကို မှတ်ထားပြီးပါပြီ — ဓာတ်ပုံပဲ ပို့ပါ (မှားရင် /cancel နှိပ်ပြီး ပြန်ရိုက်ပါ)`
+          : `${head}\nပြီးရင် ဂဏန်းကို ရိုက်ထည့်ပါ (ဥပမာ: 45210)။ /cancel ဖြင့် ပယ်ဖျက်နိုင်သည်။`,
     });
   }
 
@@ -1439,13 +1450,69 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       },
       orderBy: { assignedAt: 'desc' },
       take: 5,
-      select: { id: true, startOdoKm: true, endOdoKm: true, driverArrivedAt: true, driverBackAtOfficeAt: true },
+      select: {
+        id: true,
+        startOdoKm: true,
+        endOdoKm: true,
+        driverArrivedAt: true,
+        driverBackAtOfficeAt: true,
+        releasedAt: true,
+        request: { select: { carRequest: { select: { endDate: true } } } },
+      },
     }).catch(() => []);
+    const now = Date.now();
     for (const t of trips) {
+      // The window is over — released, or the planned end has passed. A photo that
+      // arrives after that is the RETURN reading: the car is home, and if the
+      // departure kilo is missing too, the earlier reading is the one that got lost.
+      // Judging by "arrived and no departure kilo" alone filed 341,651 — the arrival
+      // number — as CAR-202611-0039's departure, because the Back tap came five
+      // seconds after the photo.
+      const endAt = t.request?.carRequest?.endDate ?? null;
+      const windowOver = t.releasedAt != null || (endAt != null && endAt.getTime() <= now);
+      if (windowOver && t.endOdoKm == null) return { assignmentId: t.id, stage: 'BACK' };
       if (t.driverBackAtOfficeAt && t.endOdoKm == null) return { assignmentId: t.id, stage: 'BACK' };
       if (t.driverArrivedAt && t.startOdoKm == null) return { assignmentId: t.id, stage: 'READY' };
     }
     return null;
+  }
+
+  /**
+   * The last bare kilo this chat sent for this assignment, from the inbound log.
+   *
+   * Drivers type the number a few seconds BEFORE they tap Ready / Back, and that
+   * bare number used to be dropped because no capture was armed yet
+   * (CAR-202611-0039: 341,626 at 09:29, Ready tapped 09:30, departure reading lost).
+   * The text is already stored, so read it back instead of asking again. Never
+   * reaches past the assignment's own start or a reading already recorded — an
+   * earlier trip's kilo must not become this trip's evidence.
+   */
+  private async recentOdoNumber(
+    chatId: string,
+    a: { assignedAt: Date | null; startOdoAt: Date | null; endOdoAt: Date | null },
+  ): Promise<number | null> {
+    const floor = [
+      a.assignedAt?.getTime() ?? 0,
+      a.startOdoAt?.getTime() ?? 0,
+      a.endOdoAt?.getTime() ?? 0,
+      Date.now() - 6 * 60 * 60_000,
+    ];
+    const row = await this.prisma.telegramInboundMessage
+      .findFirst({
+        where: {
+          chatId,
+          kind: 'TEXT',
+          announcementId: null,
+          text: { not: null },
+          receivedAt: { gte: new Date(Math.max(...floor)) },
+        },
+        orderBy: { receivedAt: 'desc' },
+        select: { text: true },
+      })
+      .catch(() => null);
+    // 4+ digits: a 1-3 digit stray is a quantity, not a dashboard reading
+    const digits = (row?.text ?? '').replace(/[,\s]/g, '');
+    return /^\d{4,7}$/.test(digits) ? Number(digits) : null;
   }
 
   /** Driver sent the dashboard photo: keep it until the number arrives. */
