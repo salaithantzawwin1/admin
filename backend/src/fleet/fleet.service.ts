@@ -970,6 +970,10 @@ export class FleetService {
     const rows = await this.prisma.carAssignment.findMany({
       where: {
         assignedAt: { gte: from },
+        // A cancelled or rejected request never happened, whatever its trip row
+        // says — 5 cancelled rides on this lot even carry a stray stamp. Excluded
+        // outright, not only by the positive test below.
+        request: { is: { status: { notIn: ['CANCELLED', 'REJECTED'] } } },
         // A trip that actually ran: its request completed, or the trip itself was
         // started and closed. releasedAt is NOT the test — cancelled and rejected
         // requests carry it too, and a ride that never happened has no stamps to
