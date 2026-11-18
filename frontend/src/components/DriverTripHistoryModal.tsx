@@ -19,6 +19,9 @@ export interface TripRow {
   driverNotedAt: string | null;
   driverArrivedAt: string | null;
   driverBackAtOfficeAt: string | null;
+  /** odometer at departure / return — both needed for a trip distance */
+  startKm: number | null;
+  endKm: number | null;
   viaEmployee: boolean;
 }
 
@@ -41,6 +44,10 @@ const STATUS_DOT: Record<string, string> = {
 
 /** CSV cell — quoted, inner quotes doubled; the writer adds an Excel BOM. */
 const cell = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+
+/** Distance driven on one trip: the return reading minus the departure one. */
+const distanceOf = (r: TripRow) =>
+  r.startKm != null && r.endKm != null && r.endKm >= r.startKm ? r.endKm - r.startKm : null;
 
 /**
  * Timestamp for a spreadsheet: Yangon wall-clock (what the table shows) in
@@ -97,6 +104,9 @@ export function DriverTripHistoryModal({
   const shown = rows.slice(from, from + PAGE);
   const completed = rows.filter((r) => r.status === 'COMPLETED').length;
   const viaEmployee = rows.filter((r) => r.viaEmployee).length;
+  // a trip counts only when both readings exist; the rest add nothing to the total
+  const measured = rows.filter((r) => distanceOf(r) != null).length;
+  const totalKm = rows.reduce((sum, r) => sum + (distanceOf(r) ?? 0), 0);
 
   const exportCsv = () => {
     const header = [
@@ -110,6 +120,7 @@ export function DriverTripHistoryModal({
       'Noted',
       'Arrived',
       'Back at office',
+      'Distance (km)',
       'Via employee link',
     ];
     const line = (r: TripRow) =>
@@ -124,12 +135,32 @@ export function DriverTripHistoryModal({
         stamp(r.driverNotedAt),
         stamp(r.driverArrivedAt),
         stamp(r.driverBackAtOfficeAt),
+        // plain number so Excel can sum the column
+        distanceOf(r) ?? '',
         r.viaEmployee ? 'yes' : 'no',
       ]
         .map(cell)
         .join(',');
+    // a trailing total row: the export always writes every row, so this is the
+    // whole history — the same figure the dialog shows above the table
+    const totalRow = [
+      'TOTAL',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      measured ? totalKm : '',
+      `${measured} of ${rows.length} trips measured`,
+    ]
+      .map(cell)
+      .join(',');
     // the BOM keeps Excel from mangling Burmese names, CRLF is what it expects
-    const csv = `\uFEFF${[header.map(cell).join(','), ...rows.map(line)].join('\r\n')}\r\n`;
+    const csv = `\uFEFF${[header.map(cell).join(','), ...rows.map(line), totalRow].join('\r\n')}\r\n`;
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -182,6 +213,12 @@ export function DriverTripHistoryModal({
               <span>
                 {rows.length} trip{rows.length === 1 ? '' : 's'}
                 {completed > 0 && <span className="text-gray-400"> · {completed} completed</span>}
+                {measured > 0 && (
+                  <span className="font-medium text-gray-700" title={`${measured} of ${rows.length} trips have both odometer readings`}>
+                    {' '}
+                    · {totalKm.toLocaleString()} km
+                  </span>
+                )}
               </span>
               <Button
                 variant="ghost"
@@ -211,6 +248,7 @@ export function DriverTripHistoryModal({
                       <th className="px-3 py-2 font-medium text-center">Noted</th>
                       <th className="px-3 py-2 font-medium text-center">Arrived</th>
                       <th className="px-3 py-2 font-medium text-center">Back</th>
+                      <th className="px-3 py-2 text-right font-medium">Distance</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -269,9 +307,41 @@ export function DriverTripHistoryModal({
                         >
                           {r.driverBackAtOfficeAt ? fmtTime(r.driverBackAtOfficeAt) : '—'}
                         </td>
+                        <td
+                          className="whitespace-nowrap px-3 py-2 text-right"
+                          title={
+                            r.startKm != null && r.endKm != null
+                              ? `${r.startKm.toLocaleString()} → ${r.endKm.toLocaleString()} km`
+                              : 'Odometer reading missing on one end'
+                          }
+                        >
+                          {distanceOf(r) != null ? (
+                            <span className="font-medium text-gray-800">
+                              {distanceOf(r)!.toLocaleString()} km
+                            </span>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t border-gray-200 bg-gray-50 text-xs">
+                      <td colSpan={8} className="px-3 py-2 font-medium text-gray-600">
+                        Total · {rows.length} trip{rows.length === 1 ? '' : 's'}
+                        {measured < rows.length && (
+                          <span className="font-normal text-gray-400">
+                            {' '}
+                            ({measured} measured — the rest have no odometer reading)
+                          </span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-right font-semibold text-gray-900">
+                        {measured ? `${totalKm.toLocaleString()} km` : '—'}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
 

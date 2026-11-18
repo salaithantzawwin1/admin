@@ -985,6 +985,9 @@ export class FleetService {
         driverNotedAt: a.driverNotedAt,
         driverArrivedAt: a.driverArrivedAt,
         driverBackAtOfficeAt: a.driverBackAtOfficeAt,
+        /** dashboard readings — the desk's trip distance is end − start */
+        startKm: a.startOdoKm,
+        endKm: a.endOdoKm,
         /** true when this row exists because of the employee link, not the driver */
         viaEmployee: a.driverId !== id,
       })),
