@@ -8,6 +8,7 @@ import { Badge, Button, Card, Empty, Input, NumberField, PageHeader, Select } fr
 import { useLiveReload } from '../hooks/useLiveReload';
 import { fmtDate, fmtDateTime, fmtTime } from '../util/yangonTime';
 import { FleetDocumentsModal, FleetDocType } from '../components/FleetDocumentsModal';
+import { DriverTripHistoryModal } from '../components/DriverTripHistoryModal';
 import { VehiclePhotosModal, VehiclePhotoMeta, useVehiclePhotoBlob } from '../components/VehiclePhotosModal';
 
 interface Driver {
@@ -62,22 +63,6 @@ interface Timetable {
   eveningStart: string;
   eveningEnd: string;
   workDays: number[];
-}
-
-/** One row of the correlated driver+employee assignment history. */
-interface CorrRow {
-  id: string;
-  assignedAt: string;
-  docNumber: string;
-  requester: string;
-  vehicle: string;
-  brandModel: string;
-  status: string;
-  driver?: string | null;
-  driverNotedAt: string | null;
-  driverArrivedAt: string | null;
-  driverBackAtOfficeAt: string | null;
-  viaEmployee: boolean;
 }
 
 /** Telegram binding state — fleet managers only (bind codes are linking secrets). */
@@ -218,7 +203,6 @@ export default function Fleet() {
   // employee link picker state (driverId → employeeId or '')
   const [empPick, setEmpPick] = useState<Record<string, string>>({});
   const [historyFor, setHistoryFor] = useState<Driver | null>(null);
-  const [history, setHistory] = useState<{ driver: { id: string; name: string }; employee: { id: string; employeeNo: string; fullName: string } | null; assignments: CorrRow[] } | null>(null);
   const [empOptions, setEmpOptions] = useState<{ id: string; employeeNo: string; fullName: string; linkedDriver?: string | null }[]>([]);
   // planned absences (leave) — list + form state
   const [absences, setAbsences] = useState<Absence[]>([]);
@@ -1467,18 +1451,7 @@ export default function Fleet() {
                 <td className="px-4 py-3 text-center whitespace-nowrap">
                   <button
                     className="text-blue-600 hover:underline"
-                    onClick={async () => {
-                      setError('');
-                      setHistoryFor(d);
-                      setHistory(null);
-                      try {
-                        const h = await api<{ driver: { id: string; name: string }; employee: { id: string; employeeNo: string; fullName: string } | null; assignments: CorrRow[] }>(`/fleet/drivers/${d.id}/correlated-history`);
-                        setHistory(h);
-                      } catch (e) {
-                        setError(e instanceof Error ? e.message : 'History failed');
-                        setHistoryFor(null);
-                      }
-                    }}
+                    onClick={() => setHistoryFor(d)}
                   >History</button>
                 </td>
                 {canManage && (
@@ -1880,54 +1853,7 @@ export default function Fleet() {
       )}
 
       {historyFor && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setHistoryFor(null)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-3xl w-full max-h-[85vh] overflow-auto p-5" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="font-semibold text-gray-800">
-                Trip history — {historyFor.name}
-                {history?.employee && <span className="text-gray-500 font-normal"> + {history.employee.fullName}</span>}
-              </h3>
-              <Button variant="ghost" onClick={() => setHistoryFor(null)}>✕</Button>
-            </div>
-            {!history?.employee && (
-              <p className="text-xs text-gray-500 mb-3">This driver has no employee link — showing assignments where they were the assigned driver. Link an employee to also merge trips they took as a passenger-requester.</p>
-            )}
-            {history && history.assignments.length === 0 && <Empty label="No assignment history yet" />}
-            {history && history.assignments.length > 0 && (
-              <table className="w-full min-w-[760px] text-sm border border-gray-200 rounded-lg overflow-hidden">
-                <thead>
-                  <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wide">
-                    <th className="px-3 py-2 font-medium">Request</th>
-                    <th className="px-3 py-2 font-medium">Vehicle</th>
-                    <th className="px-3 py-2 font-medium">Requester</th>
-                    <th className="px-3 py-2 font-medium">Assigned</th>
-                    <th className="px-3 py-2 font-medium">Driver</th>
-                    <th className="px-3 py-2 font-medium">Noted</th>
-                    <th className="px-3 py-2 font-medium">Arrived</th>
-                    <th className="px-3 py-2 font-medium">Back</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {history.assignments.map((a) => (
-                    <tr key={a.id} className={a.viaEmployee ? 'bg-blue-50/40' : ''}>
-                      <td className="px-3 py-2 font-medium">
-                        {a.docNumber}
-                        {a.viaEmployee && <span className="ml-1 text-[10px] text-blue-600" title="Via linked employee">via employee</span>}
-                      </td>
-                      <td className="px-3 py-2">{a.vehicle}{a.brandModel ? <span className="text-gray-400"> · {a.brandModel}</span> : null}</td>
-                      <td className="px-3 py-2">{a.requester}</td>
-                      <td className="px-3 py-2 text-gray-500">{fmtDateTime(a.assignedAt)}</td>
-                      <td className="px-3 py-2">{a.driver ?? '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{a.driverNotedAt ? fmtTime(a.driverNotedAt) : '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{a.driverArrivedAt ? fmtTime(a.driverArrivedAt) : '—'}</td>
-                      <td className="px-3 py-2 text-gray-500">{a.driverBackAtOfficeAt ? fmtTime(a.driverBackAtOfficeAt) : '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+        <DriverTripHistoryModal driver={historyFor} onClose={() => setHistoryFor(null)} />
       )}
 
       {photosFor && (
