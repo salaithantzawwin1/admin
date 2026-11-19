@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDate } from '../util/yangonTime';
 import { toast } from '../components/Toast';
@@ -128,6 +129,15 @@ export default function PurchaseOrders() {
   const [purchaseReason, setPurchaseReason] = useState('');
   const [note, setNote] = useState('');
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()]);
+  // create the missing inventory item right here, instead of leaving the line
+  // unlinked (which quietly turns the receipt into a fixed asset)
+  const canCreateItems = hasPermission('inventory.manage');
+  const [newItemFor, setNewItemFor] = useState<number | null>(null);
+  const [newItemDraft, setNewItemDraft] = useState({ name: '', unit: 'pcs', category: 'STATIONERY', minStock: '0' });
+  const [newItemBusy, setNewItemBusy] = useState(false);
+  const [newItemError, setNewItemError] = useState('');
+  // "no inventory item = asset" is a real decision, so it is confirmed once
+  const [confirmAssetLines, setConfirmAssetLines] = useState(false);
 
   const [detail, setDetail] = useState<PoDetail | null>(null);
   const [grnOpen, setGrnOpen] = useState(false);
@@ -186,6 +196,50 @@ export default function PurchaseOrders() {
     setCreateOpen(true);
   };
 
+  const loadInventoryItems = useCallback(async () => {
+    const r = await api<{ items: InventoryItemOpt[] } | InventoryItemOpt[]>('/inventory/items');
+    const list = Array.isArray(r) ? r : r.items ?? [];
+    setInventoryItems(list);
+    return list;
+  }, []);
+
+  const createInventoryItem = async (idx: number) => {
+    const name = newItemDraft.name.trim();
+    if (!name) return;
+    setNewItemBusy(true);
+    setNewItemError('');
+    try {
+      const created = await api<{ id: string; code: string }>('/inventory/items', {
+        method: 'POST',
+        body: {
+          name,
+          unit: newItemDraft.unit.trim() || 'pcs',
+          category: newItemDraft.category,
+          // opening stock stays 0 — the GRN posts the real quantity in
+          balance: 0,
+          minStock: Number(newItemDraft.minStock) || 0,
+        },
+      });
+      const list = await loadInventoryItems();
+      const item = list.find((i) => i.id === created.id);
+      setLines((ls) => ls.map((l, i) => (i === idx
+        ? {
+            ...l,
+            inventoryItemId: created.id,
+            description: item ? `${item.name} (${item.code})` : l.description,
+            unit: item?.unit ?? l.unit,
+          }
+        : l)));
+      setNewItemFor(null);
+      setNewItemDraft({ name: '', unit: 'pcs', category: 'STATIONERY', minStock: '0' });
+      toast(`${created.code} created — this line now posts to stock`);
+    } catch (e) {
+      setNewItemError(e instanceof Error ? e.message : 'Could not create the item');
+    } finally {
+      setNewItemBusy(false);
+    }
+  };
+
   const pickItem = (idx: number, itemId: string) => {
     const item = inventoryItems.find((i) => i.id === itemId);
     setLines((ls) =>
@@ -205,8 +259,18 @@ export default function PurchaseOrders() {
   const estimatedTotal = () =>
     lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0);
 
-  const createPo = async () => {
+  /** Lines without an inventory item become assets — ask before doing that. */
+  const createPo = () => {
     if (!supplierId) { toast('Pick a supplier', 'error'); return; }
+    const assetLines = lines.filter((l) => l.description.trim() && !l.inventoryItemId);
+    if (assetLines.length > 0 && !confirmAssetLines) {
+      setConfirmAssetLines(true);
+      return;
+    }
+    void submitPo();
+  };
+
+  const submitPo = async () => {
     const items = lines
       .filter((l) => l.description.trim())
       .map((l) => ({
@@ -509,7 +573,7 @@ export default function PurchaseOrders() {
             <div className="border border-gray-200 rounded-lg p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
-                <span className="text-xs text-gray-400">Stock-posting applies only to 📦 inventory lines</span>
+                <span className="text-xs text-gray-400">Only 📦 inventory lines post stock on GRN</span>
               </div>
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
                 <div className="col-span-3">Inventory item (optional)</div>
@@ -553,6 +617,57 @@ export default function PurchaseOrders() {
                   <div className="col-span-3 md:col-span-1 flex justify-end">
                     <Button variant="danger" title={`Remove line ${idx + 1}`} onClick={() => setLines((ls) => ls.filter((_, i) => i !== idx))} disabled={lines.length <= 1}>✕</Button>
                   </div>
+                  {!l.inventoryItemId && (
+                    <div className="col-span-12 -mt-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <span className="text-orange-700">🏷️ No inventory item — the GRN will register it as a fixed asset, not stock.</span>
+                        {canCreateItems && (
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setNewItemFor(newItemFor === idx ? null : idx);
+                              setNewItemError('');
+                            }}
+                          >
+                            ＋ New inventory item
+                          </Button>
+                        )}
+                      </div>
+                      {newItemFor === idx && (
+                        <div className="mt-2 border border-gray-200 rounded-lg p-2 bg-gray-50 space-y-2">
+                          {newItemError && <div className="text-xs text-red-600">{newItemError}</div>}
+                          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                            <Input
+                              className="sm:col-span-2"
+                              placeholder={`Item name * (e.g. ${l.description || 'Wireless Mouse'})`}
+                              value={newItemDraft.name}
+                              onChange={(e) => setNewItemDraft({ ...newItemDraft, name: e.target.value })}
+                            />
+                            <Input placeholder="Unit" value={newItemDraft.unit} onChange={(e) => setNewItemDraft({ ...newItemDraft, unit: e.target.value })} />
+                            <Select value={newItemDraft.category} onChange={(e) => setNewItemDraft({ ...newItemDraft, category: e.target.value })} aria-label="Item category">
+                              {['STATIONERY', 'BOOKS', 'PAPER', 'ELECTRONICS', 'CLEANING', 'KITCHEN', 'FURNITURE', 'IT_SUPPLIES', 'OTHER'].map((c) => (
+                                <option key={c} value={c}>{c.replace(/_/g, ' ')}</option>
+                              ))}
+                            </Select>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Input
+                              className="!w-28"
+                              type="number"
+                              min={0}
+                              placeholder="Min stock"
+                              value={newItemDraft.minStock}
+                              onChange={(e) => setNewItemDraft({ ...newItemDraft, minStock: e.target.value })}
+                            />
+                            <Button disabled={newItemBusy || !newItemDraft.name.trim()} onClick={() => void createInventoryItem(idx)}>
+                              {newItemBusy ? 'Creating…' : 'Create & use on this line'}
+                            </Button>
+                            <span className="text-xs text-gray-400">Opening stock stays 0 — the GRN posts the real quantity.</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
               <div className="flex items-center justify-between pt-1">
@@ -701,15 +816,27 @@ export default function PurchaseOrders() {
                       <Input value={g.condition} onChange={(e) => setGrnLines((s) => ({ ...s, [it.id]: { ...g, condition: e.target.value } }))} />
                     </label>
                   </div>
-                  {!it.inventoryItem && (
-                    <label className="mt-2 flex items-center gap-2 text-xs text-gray-600">
-                      <input
-                        type="checkbox"
-                        checked={g.registerAsset}
-                        onChange={(e) => setGrnLines((s) => ({ ...s, [it.id]: { ...g, registerAsset: e.target.checked } }))}
-                      />
-                      Register the accepted units as fixed assets (untick for a service)
-                    </label>
+                  {it.inventoryItem ? (
+                    <div className="mt-2 text-xs text-green-700">
+                      📦 Stock line ({it.inventoryItem.code}) — accepted units post into the inventory ledger.
+                    </div>
+                  ) : (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                      <Select
+                        className="!w-60"
+                        aria-label={`Receipt handling for ${it.description}`}
+                        value={g.registerAsset ? 'ASSET' : 'SERVICE'}
+                        onChange={(e) => setGrnLines((s) => ({ ...s, [it.id]: { ...g, registerAsset: e.target.value === 'ASSET' } }))}
+                      >
+                        <option value="ASSET">🏷️ Fixed asset — register</option>
+                        <option value="SERVICE">🛠 Service — no asset</option>
+                      </Select>
+                      <span className="text-gray-400">
+                        {g.registerAsset
+                          ? 'Accepted units become asset records (no stock).'
+                          : 'Accepted units are received but register nothing.'}
+                      </span>
+                    </div>
                   )}
                 </div>
               );
@@ -727,6 +854,16 @@ export default function PurchaseOrders() {
       )}
 
       {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
+
+      {confirmAssetLines && (
+        <ConfirmDialog
+          title="These lines will be assets, not stock"
+          description={lines.filter((l) => l.description.trim() && !l.inventoryItemId).map((l) => `• ${l.description}`).join('\n') + '\n\nNo inventory item is linked, so the GRN registers them in the asset register and nothing enters the store. Create/link an inventory item instead if the store should issue them.'}
+          confirmLabel="Continue as asset"
+          onClose={() => setConfirmAssetLines(false)}
+          onConfirm={async () => { setConfirmAssetLines(false); await submitPo(); }}
+        />
+      )}
 
       {/* ---------------- register asset from a PO line (§39) ---------------- */}
       {regAsset && (

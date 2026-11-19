@@ -340,6 +340,10 @@ enum NotificationType {
   SUPPLY_PURCHASING
   /// supply request is on the shelf and waiting to be collected
   SUPPLY_READY_FOR_PICKUP
+  /// the requester confirmed they received the handed-over items
+  SUPPLY_COLLECTED
+  /// a ready-for-pickup request has been sitting uncollected
+  SUPPLY_PICKUP_REMINDER
 }
 
 enum RequestDocType {

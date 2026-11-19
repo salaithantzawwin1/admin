@@ -1099,6 +1099,8 @@ export default function Inventory() {
                           <div className="text-[11px] text-green-700 mt-1">✓ you confirmed collection</div>
                         ) : r.supplyRequest?.receivedByName ? (
                           <div className="text-[11px] text-gray-500 mt-1">collected by {r.supplyRequest.receivedByName}</div>
+                        ) : r.supplyRequest?.handedOverByName ? (
+                          <div className="text-[11px] text-gray-500 mt-1">handed over by {r.supplyRequest.handedOverByName} — confirm you got it</div>
                         ) : null}
                       </td>
                       <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
@@ -1227,9 +1229,13 @@ export default function Inventory() {
                       {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="ghost" onClick={() => void doReady(r.id)}>✅ Ready for pickup</Button>
                       )}
-                      {/* mixed sourcing: give out the in-stock lines instead of making them wait */}
+                      {/* mixed sourcing: only when something actually has to be bought —
+                          an all-in-stock basket goes through the hand-over record instead */}
                       {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') &&
-                        (r.supplyRequest?.lines ?? []).some((l) => l.status !== 'FULFILLED' && l.quantity <= l.item.balance) && (
+                        (() => {
+                          const open = (r.supplyRequest?.lines ?? []).filter((l) => l.status !== 'FULFILLED');
+                          return open.length > 0 && !open.every((l) => l.quantity <= l.item.balance);
+                        })() && (
                         <Button variant="ghost" onClick={() => void doIssueAvailable(r.id)}>📦 Issue in-stock items now</Button>
                       )}
                       {['READY_FOR_PICKUP', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
@@ -1238,7 +1244,7 @@ export default function Inventory() {
                       {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="danger" onClick={() => setRejectFor(r)}>Cannot fulfill</Button>
                       )}
-                      {r.status === 'APPROVED' && (
+                      {['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="ghost" onClick={() => setCancelFor(r)}>✕ Cancel request</Button>
                       )}
                     </div>

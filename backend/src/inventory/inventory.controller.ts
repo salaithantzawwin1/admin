@@ -198,13 +198,6 @@ export class InventoryController {
     return this.inventory.issueInStock(requestId, this.actor(req));
   }
 
-  /** Link the PR raised to buy this request's missing items (traceability). */
-  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
-  @Post('requests/:requestId/link-pr')
-  linkPurchaseRequest(@Req() req, @Param('requestId') requestId: string, @Body() body: { purchaseRequestId: string }) {
-    return this.inventory.linkPurchaseRequest(requestId, body.purchaseRequestId, this.actor(req));
-  }
-
   /** The requester confirms they collected the items. */
   @RequirePermissions(PERMISSIONS.REQUESTS_CREATE)
   @Post('requests/:requestId/confirm-receipt')
@@ -246,7 +239,7 @@ export class InventoryController {
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
   @Post('pickup-reminders')
   pickupReminders() {
-    return this.inventory.remindStalePickupsNow();
+    return this.inventory.remindStalePickups();
   }
 
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)

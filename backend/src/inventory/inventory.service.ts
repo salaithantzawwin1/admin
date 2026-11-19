@@ -16,6 +16,22 @@ import { csvCell } from '../util/csv';
 
 const DOC_PREFIX = 'OSR';
 
+/**
+ * The OSR → PR → PO → GRN chain attached to a supply request. One shape, so the
+ * detail, employee and Administration read paths cannot drift apart.
+ */
+const SUPPLY_CHAIN_SELECT = {
+  request: { select: { id: true, docNumber: true, status: true } },
+  purchaseOrders: {
+    select: {
+      poNumber: true,
+      status: true,
+      supplier: { select: { name: true } },
+      goodsReceipts: { select: { grnNumber: true, receivedAt: true } },
+    },
+  },
+} satisfies Prisma.PurchaseRequestSelect;
+
 @Injectable()
 export class InventoryService {
   constructor(
@@ -377,42 +393,9 @@ export class InventoryService {
       include: {
         lines: { include: { item: { select: { code: true, name: true, unit: true, balance: true } } } },
         // OSR → PR → PO → GRN: what we bought for this request and where it came from
-        purchaseRequests: {
-          include: {
-            request: { select: { id: true, docNumber: true, status: true } },
-            purchaseOrders: {
-              select: {
-                id: true, poNumber: true, status: true,
-                supplier: { select: { name: true } },
-                goodsReceipts: { select: { grnNumber: true, receivedAt: true } },
-              },
-            },
-          },
-        },
+        purchaseRequests: { select: SUPPLY_CHAIN_SELECT },
       },
     });
-  }
-
-  /**
-   * Raise this request's missing items as a purchase request (traceability).
-   * Validation is minimal by design — the PR module owns its own approval and
-   * budget rules; here we only refuse a request that is not an OSR of the caller.
-   */
-  async linkPurchaseRequest(requestId: string, purchaseRequestId: string, actor: Actor) {
-    const supply = await this.prisma.officeSupplyRequest.findUnique({ where: { requestId } });
-    if (!supply) throw new NotFoundException('Supply request not found');
-    const pr = await this.prisma.purchaseRequest.findUnique({ where: { id: purchaseRequestId } });
-    if (!pr) throw new NotFoundException('Purchase request not found');
-    await this.prisma.purchaseRequest.update({
-      where: { id: purchaseRequestId },
-      data: { sourceSupplyRequestId: requestId },
-    });
-    await this.audit.log({
-      userId: actor.userId, username: actor.username,
-      action: 'SUPPLY_REQUEST_LINKED_TO_PR', module: 'INVENTORY', recordId: requestId,
-      newValue: { purchaseRequestId },
-    });
-    return { success: true };
   }
 
   /** My requests history for the employee view. */
@@ -425,18 +408,7 @@ export class InventoryService {
         supplyRequest: {
           include: {
             lines: { include: { item: { select: { code: true, name: true, unit: true } } } },
-            purchaseRequests: {
-              select: {
-                request: { select: { docNumber: true, status: true } },
-                purchaseOrders: {
-                  select: {
-                    poNumber: true, status: true,
-                    supplier: { select: { name: true } },
-                    goodsReceipts: { select: { grnNumber: true } },
-                  },
-                },
-              },
-            },
+            purchaseRequests: { select: SUPPLY_CHAIN_SELECT },
           },
         },
       },
@@ -466,18 +438,7 @@ export class InventoryService {
           include: {
             lines: { include: { item: { select: { code: true, name: true, unit: true, balance: true } } } },
             // where the missing items were bought (OSR → PR → PO → GRN)
-            purchaseRequests: {
-              select: {
-                request: { select: { id: true, docNumber: true, status: true } },
-                purchaseOrders: {
-                  select: {
-                    poNumber: true, status: true,
-                    supplier: { select: { name: true } },
-                    goodsReceipts: { select: { grnNumber: true } },
-                  },
-                },
-              },
-            },
+            purchaseRequests: { select: SUPPLY_CHAIN_SELECT },
           },
         },
       },
@@ -526,7 +487,11 @@ export class InventoryService {
     if (!['PENDING', 'PURCHASING', 'PARTIAL'].includes(supply.status)) {
       throw new ConflictException(`Already ${supply.status} — the buying stage is over`);
     }
-    if (doc.status !== 'APPROVED') throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
+    // COMPLETED = "approved and partially issued already"; the remaining lines
+    // are still bought, so the ETA can still be set
+    if (!['APPROVED', 'COMPLETED'].includes(doc.status)) {
+      throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
+    }
     const note = data.note?.trim() || null;
     await this.prisma.officeSupplyRequest.update({
       where: { requestId },
@@ -558,7 +523,9 @@ export class InventoryService {
     if (!['PENDING', 'PURCHASING', 'PARTIAL'].includes(supply.status)) {
       throw new ConflictException(`Already ${supply.status} — nothing to mark ready`);
     }
-    if (doc.status !== 'APPROVED') throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
+    if (!['APPROVED', 'COMPLETED'].includes(doc.status)) {
+      throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
+    }
     const now = new Date();
     await this.prisma.officeSupplyRequest.update({
       where: { requestId },
@@ -693,7 +660,7 @@ export class InventoryService {
     } else {
       // mixed sourcing — part of the basket left the shelf, the rest is bought
       await this.notifications.notify({
-        userId: doc.requesterId, type: 'SUPPLY_PURCHASING' as never,
+        userId: doc.requesterId, type: 'SUPPLY_PURCHASING',
         title: `Some items issued — ${doc.docNumber}`,
         body: 'The items we had in stock were handed over. The rest is being bought and we will tell you when it is ready.',
         link: `/requests/${doc.id}`, requestId: doc.id,
@@ -713,8 +680,21 @@ export class InventoryService {
     return result;
   }
 
-  /** Mixed sourcing: hand over what the shelf already has, keep buying the rest. */
+  /**
+   * Mixed sourcing: hand over what the shelf already has, keep buying the rest.
+   * Refused when every line is available — that request is a normal hand-over,
+   * and skipping it would close the request without a collection record.
+   */
   async issueInStock(requestId: string, actor: Actor) {
+    const doc = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      include: { supplyRequest: { include: { lines: { include: { item: { select: { balance: true } } } } } } },
+    });
+    if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
+    const open = doc.supplyRequest.lines.filter((l) => l.status !== 'FULFILLED');
+    if (open.length > 0 && open.every((l) => l.quantity <= l.item.balance)) {
+      throw new ConflictException('Everything on this request is in stock — hand it over so the collection is recorded');
+    }
     return this.fulfill(requestId, actor, { partial: true });
   }
 
@@ -750,7 +730,7 @@ export class InventoryService {
     });
     const managers = await this.permissions.usersWithPermissions(['inventory.manage']);
     await this.notifications.notifyMany(managers, {
-      type: 'SUPPLY_COLLECTED' as never,
+      type: 'SUPPLY_COLLECTED',
       title: `Collection confirmed — ${doc.docNumber}`,
       body: `${doc.requester.fullName ?? doc.requester.username} confirmed receiving the items.`,
       link: `/requests/${doc.id}`, requestId: doc.id,
@@ -827,8 +807,9 @@ export class InventoryService {
       throw new BadRequestException(`Cannot cancel from status ${doc.status}`);
     }
     // anything still waiting (preparing, buying, on the shelf) can be withdrawn —
-    // stock has not moved yet
-    if (!['PENDING', 'PURCHASING', 'READY_FOR_PICKUP'].includes(doc.supplyRequest.status)) {
+    // stock has not moved yet. PARTIAL already issued some lines; those stay
+    // fulfilled and only the open lines are closed.
+    if (!['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL'].includes(doc.supplyRequest.status)) {
       throw new BadRequestException('Items were already handed over — this request can no longer be cancelled');
     }
 
@@ -1473,20 +1454,20 @@ export class InventoryService {
       const request = s.request;
       if (!request) continue;
       const recent = await this.prisma.notification.findFirst({
-        where: { type: 'SUPPLY_PICKUP_REMINDER' as never, title: `Still waiting — ${request.docNumber}`, createdAt: { gte: new Date(now - 24 * 3600 * 1000) } },
+        where: { type: 'SUPPLY_PICKUP_REMINDER', title: `Still waiting — ${request.docNumber}`, createdAt: { gte: new Date(now - 24 * 3600 * 1000) } },
         select: { id: true },
       });
       if (recent) continue;
       const days = Math.floor((now - (s.readyAt?.getTime() ?? now)) / (24 * 3600 * 1000));
       await this.notifications.notify({
-        userId: request.requesterId, type: 'SUPPLY_PICKUP_REMINDER' as never,
+        userId: request.requesterId, type: 'SUPPLY_PICKUP_REMINDER',
         title: `Still waiting — ${request.docNumber}`,
         body: `Your items have been ready for ${days} day${days === 1 ? '' : 's'}. Please collect them from the Administration store.`,
         link: `/requests/${request.id}`, requestId: request.id,
       });
       if (days >= escalateDays && managers.length > 0) {
         await this.notifications.notifyMany(managers, {
-          type: 'SUPPLY_PICKUP_REMINDER' as never,
+          type: 'SUPPLY_PICKUP_REMINDER',
           title: `Not collected — ${request.docNumber}`,
           body: `${request.requester?.fullName ?? 'The requester'} has not collected the items for ${days} days; they are still on the shelf.`,
           link: '/inventory?tab=management', requestId: request.id,
@@ -1497,11 +1478,6 @@ export class InventoryService {
     }
     if (sent > 0) console.log(`[inventory] pickup reminder(s) sent: ${sent}`);
     return sent;
-  }
-
-  /** Manual trigger for the pickup-reminder pass (also runs daily at 08:30). */
-  async remindStalePickupsNow() {
-    return this.remindStalePickups();
   }
 
   /** Daily 08:00 — LOW_STOCK alerts + auto-reorder suggestions for Administration. */
