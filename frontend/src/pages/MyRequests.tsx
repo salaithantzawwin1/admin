@@ -137,7 +137,10 @@ export default function MyRequests() {
       {showForm && (
         <Modal title="New request" error={formError} onClose={() => { setShowForm(false); setFormError(''); }}>
           <div className="space-y-3">
-            <div className="text-xs text-gray-500">Creates a draft — you review and submit it on the next page. Car requests have their own form on the Car Requests page.</div>
+            <div className="text-xs text-gray-500">
+              Creates a draft — you review and submit it on the next page. Car requests have their own form on the Car Requests
+              page; office supplies are requested from <b>Inventory → Office supplies</b> with the items and quantities.
+            </div>
             <div>
               <label htmlFor="my-requests-request-title" className="block text-xs text-gray-500 mb-1">Request title *</label>
               <Input id="my-requests-request-title" placeholder="e.g. Stationery for September" error={titleFieldError} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
@@ -147,7 +150,6 @@ export default function MyRequests() {
               <Select id="my-requests-request-type" value={form.docType} onChange={(e) => setForm({ ...form, docType: e.target.value })}>
                 <option value="GENERIC_REQUEST">General Request</option>
                 <option value="MEETING_ROOM_REQUEST">Meeting Room Request</option>
-                <option value="OFFICE_SUPPLY_REQUEST">Office Supply Request</option>
                 <option value="TRAVEL_REQUEST">Travel Request</option>
                 <option value="MAINTENANCE_REQUEST">Maintenance Request</option>
               </Select>

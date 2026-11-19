@@ -399,7 +399,12 @@ export class InventoryService {
    */
   async pendingRequests() {
     return this.prisma.requestDocument.findMany({
-      where: { docType: 'OFFICE_SUPPLY_REQUEST', status: { in: ['APPROVED', 'COMPLETED'] }, supplyRequest: { status: { in: ['PENDING', 'PARTIAL'] } } },
+      where: {
+        docType: 'OFFICE_SUPPLY_REQUEST',
+        status: { in: ['APPROVED', 'COMPLETED'] },
+        // everything not yet handed over: preparing, buying, or waiting on the shelf
+        supplyRequest: { status: { in: ['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL'] } },
+      },
       orderBy: { submittedAt: 'asc' },
       include: {
         requester: { select: { username: true, fullName: true } },
@@ -409,11 +414,104 @@ export class InventoryService {
     });
   }
 
+  /** One document + its supply header, or 404 — shared by the stage actions. */
+  private async supplyDoc(requestId: string) {
+    const doc = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      include: { supplyRequest: true },
+    });
+    if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
+    return doc;
+  }
+
+  /** "20 Nov 2026" in the office timezone — notification copy only. */
+  private dayText(d: Date) {
+    return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Yangon', day: '2-digit', month: 'short', year: 'numeric' }).format(d);
+  }
+
   /**
-   * Fulfill an APPROVED supply request: per line, deduct stock inside one
-   * transaction and mark the line FULFILLED (or OUT_OF_STOCK when the balance
-   * is short). The whole request completes only when every line is fulfilled.
-   * Called automatically on workflow FINAL_APPROVE, or manually by Administration.
+   * Final approval lands here. Nothing is deducted: Administration prepares the
+   * items and moves them through buying → ready for pickup → handed over.
+   */
+  async onApproved(requestId: string) {
+    const doc = await this.supplyDoc(requestId);
+    await this.notifications.notify({
+      userId: doc.requesterId, type: 'APPROVED',
+      title: `Supplies approved — ${doc.docNumber}`,
+      body: 'Administration is preparing your items. You will be told when they are ready to collect.',
+      link: `/requests/${requestId}`, requestId,
+    });
+  }
+
+  /**
+   * Approved → buying. The expected collection day is what the requester sees
+   * ("today / tomorrow"), and an optional note carries the supplier or PO number.
+   */
+  async startPurchasing(requestId: string, data: { expectedReadyOn: string; note?: string }, actor: Actor) {
+    const expected = new Date(data.expectedReadyOn);
+    if (Number.isNaN(expected.getTime())) throw new BadRequestException('Choose the day the items will be ready');
+    const doc = await this.supplyDoc(requestId);
+    const supply = doc.supplyRequest!;
+    if (!['PENDING', 'PURCHASING'].includes(supply.status)) {
+      throw new ConflictException(`Already ${supply.status} — the buying stage is over`);
+    }
+    if (doc.status !== 'APPROVED') throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
+    const note = data.note?.trim() || null;
+    await this.prisma.officeSupplyRequest.update({
+      where: { requestId },
+      data: {
+        status: 'PURCHASING',
+        expectedReadyOn: expected,
+        purchasingAt: supply.purchasingAt ?? new Date(),
+        purchaseNote: note ?? supply.purchaseNote,
+      },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'SUPPLY_PURCHASING_STARTED', module: 'INVENTORY', recordId: requestId,
+      newValue: { docNumber: doc.docNumber, expectedReadyOn: expected.toISOString(), note },
+    });
+    await this.notifications.notify({
+      userId: doc.requesterId, type: 'SUPPLY_PURCHASING',
+      title: `Buying your supplies — ${doc.docNumber}`,
+      body: `Administration is buying the items. Expected ready to collect: ${this.dayText(expected)}.`,
+      link: `/requests/${requestId}`, requestId,
+    });
+    return { status: 'PURCHASING', expectedReadyOn: expected };
+  }
+
+  /** Buying → on the shelf. No stock moves yet; collection still has to happen. */
+  async markReady(requestId: string, actor: Actor) {
+    const doc = await this.supplyDoc(requestId);
+    const supply = doc.supplyRequest!;
+    if (!['PENDING', 'PURCHASING'].includes(supply.status)) {
+      throw new ConflictException(`Already ${supply.status} — nothing to mark ready`);
+    }
+    if (doc.status !== 'APPROVED') throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
+    const now = new Date();
+    await this.prisma.officeSupplyRequest.update({
+      where: { requestId },
+      data: { status: 'READY_FOR_PICKUP', readyAt: now },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'SUPPLY_READY_FOR_PICKUP', module: 'INVENTORY', recordId: requestId,
+      newValue: { docNumber: doc.docNumber, readyAt: now.toISOString(), expectedReadyOn: supply.expectedReadyOn?.toISOString() ?? null },
+    });
+    await this.notifications.notify({
+      userId: doc.requesterId, type: 'SUPPLY_READY_FOR_PICKUP',
+      title: `Ready to collect — ${doc.docNumber}`,
+      body: 'Your items are ready. Please collect them from the Administration store.',
+      link: `/requests/${requestId}`, requestId,
+    });
+    return { status: 'READY_FOR_PICKUP', readyAt: now };
+  }
+
+  /**
+   * Hand the items over: per line, deduct stock inside one transaction and mark
+   * the line FULFILLED (or OUT_OF_STOCK when the balance is short). The whole
+   * request completes only when every line is fulfilled. This is the ONLY place
+   * stock leaves the shelf — approval and the buying stage never deduct.
    */
   async fulfill(requestId: string, actor: Actor) {
     const doc = await this.prisma.requestDocument.findUnique({
@@ -425,11 +523,13 @@ export class InventoryService {
     });
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
     const supply = doc.supplyRequest;
-    // PARTIAL = a previous pass issued some lines and found others short —
-    // retry it after restocking (open lines are retried below)
-    if (!['PENDING', 'PARTIAL'].includes(supply.status)) throw new ConflictException(`Already ${supply.status}`);
-    // COMPLETED here means "approved and auto-fulfilled" — a short request
-    // completes with lines OUT_OF_STOCK and can be retried after restocking
+    // Stock leaves the shelf only here — at hand-over. PREPARING/BUYING rows are
+    // still not collectable; PARTIAL is a retry after restocking.
+    if (!['READY_FOR_PICKUP', 'PARTIAL'].includes(supply.status)) {
+      throw new ConflictException('Mark the items ready for collection before handing them over');
+    }
+    // the document stays APPROVED while waiting; a partly handed-over request
+    // (OUT_OF_STOCK lines) can be retried after restocking
     if (!['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS', 'COMPLETED'].includes(doc.status)) {
       throw new BadRequestException(`Workflow status is ${doc.status} — cannot fulfill yet`);
     }
@@ -484,8 +584,8 @@ export class InventoryService {
     } else {
       await this.notifications.notify({
         userId: doc.requesterId, type: 'TRIP_COMPLETED' as never,
-        title: `Supplies issued — ${doc.docNumber}`,
-        body: 'Your supply request has been fulfilled. Please collect the items from the store.',
+        title: `Supplies handed over — ${doc.docNumber}`,
+        body: 'The items were handed over and the stock ledger has been updated.',
         link: `/requests/${doc.id}`, requestId: doc.id,
       });
     }
@@ -514,8 +614,10 @@ export class InventoryService {
     if (!['APPROVED', 'IN_PROGRESS', 'PENDING_APPROVAL', 'COMPLETED'].includes(doc.status)) {
       throw new BadRequestException(`Cannot cancel from status ${doc.status}`);
     }
-    if (!['PENDING', 'REJECTED'].includes(doc.supplyRequest.status)) {
-      throw new BadRequestException('Items were already issued from the store — this request can no longer be cancelled');
+    // anything still waiting (preparing, buying, on the shelf) can be withdrawn —
+    // stock has not moved yet
+    if (!['PENDING', 'PURCHASING', 'READY_FOR_PICKUP'].includes(doc.supplyRequest.status)) {
+      throw new BadRequestException('Items were already handed over — this request can no longer be cancelled');
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -550,7 +652,9 @@ export class InventoryService {
       include: { supplyRequest: true },
     });
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
-    if (doc.supplyRequest.status !== 'PENDING') throw new ConflictException(`Already ${doc.supplyRequest.status}`);
+    if (!['PENDING', 'PURCHASING'].includes(doc.supplyRequest.status)) {
+      throw new ConflictException(`Already ${doc.supplyRequest.status}`);
+    }
 
     // close everything atomically: pending lines → REJECTED, supply header → REJECTED,
     // and the workflow document itself leaves APPROVED/COMPLETED so it stops showing

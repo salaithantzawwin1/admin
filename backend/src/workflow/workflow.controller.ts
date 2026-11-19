@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsIn, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, MinLength, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -106,6 +106,12 @@ export class WorkflowController {
 
   @Post('requests')
   create(@Req() req, @Body() dto: CreateRequestDto) {
+    // An OSR needs item lines and a stock ledger, which only the Inventory
+    // module can create — a generic document (title only) can never be
+    // fulfilled and used to sit APPROVED forever (OSR-202611-0001).
+    if (dto.docType === 'OFFICE_SUPPLY_REQUEST') {
+      throw new BadRequestException('Office supply requests are created from Inventory → Office supplies (pick items and quantities)');
+    }
     return this.workflow.create(dto, this.actor(req));
   }
 

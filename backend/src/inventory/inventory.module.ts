@@ -21,10 +21,13 @@ export class InventoryModule implements OnModuleInit {
     private workflow: WorkflowService,
   ) {}
 
-  /** Office supply requests auto-fulfill (stock deduction) on final approval. */
+  /**
+   * Final approval only notifies — the items then go through buying → ready for
+   * pickup → handed over. Stock is deducted at hand-over, never at approval.
+   */
   onModuleInit() {
-    this.workflow.registerFinalApproveHook('OFFICE_SUPPLY_REQUEST', (requestId, actor) =>
-      this.inventory.fulfill(requestId, actor),
+    this.workflow.registerFinalApproveHook('OFFICE_SUPPLY_REQUEST', (requestId) =>
+      this.inventory.onApproved(requestId),
     );
     this.workflow.registerCancelHook('OFFICE_SUPPLY_REQUEST', (requestId, actor) =>
       this.inventory.adminCancelSupply(requestId, 'Cancelled by requester', actor),

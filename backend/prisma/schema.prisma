@@ -336,6 +336,10 @@ enum NotificationType {
   LICENSE_EXPIRY
   /// approved car request passed its start time with no vehicle — one ping to Administration
   ADMIN_UNASSIGNED
+  /// supply request moved to the buying stage (expected collection day set)
+  SUPPLY_PURCHASING
+  /// supply request is on the shelf and waiting to be collected
+  SUPPLY_READY_FOR_PICKUP
 }
 
 enum RequestDocType {
@@ -1217,7 +1221,15 @@ model OfficeSupplyRequest {
   id          String    @id @default(uuid()) @db.Uuid
   requestId   String    @unique @db.Uuid // link to RequestDocument (workflow engine)
   note        String?
-  status      String    @default("PENDING") // PENDING / FULFILLED / REJECTED (mirror of doc status + fulfillment)
+  /// PENDING (approved, being prepared) → PURCHASING (buying, ETA set) →
+  /// READY_FOR_PICKUP → FULFILLED (handed over, stock deducted) · PARTIAL · REJECTED
+  status      String    @default("PENDING")
+  /// the day Administration expects the items to be collectable (buying stage)
+  expectedReadyOn DateTime?
+  purchasingAt DateTime?
+  readyAt     DateTime?
+  /// free text shown to the requester while buying (supplier, PO number, …)
+  purchaseNote String?
   fulfilledAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt

@@ -3,7 +3,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
 import * as fs from 'fs';
-import { IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AnyPermission, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
@@ -33,6 +33,12 @@ export class UpdateItemDto {
 
 export class IssueRequestDto {
   @IsArray() items!: { itemId: string; quantity: number }[];
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
+}
+
+export class StartPurchasingDto {
+  /** the day the items will be collectable ("today" / "tomorrow" in the UI) */
+  @IsDateString() expectedReadyOn!: string;
   @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
@@ -155,6 +161,21 @@ export class InventoryController {
     return this.inventory.pendingRequests();
   }
 
+  /** Approved → buying: records the expected collection day the requester sees. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('requests/:requestId/purchasing')
+  startPurchasing(@Req() req, @Param('requestId') requestId: string, @Body() dto: StartPurchasingDto) {
+    return this.inventory.startPurchasing(requestId, dto, this.actor(req));
+  }
+
+  /** Buying → on the shelf: tells the requester the items are ready to collect. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('requests/:requestId/ready')
+  markReady(@Req() req, @Param('requestId') requestId: string) {
+    return this.inventory.markReady(requestId, this.actor(req));
+  }
+
+  /** Hand the items over — the only step that deducts stock. */
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
   @Post('requests/:requestId/fulfill')
   fulfill(@Req() req, @Param('requestId') requestId: string) {

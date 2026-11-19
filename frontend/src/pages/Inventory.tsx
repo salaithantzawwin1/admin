@@ -49,12 +49,20 @@ interface SupplyLine {
   item?: { code: string; name: string; unit: string };
 }
 
+interface SupplyHeader {
+  status: string;
+  note?: string;
+  expectedReadyOn?: string | null;
+  purchaseNote?: string | null;
+  readyAt?: string | null;
+}
+
 interface MyRequest {
   id: string;
   docNumber: string;
   status: string;
   createdAt: string;
-  supplyRequest?: { status: string; note?: string; lines: SupplyLine[] } | null;
+  supplyRequest?: (SupplyHeader & { lines: SupplyLine[] }) | null;
 }
 
 interface PendingRequest {
@@ -64,7 +72,7 @@ interface PendingRequest {
   status?: string;
   requester?: { fullName: string } | null;
   department?: { name: string } | null;
-  supplyRequest?: { status: string; note?: string; lines: (SupplyLine & { item: { code: string; name: string; unit: string; balance: number } })[] } | null;
+  supplyRequest?: (SupplyHeader & { lines: (SupplyLine & { item: { code: string; name: string; unit: string; balance: number } })[] }) | null;
 }
 
 interface Txn {
@@ -85,6 +93,8 @@ const ITEM_CATEGORIES = ['STATIONERY', 'BOOKS', 'PAPER', 'ELECTRONICS', 'CLEANIN
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'teal'> = {
   PENDING: 'yellow',
+  PURCHASING: 'blue',
+  READY_FOR_PICKUP: 'teal',
   APPROVED: 'green',
   REJECTED: 'red',
   FULFILLED: 'green',
@@ -92,6 +102,24 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   COMPLETED: 'teal',
   CANCELLED: 'gray',
 };
+
+/** Requester-facing supply stages — the document status no longer tells the story. */
+const SUPPLY_STAGE_LABEL: Record<string, string> = {
+  PENDING: 'Approved — preparing',
+  PURCHASING: 'Buying',
+  READY_FOR_PICKUP: 'Ready to collect',
+  PARTIAL: 'Partly handed over',
+  FULFILLED: 'Handed over',
+  REJECTED: 'Rejected',
+};
+
+/** Local YYYY-MM-DD for a date input (offset in days from today). */
+function dayInput(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 type Tab = 'catalog' | 'management' | 'purchases';
 type MgmtTab = 'queue' | 'restock' | 'alerts' | 'reorder' | 'items';
@@ -196,6 +224,11 @@ export default function Inventory() {
   // reason-prompt dialogs (in-app, replaces window.prompt)
   const [cancelFor, setCancelFor] = useState<PendingRequest | null>(null);
   const [rejectFor, setRejectFor] = useState<PendingRequest | null>(null);
+  // buying stage: the expected collection day the requester sees
+  const [buyFor, setBuyFor] = useState<PendingRequest | null>(null);
+  const [buyForm, setBuyForm] = useState({ date: '', note: '' });
+  const [buyBusy, setBuyBusy] = useState(false);
+  const [buyError, setBuyError] = useState('');
 
   // history viewer
   const [historyFor, setHistoryFor] = useState<Item | null>(null);
@@ -421,6 +454,46 @@ export default function Inventory() {
     setError('');
     try {
       await api(`/inventory/requests/${requestId}/fulfill`, { method: 'POST' });
+      toast('Handed over — stock deducted');
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const openBuy = (r: PendingRequest) => {
+    setBuyFor(r);
+    setBuyForm({ date: dayInput(0), note: '' });
+    setBuyError('');
+  };
+
+  const doBuy = async () => {
+    if (!buyFor) return;
+    setBuyBusy(true);
+    setBuyError('');
+    try {
+      await api(`/inventory/requests/${buyFor.id}/purchasing`, {
+        method: 'POST',
+        body: {
+          expectedReadyOn: new Date(`${buyForm.date}T09:00:00`).toISOString(),
+          note: buyForm.note.trim() || undefined,
+        },
+      });
+      toast('Buying stage saved — the requester was told the collection day');
+      setBuyFor(null);
+      load();
+    } catch (e) {
+      setBuyError(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setBuyBusy(false);
+    }
+  };
+
+  const doReady = async (requestId: string) => {
+    setError('');
+    try {
+      await api(`/inventory/requests/${requestId}/ready`, { method: 'POST' });
+      toast('Marked ready — the requester was told to collect');
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -854,8 +927,16 @@ export default function Inventory() {
                       </td>
                       <td className="px-4 py-3 text-center">
                         <Badge color={STATUS_COLORS[r.supplyRequest?.status ?? r.status] ?? 'gray'}>
-                          {r.supplyRequest?.status === 'PENDING' ? `PENDING (${r.status === 'PENDING_APPROVAL' ? 'awaiting approval' : 'approved — fulfilling'})` : r.supplyRequest?.status ?? r.status}
+                          {r.supplyRequest?.status === 'PENDING' && r.status === 'PENDING_APPROVAL'
+                            ? 'Awaiting approval'
+                            : SUPPLY_STAGE_LABEL[r.supplyRequest?.status ?? ''] ?? r.supplyRequest?.status ?? r.status}
                         </Badge>
+                        {r.supplyRequest?.status === 'PURCHASING' && r.supplyRequest.expectedReadyOn && (
+                          <div className="text-[11px] text-gray-500 mt-1">collect {fmtDate(r.supplyRequest.expectedReadyOn)}</div>
+                        )}
+                        {r.supplyRequest?.status === 'READY_FOR_PICKUP' && (
+                          <div className="text-[11px] text-green-700 mt-1">waiting at the store</div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
                     </tr>
@@ -897,10 +978,11 @@ export default function Inventory() {
           {mgmtTab === 'queue' && (
           <Card className="mb-5 p-5">
             <h2 className="font-semibold text-gray-800 mb-1 text-sm uppercase tracking-wide">
-              Approved — waiting for issue from store ({pending.length})
+              Supply requests in progress ({pending.length})
             </h2>
             <p className="text-xs text-gray-400 mb-3">
-              Approving ( Fulfill ) deducts stock immediately. Items short of stock are marked OUT-OF-STOCK and can be fulfilled after restock.
+              Approved → buying (pick the collection day the requester sees) → ready for pickup → hand over.
+              Stock is deducted only when you hand the items over; short lines are marked OUT-OF-STOCK and can be retried after restock.
             </p>
             {pending.length === 0 ? (
               <Empty label="No requests waiting — all caught up 🎉" />
@@ -910,6 +992,9 @@ export default function Inventory() {
                   <div key={r.id} className="border border-gray-200 rounded-lg p-3">
                     <div className="flex flex-wrap items-center gap-2 mb-2">
                       <Link to={`/requests/${r.id}`} className="font-medium text-blue-600 hover:underline">{r.docNumber}</Link>
+                      <Badge color={STATUS_COLORS[r.supplyRequest?.status ?? ''] ?? 'gray'}>
+                        {SUPPLY_STAGE_LABEL[r.supplyRequest?.status ?? ''] ?? r.supplyRequest?.status}
+                      </Badge>
                       <span className="text-sm">{r.requester?.fullName}</span>
                       <span className="text-xs text-gray-400">{r.department?.name}</span>
                       <span className="text-xs text-gray-400">{fmtDateTime(r.createdAt)}</span>
@@ -928,9 +1013,25 @@ export default function Inventory() {
                       </tbody>
                     </table>
                     {r.supplyRequest?.note && <div className="text-xs text-gray-500 mb-2">Note: {r.supplyRequest.note}</div>}
-                    <div className="flex gap-2">
-                      <Button onClick={() => doFulfill(r.id)}>✓ Fulfill (issue stock)</Button>
-                      <Button variant="danger" onClick={() => setRejectFor(r)}>Cannot fulfill</Button>
+                    {r.supplyRequest?.expectedReadyOn && (
+                      <div className="text-xs text-gray-500 mb-2">
+                        Expected ready: <b>{fmtDate(r.supplyRequest.expectedReadyOn)}</b>
+                        {r.supplyRequest.purchaseNote ? ` · ${r.supplyRequest.purchaseNote}` : ''}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
+                        <Button variant="ghost" onClick={() => openBuy(r)}>🛒 Buying — set collection day</Button>
+                      )}
+                      {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
+                        <Button variant="ghost" onClick={() => void doReady(r.id)}>✅ Ready for pickup</Button>
+                      )}
+                      {r.supplyRequest?.status === 'READY_FOR_PICKUP' && (
+                        <Button onClick={() => void doFulfill(r.id)}>📦 Hand over (issue stock)</Button>
+                      )}
+                      {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
+                        <Button variant="danger" onClick={() => setRejectFor(r)}>Cannot fulfill</Button>
+                      )}
                       {r.status === 'APPROVED' && (
                         <Button variant="ghost" onClick={() => setCancelFor(r)}>✕ Cancel request</Button>
                       )}
@@ -1315,6 +1416,58 @@ export default function Inventory() {
       )}
 
       {/* ============ modals ============ */}
+      {/* buying stage — the day the requester should come back (today / tomorrow quick picks) */}
+      {buyFor && (
+        <Modal title={`Buying ${buyFor.docNumber}`} onClose={() => { if (!buyBusy) setBuyFor(null); }} error={buyError}>
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-gray-500">
+              The requester sees this day (and your note) while the items are being bought. No stock is deducted yet.
+            </p>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1" htmlFor="buy-ready-on">Ready to collect on</label>
+              <div className="flex flex-wrap items-center gap-2">
+                {[{ label: 'Today', offset: 0 }, { label: 'Tomorrow', offset: 1 }].map((q) => (
+                  <button
+                    key={q.label}
+                    type="button"
+                    className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${
+                      buyForm.date === dayInput(q.offset)
+                        ? 'border-yellow-600 bg-yellow-50 text-yellow-800'
+                        : 'border-gray-200 text-gray-600 hover:border-yellow-400'
+                    }`}
+                    onClick={() => setBuyForm({ ...buyForm, date: dayInput(q.offset) })}
+                  >
+                    {q.label}
+                  </button>
+                ))}
+                <Input
+                  id="buy-ready-on"
+                  type="date"
+                  className="!w-44"
+                  value={buyForm.date}
+                  onChange={(e) => setBuyForm({ ...buyForm, date: e.target.value })}
+                />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1" htmlFor="buy-note">Note for the requester (optional)</label>
+              <Input
+                id="buy-note"
+                placeholder="e.g. ordered from City Mart · PO-0042"
+                value={buyForm.note}
+                onChange={(e) => setBuyForm({ ...buyForm, note: e.target.value })}
+              />
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" disabled={buyBusy} onClick={() => setBuyFor(null)}>Cancel</Button>
+              <Button disabled={buyBusy || !buyForm.date} onClick={() => void doBuy()}>
+                {buyBusy ? 'Saving…' : 'Mark as buying'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
       {/* admin-cancel with reason (replaces window.prompt) */}
       {cancelFor && (
         <ConfirmDialog
