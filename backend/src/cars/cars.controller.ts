@@ -63,6 +63,14 @@ class CompleteTripDto {
   @IsOptional() @IsString() @MaxLength(1000) remarks?: string;
 }
 
+/** Administration close of an overdue ride: the return km is required, a reason
+ *  only when the number is an estimate (OVERDUE_RETURN_GUARD_PLAN.md, Step 5). */
+class CloseTripDto {
+  @IsInt() @Min(0) @Max(9999999) endOdoKm!: number;
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
+  @IsOptional() @IsBoolean() estimated?: boolean;
+}
+
 class ExpenseDto {
   @IsIn(['FUEL', 'TOLL', 'PARKING', 'REPAIR', 'OTHER']) type!: string;
   @IsNumber() @Min(0.01) @Max(999999999) amount!: number;
@@ -293,6 +301,15 @@ export class CarsController {
   @Post('requests/:requestId/trip/complete')
   completeTrip(@Req() req, @Param('requestId') requestId: string, @Body() dto: CompleteTripDto) {
     return this.cars.completeTrip(requestId, dto, this.actor(req));
+  }
+
+  /** Close an OVERDUE ride by hand with the return reading — the only way out of
+   *  the hold (release/reassign are refused while the car is still out). Audited,
+   *  notified, and it does not fake the driver's 🏁 Back at Office tap. */
+  @RequirePermissions(PERMISSIONS.CARS_ASSIGN)
+  @Post('requests/:requestId/trip/close')
+  closeTripManually(@Req() req, @Param('requestId') requestId: string, @Body() dto: CloseTripDto) {
+    return this.cars.closeTripManually(requestId, dto, this.actor(req));
   }
 
   /** Expense access (cars.assign or the request's owner) is enforced in the service —

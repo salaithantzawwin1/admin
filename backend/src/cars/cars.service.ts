@@ -2513,15 +2513,7 @@ export class CarsService {
     const distance = data.endMileage - (assignment.trip.startMileage ?? 0);
 
     const trip = await this.prisma.$transaction(async (tx) => {
-      const t = await tx.carTrip.update({
-        where: { id: assignment.trip!.id },
-        data: {
-          status: 'COMPLETED',
-          endMileage: data.endMileage,
-          completedAt: new Date(),
-          remarks: data.remarks,
-        },
-      });
+      const t = await this.closeTripRow(tx, assignment.trip!.id, data.endMileage, data.remarks);
       // Only free the vehicle if no other active assignment took it meanwhile
       // (e.g. driver signalled "Back at Office" on Telegram and Administration
       // already re-assigned the car to a new trip before this completion).
@@ -2573,6 +2565,178 @@ export class CarsService {
     });
     this.push(requestId); // COMPLETED closes the doc too
     return trip;
+  }
+
+  /**
+   * Trip-row close-out, shared by the two ways a trip ends: the driver's
+   * 🏁 Back at Office with a return km (`completeTrip`) and Administration's
+   * manual close of an overdue ride (`closeTripManually`). A copied body would
+   * drift from this one and the fleet usage report reads exactly these columns.
+   */
+  private closeTripRow(tx: Prisma.TransactionClient, tripId: string, km: number, remarks?: string) {
+    return tx.carTrip.update({
+      where: { id: tripId },
+      data: { status: 'COMPLETED', endMileage: km, completedAt: new Date(), remarks },
+    });
+  }
+
+  /**
+   * Close an overdue ride by hand — the exit that makes the Step 1 hold safe
+   * (docs/OVERDUE_RETURN_GUARD_PLAN.md, Step 5).
+   *
+   * A held car cannot be released or reassigned (Step 4), so without this it has
+   * no way back into the pool. The close records the return reading exactly like
+   * a Back tap does, but it deliberately does NOT stamp `driverBackAtOfficeAt`:
+   * that column means "the driver tapped 🏁" and it feeds the driver discipline
+   * report — faking it would hide the very miss this feature exists to expose.
+   * Idempotent: a second call on a closed row is a 409, never a second write.
+   */
+  async closeTripManually(
+    requestId: string,
+    data: { endOdoKm: number; reason?: string; estimated?: boolean },
+    actor: Actor,
+  ) {
+    const endOdoKm = Number(data.endOdoKm);
+    if (!Number.isInteger(endOdoKm) || endOdoKm < 0 || endOdoKm > 9_999_999) {
+      throw new BadRequestException('Enter the return odometer reading as whole kilometres');
+    }
+    const estimated = data.estimated === true;
+    const reason = (data.reason ?? '').trim();
+    // an estimated number is a guess, and a guess without a reason is worthless
+    // to the next person reading the monthly distance
+    if (estimated && reason.length < 5) {
+      throw new BadRequestException('An estimated return reading needs a reason (at least 5 characters)');
+    }
+
+    const assignment = await this.prisma.carAssignment.findUnique({
+      where: { requestId },
+      include: {
+        request: { select: { docNumber: true, requesterId: true } },
+        vehicle: { select: { id: true, vehicleNo: true, currentMileage: true } },
+        driver: { select: { id: true, name: true, telegramChatId: true } },
+        carRequest: { select: { endDate: true } },
+        trip: true,
+      },
+    });
+    if (!assignment) throw new NotFoundException('No assignment for this request');
+
+    if (assignment.releasedAt != null || assignment.driverBackAtOfficeAt != null || assignment.endOdoAt != null) {
+      throw new ConflictException('This trip is already closed — there is nothing to close manually');
+    }
+    // No ride evidence and no STARTED trip: the car never left, so this row
+    // belongs to the janitor's "release back to the pool" branch, not here.
+    if (!isOutOnRoad(assignment) && assignment.trip?.status !== 'STARTED') {
+      throw new ConflictException('This request has no ride to close — no departure was recorded');
+    }
+    if (assignment.startOdoKm != null && endOdoKm < assignment.startOdoKm) {
+      throw new BadRequestException(
+        `Return reading (${endOdoKm.toLocaleString()} km) cannot be less than the departure reading (${assignment.startOdoKm.toLocaleString()} km)`,
+      );
+    }
+
+    const now = new Date();
+    const planned = assignment.carRequest?.endDate ?? now;
+    const effectiveEnd = this.effectiveEnd(planned, assignment.estimatedReturnAt);
+    const minutesOver = Math.max(0, Math.round((now.getTime() - effectiveEnd.getTime()) / 60_000));
+
+    await this.prisma.$transaction(async (tx) => {
+      // the BACK reading — the same columns captureOdometer writes, minus the
+      // photo (a manual close usually has none; OdometerBox can attach one later)
+      await tx.carAssignment.update({
+        where: { id: assignment.id },
+        data: {
+          endOdoKm,
+          endOdoAt: now,
+          releasedAt: now,
+          estimatedReturnAt: null,
+          // deliberately NOT driverBackAtOfficeAt — see the method comment
+        },
+      });
+      if (assignment.trip) await this.closeTripRow(tx, assignment.trip.id, endOdoKm);
+      const otherActive = await tx.carAssignment.count({
+        where: { vehicleId: assignment.vehicleId, id: { not: assignment.id }, releasedAt: null },
+      });
+      await tx.vehicle.update({
+        where: { id: assignment.vehicleId },
+        data: {
+          // never lower the fleet number — the rule captureOdometer already applies
+          currentMileage: Math.max(endOdoKm, assignment.vehicle.currentMileage ?? 0),
+          ...(otherActive === 0 ? { status: 'AVAILABLE' as const } : {}),
+        },
+      });
+      if (assignment.driverId) {
+        const otherTrips = await tx.carAssignment.count({
+          where: { driverId: assignment.driverId, id: { not: assignment.id }, releasedAt: null },
+        });
+        if (otherTrips === 0) {
+          await tx.driver.update({ where: { id: assignment.driverId }, data: { status: 'AVAILABLE' } }).catch(() => undefined);
+        }
+      }
+      await tx.carRequest.update({ where: { requestId }, data: { status: 'COMPLETED' } });
+      await tx.requestDocument.update({ where: { id: requestId }, data: { status: 'COMPLETED' } });
+    });
+
+    const who = { ...(actor.userId ? { userId: actor.userId } : {}), username: actor.username };
+    const docNumber = assignment.request.docNumber;
+    const kmTxt = `${endOdoKm.toLocaleString()} km`;
+    // the reading keeps its ordinary odometer audit, marked as an admin write so
+    // the monthly report can tell a typed-in number from a photographed one
+    await this.audit.log({
+      ...who,
+      action: 'CAR_ODOMETER_RECORDED',
+      module: 'CARS',
+      recordId: requestId,
+      newValue: { stage: 'BACK', km: endOdoKm, photo: false, source: 'ADMIN_MANUAL', estimated, docNumber },
+    });
+    await this.audit.log({
+      ...who,
+      action: 'CAR_TRIP_MANUALLY_CLOSED',
+      module: 'CARS',
+      recordId: requestId,
+      newValue: {
+        endOdoKm,
+        estimated,
+        reason: reason || null,
+        minutesOver,
+        closedById: actor.userId ?? null,
+        photo: false,
+        docNumber,
+      },
+    });
+
+    const title = `🏁 Trip closed manually — ${docNumber}`;
+    const body = `Administration closed this trip after the return window and recorded ${kmTxt}${estimated ? ' (estimated)' : ''}.`;
+    await this.notifications.notify({
+      userId: assignment.request.requesterId,
+      type: 'TRIP_COMPLETED',
+      title: `Trip completed for ${docNumber}`,
+      body: `Closed by Administration after the return window. Return reading: ${kmTxt}${estimated ? ' (estimated)' : ''}.`,
+      link: `/requests/${requestId}`,
+      requestId,
+    });
+    // the driver's own Telegram card said "on trip" — tell them it is closed
+    if (assignment.driver?.telegramChatId) {
+      const dist = assignment.startOdoKm != null ? ` · ${endOdoKm - assignment.startOdoKm} km` : '';
+      await this.telegram
+        .sendRaw(assignment.driver.telegramChatId, `✅ ${docNumber} closed by Administration — return ${kmTxt}${dist}`)
+        .catch(() => undefined);
+    }
+    // the other dispatchers need to see the close, not just the one who did it
+    const adminIds = (await this.permissions.usersWithPermissions(['cars.assign'])).filter((id) => id !== actor.userId);
+    for (const userId of adminIds) {
+      await this.telegram.mirrorToUser(userId, title, body, `/requests/${requestId}`).catch(() => undefined);
+    }
+
+    this.push(requestId);
+    return {
+      success: true,
+      endOdoKm,
+      endOdoAt: now,
+      estimated,
+      minutesOver,
+      released: true,
+      driverBackAtOffice: false, // the missing tap stays visible
+    };
   }
 
   // ---------- expenses ----------

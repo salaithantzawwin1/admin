@@ -31,6 +31,7 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 const { TripRemindersService } = require('../src/cars/trip-reminders.service');
+const { CarsService } = require('../src/cars/cars.service');
 const { isOutOnRoad, outOnRoadWhere } = require('../src/cars/overdue.util');
 
 const endedAgo = (mins: number) => new Date(Date.now() - mins * 60 * 1000);
@@ -484,6 +485,135 @@ async function main() {
     assert.strictEqual(t.sent.length, 1);
     assert.match(t.sent[0], /Mileage open/);
     assert.doesNotMatch(t.sent[0], /Overdue returns/, 'a STARTED trip has its own close-out, not the manual hold');
+  });
+
+  // ------------------------------------------ 5) closeTripManually (Step 5)
+
+  /**
+   * A CarsService over a mock Prisma that keeps the assignment row alive, so a
+   * second call sees what the first one wrote and must be refused.
+   */
+  function closer(over: Record<string, unknown> = {}) {
+    const row: any = {
+      id: 'a1', requestId: 'r1', vehicleId: 'v1', driverId: 'd1',
+      releasedAt: null, driverBackAtOfficeAt: null, endOdoAt: null,
+      startOdoKm: 341626, startOdoAt: endedAgo(240), driverArrivedAt: endedAgo(230),
+      estimatedReturnAt: null,
+      request: { docNumber: 'CAR-202611-0039', requesterId: 'u-req' },
+      vehicle: { id: 'v1', vehicleNo: '9F1213', currentMileage: 341000 },
+      driver: { id: 'd1', name: 'Naing Naing Tun', telegramChatId: 'chat-driver' },
+      carRequest: { endDate: endedAgo(180) },
+      trip: null,
+      ...over,
+    };
+    const ops: Array<[string, any]> = [];
+    const audits: any[] = [];
+    const notes: any[] = [];
+    const chats: string[] = [];
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => ({ ...row }),
+        update: async (p: any) => { ops.push(['carAssignment.update', p.data]); Object.assign(row, p.data); return {}; },
+        count: async () => 0,
+      },
+      carTrip: { update: async (p: any) => { ops.push(['carTrip.update', p.data]); return {}; } },
+      vehicle: { update: async (p: any) => { ops.push(['vehicle.update', p.data]); return {}; } },
+      driver: { update: async (p: any) => { ops.push(['driver.update', p.data]); return {}; } },
+      carRequest: { update: async (p: any) => { ops.push(['carRequest.update', p.data]); return {}; } },
+      requestDocument: { update: async (p: any) => { ops.push(['requestDocument.update', p.data]); return {}; } },
+      $transaction: async (fn: any) => fn(prisma),
+    };
+    const svc: any = new CarsService(
+      prisma,
+      { usersWithPermissions: async () => ['u-admin', 'u-actor'] } as any,
+      {} as any,
+      { notify: async (p: any) => { notes.push(p); return {}; } } as any,
+      { log: async (p: any) => { audits.push(p); return {}; } } as any,
+      { sendRaw: async (_chat: string, text: string) => { chats.push(text); }, mirrorToUser: async () => ({}) } as any,
+      {} as any,
+      { publish: () => undefined } as any,
+    );
+    return { svc, row, ops, audits, notes, chats };
+  }
+
+  await test('closeTripManually: records the BACK km, frees the car, keeps the missing tap missing', async () => {
+    const t = closer();
+    const res = await t.svc.closeTripManually(
+      'r1',
+      { endOdoKm: 341651, reason: 'driver phoned the reading in' },
+      { userId: 'u-admin', username: 'admin' },
+    );
+    const asg = t.ops.find((o) => o[0] === 'carAssignment.update')![1];
+    assert.strictEqual(asg.endOdoKm, 341651);
+    assert.ok(asg.endOdoAt instanceof Date, 'the reading carries a capture time');
+    assert.ok(asg.releasedAt instanceof Date, 'the assignment leaves the live set');
+    assert.strictEqual(asg.driverBackAtOfficeAt, undefined, 'the driver never tapped — the miss stays visible');
+
+    const veh = t.ops.find((o) => o[0] === 'vehicle.update')![1];
+    assert.strictEqual(veh.status, 'AVAILABLE', 'the car returns to the pool');
+    assert.strictEqual(veh.currentMileage, 341651, 'the fleet number follows the reading');
+    assert.ok(t.ops.some((o) => o[0] === 'carRequest.update' && o[1].status === 'COMPLETED'));
+    assert.ok(t.ops.some((o) => o[0] === 'requestDocument.update' && o[1].status === 'COMPLETED'));
+
+    const odo = t.audits.filter((a) => a.action === 'CAR_ODOMETER_RECORDED');
+    assert.strictEqual(odo.length, 1, 'exactly one BACK odometer audit');
+    assert.strictEqual(odo[0].newValue.stage, 'BACK');
+    assert.strictEqual(odo[0].newValue.source, 'ADMIN_MANUAL');
+    assert.strictEqual(odo[0].newValue.photo, false);
+    const closed = t.audits.filter((a) => a.action === 'CAR_TRIP_MANUALLY_CLOSED');
+    assert.strictEqual(closed.length, 1);
+    assert.strictEqual(closed[0].newValue.endOdoKm, 341651);
+    assert.strictEqual(closed[0].newValue.minutesOver, 180);
+
+    assert.strictEqual(t.notes.length, 1, 'the requester is told once');
+    assert.strictEqual(t.chats.length, 1, 'the driver is told on Telegram');
+    assert.match(t.chats[0], /341,651 km/);
+    assert.strictEqual(res.driverBackAtOffice, false);
+  });
+
+  await test('closeTripManually: a second call is a 409, not a second write', async () => {
+    const t = closer();
+    await t.svc.closeTripManually('r1', { endOdoKm: 341651, reason: 'phoned in' }, { userId: 'u-admin', username: 'admin' });
+    const before = t.ops.length;
+    await assert.rejects(
+      () => t.svc.closeTripManually('r1', { endOdoKm: 341700, reason: 'again' }, { userId: 'u-admin', username: 'admin' }),
+      /already closed/,
+    );
+    assert.strictEqual(t.ops.length, before, 'the second call writes nothing');
+  });
+
+  await test('closeTripManually: an estimated reading without a reason is rejected', async () => {
+    const t = closer();
+    await assert.rejects(
+      () => t.svc.closeTripManually('r1', { endOdoKm: 341651, estimated: true, reason: 'x' }, { userId: 'u-admin', username: 'admin' }),
+      /needs a reason/,
+    );
+    assert.strictEqual(t.ops.length, 0);
+  });
+
+  await test('closeTripManually: a return km below the departure reading is rejected', async () => {
+    const t = closer();
+    await assert.rejects(
+      () => t.svc.closeTripManually('r1', { endOdoKm: 341000 }, { userId: 'u-admin', username: 'admin' }),
+      /cannot be less than/,
+    );
+    assert.strictEqual(t.ops.length, 0);
+  });
+
+  await test('closeTripManually: a ride that never left cannot be closed this way', async () => {
+    const t = closer({ startOdoKm: null, startOdoAt: null, driverArrivedAt: null });
+    await assert.rejects(
+      () => t.svc.closeTripManually('r1', { endOdoKm: 341651 }, { userId: 'u-admin', username: 'admin' }),
+      /no ride to close/,
+    );
+  });
+
+  await test('closeTripManually: a STARTED trip row closes through the same close-out', async () => {
+    const t = closer({ trip: { id: 't1', status: 'STARTED' } });
+    await t.svc.closeTripManually('r1', { endOdoKm: 341651 }, { userId: 'u-admin', username: 'admin' });
+    const trip = t.ops.find((o) => o[0] === 'carTrip.update')![1];
+    assert.strictEqual(trip.status, 'COMPLETED');
+    assert.strictEqual(trip.endMileage, 341651);
   });
 
   // ------------------------------------------------------------------ summary

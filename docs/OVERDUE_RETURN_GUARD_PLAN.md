@@ -627,11 +627,25 @@ requires Steps 1–6 to ship as one release.
 | 4.1 — Telegram vehicle picker hides/labels a held car | **done**, uncommitted — `🏁 Still out` line, no button | `telegram-car-actions.service.ts` vehicle list |
 | 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **done**, uncommitted | `assign()` |
 | 4.6 — web picker (`CarPanel`) hides a held car | **done**, uncommitted (`!v.overdueReturn`) | `CarPanel.tsx` |
-| 4.7 — `reassign()` refuses an out-on-road ride | **done**, uncommitted — `release()` too (§7 edge case) | `reassign()`, `release()` |
-| 5 — admin manual close (API, audit, notices, no fake Back tap) | **not started** | new endpoint |
+| 4.7 — `reassign()` refuses an out-on-road ride | **done** — `3531b82`; `release()` too (§7 edge case) | `reassign()`, `release()` |
+| 5 — admin manual close (API, audit, notices, no fake Back tap) | **done**, uncommitted | `closeTripManually()` + `POST requests/:requestId/trip/close` |
 | 6 — admin UI for the manual close | **not started** | request trip panel |
 | — `overdueReturn` rendered in the UI | **not started** — payload only | fleet cards, `CarPanel` |
 | — deploy / push | **deliberately not done** — §9 gate | — |
+
+Step 4 landed in `3531b82` (4.1, 4.2/4.4/4.5, 4.6, 4.7 + `release()`), so the
+row above is no longer uncommitted.
+
+Step 5 detail (as built): `closeTripManually()` validates the reading, refuses a
+closed row with 409 (`releasedAt` / `driverBackAtOfficeAt` / `endOdoAt` set) and a
+row with no ride evidence, then in one transaction writes `endOdoKm` / `endOdoAt` /
+`releasedAt` / `estimatedReturnAt = null`, calls the extracted `closeTripRow()`
+for an existing `car_trips` row, moves `vehicle.currentMileage` forward only,
+frees the car/driver when nothing else holds them, and completes the request plus
+its document. Audits `CAR_ODOMETER_RECORDED` (`source: 'ADMIN_MANUAL'`) and
+`CAR_TRIP_MANUALLY_CLOSED`; notifies the requester, the driver's Telegram and the
+other `cars.assign` holders. `driverBackAtOfficeAt` is left null on purpose.
+`completeTrip()` now shares `closeTripRow()`, so the two writers cannot drift.
 
 ### Tests green at this commit
 
@@ -642,7 +656,6 @@ requires Steps 1–6 to ship as one release.
 
 ### Next up
 
-1. Commit Step 4 (4.1, 4.2/4.4/4.5, 4.6, 4.7 + `release()`).
-2. Steps 5–6 — the manual close (the exit that makes the hold safe),
-   then render `overdueReturn` in the fleet and request cards.
-3. One deploy of Steps 1–6 (§9), then watch the first real late return.
+1. Step 6 — the admin UI for the manual close (trip panel button + modal) and
+   rendering `overdueReturn` in the fleet and request cards.
+2. One deploy of Steps 1–6 (§9), then watch the first real late return.
