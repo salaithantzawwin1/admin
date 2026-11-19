@@ -263,6 +263,170 @@ async function main() {
     assert.strictEqual(auditsOf(t, 'VEHICLE_AUTO_FREED').length, 1);
   });
 
+  // ------------------------------------------- 6) Step 2: escalation stages
+  function escalation(rows: any[], presetAudits: any[] = []) {
+    const audits: any[] = [...presetAudits];
+    const notices: any[] = [];
+    const sent: string[] = [];
+    let args: any = null;
+    const prisma: any = {
+      carAssignment: { findMany: async (p: any) => { args = p; return rows; } },
+      notification: {
+        findFirst: async ({ where: w }: any) =>
+          notices.find((n) => n.requestId === w.requestId && n.type === w.type) ?? null,
+      },
+      auditLog: {
+        // honour the throttle window: a marker written now (no createdAt) counts as
+        // fresh, a preset one only matches while it is younger than the cutoff
+        findFirst: async ({ where: w }: any) => {
+          const cutoff = w.createdAt?.gte as Date | undefined;
+          return audits.find((x) =>
+            x.action === w.action && x.recordId === w.recordId &&
+            (!cutoff || !x.createdAt || x.createdAt >= cutoff),
+          ) ?? null;
+        },
+        create: async (p: any) => { audits.push({ ...p.data, createdAt: new Date() }); return {}; },
+      },
+    };
+    const svc: any = new TripRemindersService(
+      prisma,
+      { notifyMany: async (_ids: string[], n: any) => { notices.push(n); }, notify: async () => ({}) } as any,
+      { sendRaw: async (_chat: string, text: string) => { sent.push(text); }, mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => ['u-admin'] } as any,
+    );
+    return { svc, args: () => args, audits, notices, sent };
+  }
+
+  const escalationRow = (over: Record<string, unknown> = {}) => ({
+    id: 'a9', requestId: 'r9', vehicleId: 'v9', driverId: 'd9',
+    estimatedReturnAt: null,
+    driver: { id: 'd9', name: 'Naing Naing Tun', telegramChatId: 'chat-9' },
+    vehicle: { vehicleNo: '9F1213', brandModel: 'Toyota HiAce' },
+    request: {
+      id: 'r9', docNumber: 'CAR-202611-0039',
+      carRequest: { endDate: endedAgo(180), destination: 'Mandalay' },
+    },
+    trip: null,
+    ...over,
+  });
+
+  await test('escalateOverdueRunning: the query is ETA-aware and reads the trip status', async () => {
+    const t = escalation([]);
+    await t.svc.escalateOverdueRunning();
+    const { where, include } = t.args();
+    assert.strictEqual(where.OR.length, 2);
+    assert.ok(where.OR[0].request.carRequest.endDate.lt instanceof Date, 'planned end in the past');
+    assert.strictEqual(where.OR[0].estimatedReturnAt, null, 'no ETA reported');
+    assert.ok(where.OR[1].estimatedReturnAt.lt instanceof Date, 'an expired ETA is overdue too');
+    assert.deepStrictEqual(include.trip, { select: { status: true } },
+      'held rows must be distinguishable from STARTED');
+  });
+
+  await test('escalateOverdueRunning: a held ride under +2h nudges the driver only', async () => {
+    const t = escalation([escalationRow({
+      request: { id: 'r9', docNumber: 'CAR-202611-0039', carRequest: { endDate: endedAgo(30) } },
+    })]);
+    await t.svc.escalateOverdueRunning();
+    assert.strictEqual(t.sent.length, 1, 'the driver is still nudged');
+    assert.strictEqual(t.notices.length, 0, 'no admin alert before +2h');
+    assert.strictEqual(t.audits.length, 0);
+  });
+
+  await test('escalateOverdueRunning: a held ride gets the manual-close alert once, from +2h', async () => {
+    const t = escalation([escalationRow()]);
+    await t.svc.escalateOverdueRunning();
+    assert.strictEqual(t.audits.filter((a) => a.action === 'CAR_OVERDUE_CLOSE_REQUIRED').length, 1);
+    assert.strictEqual(t.notices.length, 1);
+    assert.match(t.notices[0].title, /Return overdue — CAR-202611-0039 \(3h 0m\)/);
+    assert.match(t.notices[0].body, /Close the trip manually/);
+    assert.ok(!t.notices.some((n) => /Trip overdue/.test(n.title)),
+      'a held row must not also get the STARTED-style alert');
+    await t.svc.escalateOverdueRunning(); // the next hourly tick
+    assert.strictEqual(t.notices.length, 1, 'the close marker is throttled');
+  });
+
+  await test('escalateOverdueRunning: a STARTED trip keeps the immediate alert and no close marker', async () => {
+    const t = escalation([escalationRow({
+      trip: { status: 'STARTED' },
+      request: { id: 'r9', docNumber: 'CAR-202611-0039', carRequest: { endDate: endedAgo(30) } },
+    })]);
+    await t.svc.escalateOverdueRunning();
+    assert.strictEqual(t.notices.length, 1);
+    assert.match(t.notices[0].title, /Trip overdue/);
+    assert.strictEqual(t.audits.filter((a) => a.action === 'CAR_OVERDUE_CLOSE_REQUIRED').length, 0);
+  });
+
+  await test('escalateOverdueRunning: the ETA, not the planned end, sets the overdue minutes', async () => {
+    const t = escalation([escalationRow({ estimatedReturnAt: endedAgo(30) })]);
+    await t.svc.escalateOverdueRunning();
+    assert.strictEqual(t.sent.length, 1, 'still nudged');
+    assert.strictEqual(t.notices.length, 0, 'planned end was 3h ago, but the ETA was 30 min ago');
+  });
+
+  await test('escalateOverdueRunning: past 25h the close alert drops to once a day', async () => {
+    const prior = { action: 'CAR_OVERDUE_CLOSE_REQUIRED', recordId: 'r9', createdAt: new Date(Date.now() - 13 * 3600 * 1000) };
+    // 13h-old marker: the 12h window would re-alert, the daily one must not
+    const daily = escalation([escalationRow({
+      request: { id: 'r9', docNumber: 'CAR-202611-0039', carRequest: { endDate: endedAgo(26 * 60) } },
+    })], [prior]);
+    await daily.svc.escalateOverdueRunning();
+    assert.strictEqual(daily.notices.length, 0, 'no second alert inside the day');
+
+    const twelve = escalation([escalationRow()], [prior]);
+    await twelve.svc.escalateOverdueRunning();
+    assert.strictEqual(twelve.notices.length, 1, 'under 25h the 12h window still re-alerts');
+  });
+
+  await test('escalateOverdueRunning: the driver is nudged for the first 24 h only', async () => {
+    const t = escalation([escalationRow({
+      request: { id: 'r9', docNumber: 'CAR-202611-0039', carRequest: { endDate: endedAgo(30 * 60) } },
+    })]);
+    await t.svc.escalateOverdueRunning();
+    assert.strictEqual(t.sent.length, 0, 'hourly pings stop after a day on the road');
+    assert.strictEqual(t.notices.length, 1, 'Administration still gets the manual-close alert');
+  });
+
+  // ------------------------------------------------ 7) Step 2.6: day-end digest
+  function digest(assignments: any[]) {
+    const sent: string[] = [];
+    const prisma: any = {
+      carAssignment: { findMany: async () => assignments },
+      user: { findMany: async () => [{ telegramChatId: 'chat-admin' }] },
+    };
+    const svc: any = new TripRemindersService(
+      prisma,
+      { notify: async () => ({}), notifyMany: async () => ({}) } as any,
+      { sendRaw: async (_chat: string, text: string) => { sent.push(text); }, mirrorToUser: async () => ({}) } as any,
+      { usersWithPermissions: async () => ['u-admin'] } as any,
+    );
+    return { svc, sent };
+  }
+
+  const digestRow = (over: Record<string, unknown> = {}) => ({
+    releasedAt: null, driverBackAtOfficeAt: null, endOdoAt: null,
+    startOdoKm: 341626, startOdoAt: endedAgo(240), driverArrivedAt: endedAgo(230),
+    estimatedReturnAt: null,
+    driver: { name: 'Naing Naing Tun' },
+    vehicle: { vehicleNo: '9F1213' },
+    trip: null,
+    request: { docNumber: 'CAR-202611-0039', status: 'IN_PROGRESS', carRequest: { endDate: endedAgo(180) } },
+    ...over,
+  });
+
+  await test('dayEndDigest: a held ride gets its own bucket instead of vanishing', async () => {
+    const t = digest([digestRow()]);
+    await t.svc.dayEndDigest();
+    assert.strictEqual(t.sent.length, 1, 'the digest is sent');
+    assert.match(t.sent[0], /Overdue returns — close with the return km/);
+    assert.match(t.sent[0], /CAR-202611-0039/);
+  });
+
+  await test('dayEndDigest: a ride whose ⏰ ETA is still ahead is not listed as overdue', async () => {
+    const t = digest([digestRow({ estimatedReturnAt: new Date(Date.now() + 3600 * 1000) })]);
+    await t.svc.dayEndDigest();
+    assert.strictEqual(t.sent.length, 0, 'not overdue until the ETA passes');
+  });
+
   // ------------------------------------------------------------------ summary
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length > 0) {

@@ -84,7 +84,7 @@ although the only proof of return is the Back tap (or a return odometer).
 | --- | --- |
 | Driver taps 🏁 Back at Office | Complete as today. Missing return km → keep the existing hourly admin odometer nudge (no block). |
 | Window (or ⏰ ETA, when later) ended + 15 min, ride evidence exists, no Back tap | **Do not close.** Assignment stays live, vehicle stays `IN_USE`, badge shows **Overdue return**, driver nudged (Telegram). |
-| Overdue by ≥ 2 h | Admin alert: in-app notification + Telegram mirror — "manual close needed". Repeats at most every 12 h. |
+| Overdue by ≥ 2 h | Admin alert: in-app notification + Telegram mirror — "manual close needed". Repeats at most every 12 h, then once a day after 25 h. |
 | No ride evidence at all (no Ready, no departure km, no STARTED trip) | Release as today: vehicle + driver back to pool, request `APPROVED`. |
 | Admin manual close | Return km (or explicit estimate + reason) → audited BACK odometer (no fake driver stamp) → trip/request `COMPLETED` → car freed → requester + driver notified. |
 
@@ -131,19 +131,24 @@ Definitions:
 
 ```ts
 // "the ride left the office and has not been closed out"
+// startOdoKm is the km, startOdoAt its capture time — captureOdometer writes both
 export const outOnRoadWhere = {
   releasedAt: null,
   driverBackAtOfficeAt: null,
   endOdoAt: null,
-  OR: [{ startOdoAt: { not: null } }, { driverArrivedAt: { not: null } }],
-} as const;
+  OR: [
+    { startOdoKm: { not: null } },
+    { startOdoAt: { not: null } },
+    { driverArrivedAt: { not: null } },
+  ],
+};
 
 export function isOutOnRoad(a: {
   releasedAt: Date | null; driverBackAtOfficeAt: Date | null; endOdoAt: Date | null;
-  startOdoAt: number | null; driverArrivedAt: Date | null;
+  startOdoKm: number | null; startOdoAt: Date | null; driverArrivedAt: Date | null;
 }): boolean {
-  return a.releasedAt == null && a.driverBackAtOfficeAt == null && a.endOdoAt == null
-    && (a.startOdoAt != null || a.driverArrivedAt != null);
+  if (a.releasedAt != null || a.driverBackAtOfficeAt != null || a.endOdoAt != null) return false;
+  return a.startOdoKm != null || a.startOdoAt != null || a.driverArrivedAt != null;
 }
 ```
 
@@ -199,8 +204,8 @@ if (isOutOnRoad(a)) {
 ```ts
 assignments: {
   where: { releasedAt: null, driverBackAtOfficeAt: null, endOdoAt: null,
-           OR: [{ startOdoAt: { not: null } }, { driverArrivedAt: { not: null } },
-                { trip: { status: 'STARTED' } }] },
+           OR: [{ startOdoKm: { not: null } }, { startOdoAt: { not: null } },
+                { driverArrivedAt: { not: null } }, { trip: { status: 'STARTED' } }] },
   select: { id: true },
 },
 ```
@@ -258,8 +263,8 @@ trip — exactly the split the two stages below need.
    earlier one.
    The second stage needs its own marker (audit action
    `CAR_OVERDUE_CLOSE_REQUIRED`, throttled 12 h) and its own notification title.
-3. After 24 h the admin alert drops to once a day (same marker, 24 h window)
-   instead of staying hourly.
+3. After 25 h the admin alert drops to once a day (same marker, 24 h window)
+   instead of 12-hourly.
 4. Update the copy to match the new flow:
 
 ```
@@ -281,7 +286,7 @@ body : Naing Naing Tun has not tapped "Back at Office". 9F1213 is still held
 Acceptance: with effective end `now − 30 min`, driver nudge only (plus the
 existing immediate alert for a `STARTED` trip); with effective end `now − 3 h`,
 the extra `CAR_OVERDUE_CLOSE_REQUIRED` alert + Telegram mirror once, and again
-only after 12 h; after 24 h it drops to once a day; an ⏰ ETA 2 h beyond the
+only after 12 h; after 25 h it drops to once a day; an ⏰ ETA 2 h beyond the
 window suppresses nudge, hold and escalation until that ETA passes.
 
 ### Step 3 — Badge: "departure recorded, return missing" holds the car
@@ -501,7 +506,7 @@ code already does.
 | Driver has no Telegram | Admin alert says "call the driver"; no driver nudge. |
 | Trip row exists and is `STARTED` | Already excluded from the janitor; the hold and escalation cover it. |
 | Ride never happened (no Ready, no km, no trip) | Released as today (`CAR_TRIP_WINDOW_RELEASED`), request back to `APPROVED`. |
-| Multi-day overdue (car missing / accident) | Stays `IN_USE`, admin alert repeats every 12 h (daily after 24 h), day-end digest lists it; Admin must close with a reason. |
+| Multi-day overdue (car missing / accident) | Stays `IN_USE`, admin alert repeats every 12 h (daily after 25 h), day-end digest lists it; Admin must close with a reason. |
 | Admin uses **Release** on an out-on-road ride | Must be refused. Today `release()` only blocks a `STARTED` trip; releasing sets the request back to `APPROVED` with the car unlinked, which also **wipes every odometer field** on the next `assign()` (the upsert nulls `startOdo*/endOdo*`), and `expireStaleRequests` (window +2 h) then cancels the request as unserved. Guard `release()` with the same ride-evidence test and point the caller at the manual close. |
 | Manual close while a `car_trips` row is `STARTED` | Close through `completeTrip` semantics so the trip row, `vehicle.currentMileage` and the completion bell are not written twice. |
 

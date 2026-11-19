@@ -924,10 +924,11 @@ export class TripRemindersService {
 
   /**
    * 17:30 Yangon day-end digest for Administration: every car assignment that
-   * ended its window today without a "🏁 Back at Office" tap, split into
-   * auto-closed (janitor completed them) vs mileage-open (trip STARTED —
-   * awaiting Administration's mileage close-out). One message per cars.assign
-   * holder with a Telegram chat; silent when there is nothing to report.
+   * ended its window today without a "🏁 Back at Office" tap, split into held
+   * (the janitor kept it live — only the manual close can free it), auto-closed
+   * and mileage-open (trip STARTED — awaiting Administration's mileage
+   * close-out). One message per cars.assign holder with a Telegram chat; silent
+   * when there is nothing to report.
    */
   @Cron('0 30 17 * * *')
   async dayEndDigest() {
@@ -951,8 +952,20 @@ export class TripRemindersService {
           (!a.trip || a.trip.status === 'NOT_STARTED') && ['APPROVED', 'COMPLETED'].includes(a.request.status),
       );
       const mileageOpen = assignments.filter((a) => a.trip?.status === 'STARTED');
-      if (noBack.length === 0 && mileageOpen.length === 0) return;
+      // Held (Step 1): the janitor refuses to auto-close a car that left the
+      // office, so the request stays IN_PROGRESS and neither bucket above keeps
+      // it — the miss would vanish from the one list Administration reads at
+      // 17:30. An ⏰ ETA still in the future means the ride is not overdue yet.
+      const held = assignments.filter(
+        (a) => a.request.status === 'IN_PROGRESS' && isOutOnRoad(a) &&
+          !(a.estimatedReturnAt && a.estimatedReturnAt > now),
+      );
+      if (noBack.length === 0 && mileageOpen.length === 0 && held.length === 0) return;
       const lines: string[] = ['📋 <b>Day-end — trips without "Back at Office"</b>'];
+      if (held.length > 0) {
+        lines.push('', '<b>🏁 Overdue returns — close with the return km:</b>');
+        for (const a of held) lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.driver?.name ?? 'no driver')} · ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} · ended ${fmtYgn(a.request.carRequest!.endDate)}`);
+      }
       if (noBack.length > 0) {
         lines.push('', '<b>🤖 Auto-closed (window ended, driver never tapped):</b>');
         for (const a of noBack) lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.driver?.name ?? 'no driver')} · ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} · ended ${fmtYgn(a.request.carRequest!.endDate)}`);
@@ -971,7 +984,7 @@ export class TripRemindersService {
       for (const a of admins) {
         if (a.telegramChatId) await this.telegram.sendRaw(a.telegramChatId, text).catch(() => undefined);
       }
-      this.logger.log(`day-end digest sent to ${admins.length} admin(s): ${noBack.length} auto-closed, ${mileageOpen.length} mileage-open`);
+      this.logger.log(`day-end digest sent to ${admins.length} admin(s): ${held.length} overdue, ${noBack.length} auto-closed, ${mileageOpen.length} mileage-open`);
     } catch (e) {
       this.logger.warn(`dayEndDigest failed: ${(e as Error).message}`);
     }
@@ -1289,10 +1302,13 @@ export class TripRemindersService {
   /**
    * Overdue running trips: the booking window ended but the driver never tapped
    * "🏁 Back at Office" — the vehicle still shows IN_USE and blocks new bookings.
-   * Ping the driver hourly and raise it to Administration (idempotent: one
-   * ESCALATED notification per request per 12h). Booking stays reserved until
-   * the driver signals back or Administration intervenes — that is deliberate:
-   * silently freeing a car that might still be on the road would double-book it.
+   * The driver is nudged hourly for the first 24 h (after that it is an
+   * Administration problem, not a reminder problem). Administration is told in
+   * two stages: a STARTED trip keeps the immediate alert (one ESCALATED per
+   * request per 12h), a held ride gets the distinct manual-close alert from +2h
+   * (once a day past 25h). Booking stays reserved until the driver signals back
+   * or Administration closes it — that is deliberate: silently freeing a car that
+   * might still be on the road would double-book it.
    */
   @Cron('0 15 * * * *') // hourly at :15
   async escalateOverdueRunning() {
@@ -1302,24 +1318,40 @@ export class TripRemindersService {
         where: {
           releasedAt: null,
           driverBackAtOfficeAt: null,
-          request: { carRequest: { endDate: { lt: now } } },
+          // a ⏰ ETA past the planned end is the deadline that counts — an ETA
+          // still in the future is not overdue (same rule as releaseExpired, so
+          // the hold and the escalation always agree on when "late" starts)
+          OR: [
+            { request: { carRequest: { endDate: { lt: now } } }, estimatedReturnAt: null },
+            { estimatedReturnAt: { lt: now } },
+          ],
         },
         include: {
-          driver: { select: { id: true, name: true, telegramChatId: true } },
-          vehicle: { select: { vehicleNo: true, brandModel: true } },
-          request: { select: { id: true, docNumber: true, requester: { select: { fullName: true } }, carRequest: { select: { endDate: true, destination: true } } } },
+          driver: { select: { name: true, telegramChatId: true } },
+          vehicle: { select: { vehicleNo: true } },
+          request: { select: { docNumber: true, carRequest: { select: { endDate: true } } } },
+          // held rows carry no trip (or NOT_STARTED); a STARTED trip keeps the
+          // original immediate alert and must not also get the manual-close one
+          trip: { select: { status: true } },
         },
       });
 
       for (const a of overdue) {
-        const ended = a.request.carRequest?.endDate;
-        const overMins = ended ? Math.round((now.getTime() - new Date(ended).getTime()) / 60000) : 0;
-        const when = ended ? yangonShort(new Date(ended)) : 'the scheduled end';
+        // effective end: the planned end, stretched by a driver-reported ⏰ ETA
+        const planned = a.request.carRequest?.endDate ?? null;
+        const ended = a.estimatedReturnAt && (!planned || a.estimatedReturnAt > planned) ? a.estimatedReturnAt : planned;
+        if (!ended) continue; // the query always yields one; nothing to measure without it
+        const overMins = Math.round((now.getTime() - ended.getTime()) / 60000);
+        const when = yangonShort(ended);
 
-        // 1) driver nudge on Telegram
-        if (a.driver?.telegramChatId) {
+        // 1) driver nudge on Telegram — the first 24 h only; past that the ride is
+        //    an Administration problem (manual close), and hourly pings only teach
+        //    the driver to ignore the bot
+        const driverChat = a.driver?.telegramChatId;
+        const nudgeDriver = !!driverChat && overMins < 24 * 60;
+        if (nudgeDriver && driverChat) {
           await this.telegram.sendRaw(
-            a.driver.telegramChatId,
+            driverChat,
             [
               `🏁 <b>အချိန်ကျော်နေသည် — ${escapeHtml(a.request.docNumber)}</b>`,
               `ခရီးစဉ်အတွက် ယူထားသော အချိန်သည် ${escapeHtml(when)} မှာ ကုန်ဆုံးခဲ့ပြီး (${overMins} မိနစ် ကြာပြီ) ခရီးစဉ် မပိတ်ရသေးပါ။`,
@@ -1330,22 +1362,57 @@ export class TripRemindersService {
           ).catch(() => undefined);
         }
 
-        // 2) Administration escalation — one per request per 12h
-        const recent = await this.prisma.notification.findFirst({
-          where: { type: 'ESCALATED' as never, requestId: a.requestId, createdAt: { gte: new Date(now.getTime() - 12 * 3600 * 1000) } },
+        // 2) Administration — two stages: a STARTED trip can be completed, a
+        //    held ride has no exit at all without the audited manual close.
+        if (a.trip?.status === 'STARTED') {
+          // the existing immediate safety net, unchanged (one per request / 12h)
+          const recent = await this.prisma.notification.findFirst({
+            where: { type: 'ESCALATED' as never, requestId: a.requestId, createdAt: { gte: new Date(now.getTime() - 12 * 3600 * 1000) } },
+            select: { id: true },
+          });
+          if (recent) continue;
+
+          const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
+          await this.notifications.notifyMany(adminIds, {
+            type: 'ESCALATED' as never,
+            title: `🏁 Trip overdue — ${a.request.docNumber}`,
+            body: `${a.driver?.name ?? 'The driver'} has not tapped "Back at Office" ${overMins} min after the window ended (${when}). Vehicle ${a.vehicle?.vehicleNo ?? '—'} is still reserved${nudgeDriver ? ' — driver was nudged on Telegram' : a.driver?.telegramChatId ? ' — nudges stopped after 24 h, call the driver' : ' — driver has no Telegram, call them'}. Use the request page to complete the trip or release the assignment.`,
+            link: `/requests/${a.requestId}`,
+            requestId: a.requestId,
+          });
+          this.logger.log(`escalated overdue running trip ${a.request.docNumber} (+${overMins} min)`);
+          continue;
+        }
+
+        // held: no trip row to complete, so the only way to free the car is the
+        // manual close (Step 5). Say it once, from +2h; after 25h overdue the
+        // reminder drops to once a day. The marker is separate from ESCALATED
+        // on purpose — the earlier notice must not swallow this one.
+        // (a held row is nudged about the driver above, but needs no STARTED gate)
+        if (overMins < 120) continue;
+        const recentClose = await this.prisma.auditLog.findFirst({
+          where: {
+            action: 'CAR_OVERDUE_CLOSE_REQUIRED', recordId: a.requestId,
+            createdAt: { gte: new Date(now.getTime() - (overMins >= 25 * 60 ? 24 : 12) * 3600 * 1000) },
+          },
           select: { id: true },
         });
-        if (recent) continue;
-
-        const adminIds = await this.permissions.usersWithPermissions(['cars.assign']);
-        await this.notifications.notifyMany(adminIds, {
+        if (recentClose) continue;
+        await this.prisma.auditLog.create({
+          data: {
+            action: 'CAR_OVERDUE_CLOSE_REQUIRED', module: 'CARS', recordId: a.requestId,
+            newValue: { vehicleId: a.vehicleId, driverId: a.driverId, minutesOver: overMins, auto: true },
+          },
+        }).catch(() => undefined);
+        const adminsHeld = await this.permissions.usersWithPermissions(['cars.assign']);
+        await this.notifications.notifyMany(adminsHeld, {
           type: 'ESCALATED' as never,
-          title: `🏁 Trip overdue — ${a.request.docNumber}`,
-          body: `${a.driver?.name ?? 'The driver'} has not tapped "Back at Office" ${overMins} min after the window ended (${when}). Vehicle ${a.vehicle?.vehicleNo ?? '—'} is still reserved${a.driver?.telegramChatId ? ' — driver was nudged on Telegram' : ' — driver has no Telegram, call them'}. Use the request page to complete the trip or release the assignment.`,
+          title: `🏁 Return overdue — ${a.request.docNumber} (${Math.floor(overMins / 60)}h ${overMins % 60}m)`,
+          body: `${a.driver?.name ?? 'The driver'} has not tapped "Back at Office". ${a.vehicle?.vehicleNo ?? 'The vehicle'} is still held and cannot be assigned. Close the trip manually with the return km from the request page (Cars → request → Odometer / Close trip).`,
           link: `/requests/${a.requestId}`,
           requestId: a.requestId,
         });
-        this.logger.log(`escalated overdue running trip ${a.request.docNumber} (+${overMins} min)`);
+        this.logger.log(`overdue close required for ${a.request.docNumber} (+${overMins} min)`);
       }
     } catch (e) {
       this.logger.warn(`escalateOverdueRunning failed: ${(e as Error).message}`);
