@@ -721,6 +721,18 @@ export default function Inventory() {
       {tab === 'catalog' && (
         <>
 
+          {/* The catalog is the only way to raise an OSR, so say what to do when
+              the item is missing instead of leaving the requester stuck. */}
+          <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/70 px-3 py-2 text-xs text-blue-900">
+            <b>Item not in the catalog?</b> This list holds only what Administration already stocks. If an
+            everyday supply is missing, ask Administration to add it from <b>Inventory → + New Item</b> (name,
+            unit, opening stock), then request it here. To buy something new, raise a{' '}
+            <Link to="/procurement" className="font-medium underline hover:text-blue-700">
+              Procurement → New Purchase Request
+            </Link>{' '}
+            with its description, quantity and estimated price — it enters stock once the purchase is received.
+          </div>
+
           <div className="flex justify-end mb-3">
             <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden text-sm">
               <button

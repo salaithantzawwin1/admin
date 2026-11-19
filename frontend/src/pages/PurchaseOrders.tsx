@@ -166,7 +166,9 @@ export default function PurchaseOrders() {
   useEffect(() => {
     if (!canManage) return;
     api<{ items: Supplier[] } | Supplier[]>('/suppliers?pageSize=200').then((r) => setSuppliers((r as { items?: Supplier[] }).items ?? (r as Supplier[]))).catch(() => undefined);
-    api<{ items: InventoryItemOpt[] }>('/inventory/items?pageSize=500').then((r) => setInventoryItems(r.items ?? [])).catch(() => undefined);
+    api<{ items: InventoryItemOpt[] } | InventoryItemOpt[]>('/inventory/items')
+      .then((r) => setInventoryItems(Array.isArray(r) ? r : r.items ?? []))
+      .catch(() => undefined);
     api<{ items: ({ id: string; docNumber: string; title?: string | null } | PrOption)[] }>('/procurement/requests?status=APPROVED&pageSize=50')
       .then((r) => setApprovedPrs((r as { items?: PrOption[] }).items ?? []))
       .catch(() => undefined);
