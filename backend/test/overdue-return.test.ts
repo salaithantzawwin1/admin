@@ -600,6 +600,17 @@ async function main() {
     assert.strictEqual(t.ops.length, 0);
   });
 
+  await test('closeTripManually: a STARTED trip cannot close below its trip-row start km', async () => {
+    // the departure number of a STARTED trip is carTrips.startMileage, not the
+    // assignment capture columns — the guard must read both
+    const t = closer({ startOdoKm: null, startOdoAt: null, trip: { id: 't1', status: 'STARTED', startMileage: 341626 } });
+    await assert.rejects(
+      () => t.svc.closeTripManually('r1', { endOdoKm: 341600 }, { userId: 'u-admin', username: 'admin' }),
+      /cannot be less than/,
+    );
+    assert.strictEqual(t.ops.length, 0);
+  });
+
   await test('closeTripManually: a ride that never left cannot be closed this way', async () => {
     const t = closer({ startOdoKm: null, startOdoAt: null, driverArrivedAt: null });
     await assert.rejects(

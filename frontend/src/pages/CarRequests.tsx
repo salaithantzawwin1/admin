@@ -13,6 +13,8 @@ interface FleetVehicle {
   vehicleNo: string;
   brandModel: string;
   status: string;
+  /** departure recorded, no return yet — the server holds the car (Step 3) */
+  overdueReturn?: boolean;
   bookings: {
     docNumber?: string;
     startDate: string;
@@ -451,7 +453,17 @@ export default function CarRequests() {
               <div key={v.id} className="border border-gray-200 rounded-lg p-3">
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-medium text-gray-800 text-sm">{v.vehicleNo}</div>
-                  <Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge>
+                  <div className="flex items-center gap-1.5">
+                    {v.overdueReturn && (
+                      <span
+                        className="text-[10px] font-semibold text-red-700 bg-red-50 border border-red-200 rounded-full px-1.5 py-0.5 whitespace-nowrap"
+                        title="Departure recorded, no return yet"
+                      >
+                        ⚠ overdue return
+                      </span>
+                    )}
+                    <Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge>
+                  </div>
                 </div>
                 <div className="text-xs text-gray-500 mt-0.5">{v.brandModel}</div>
                 {v.bookings.length === 0 ? (

@@ -628,9 +628,9 @@ requires Steps 1–6 to ship as one release.
 | 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **done**, uncommitted | `assign()` |
 | 4.6 — web picker (`CarPanel`) hides a held car | **done**, uncommitted (`!v.overdueReturn`) | `CarPanel.tsx` |
 | 4.7 — `reassign()` refuses an out-on-road ride | **done** — `3531b82`; `release()` too (§7 edge case) | `reassign()`, `release()` |
-| 5 — admin manual close (API, audit, notices, no fake Back tap) | **done**, uncommitted | `closeTripManually()` + `POST requests/:requestId/trip/close` |
-| 6 — admin UI for the manual close | **not started** | request trip panel |
-| — `overdueReturn` rendered in the UI | **not started** — payload only | fleet cards, `CarPanel` |
+| 5 — admin manual close (API, audit, notices, no fake Back tap) | **done** — `7c673c7` | `closeTripManually()` + `POST requests/:requestId/trip/close` |
+| 6 — admin UI for the manual close | **done**, uncommitted | `CarPanel.tsx` (chip, button, modal) |
+| — `overdueReturn` rendered in the UI | **done**, uncommitted | `Fleet.tsx`, `CarRequests.tsx` fleet card, `TripProgress` lane |
 | — deploy / push | **deliberately not done** — §9 gate | — |
 
 Step 4 landed in `3531b82` (4.1, 4.2/4.4/4.5, 4.6, 4.7 + `release()`), so the
@@ -646,16 +646,30 @@ its document. Audits `CAR_ODOMETER_RECORDED` (`source: 'ADMIN_MANUAL'`) and
 `CAR_TRIP_MANUALLY_CLOSED`; notifies the requester, the driver's Telegram and the
 other `cars.assign` holders. `driverBackAtOfficeAt` is left null on purpose.
 `completeTrip()` now shares `closeTripRow()`, so the two writers cannot drift.
+The STARTED-trip guard reads both departure numbers (`startOdoKm` **or**
+`carTrips.startMileage`), so a trip can no longer close below its own start.
+
+Step 6 detail (as built): `CarPanel` derives `overdueReturn` from the same rule
+the server holds the car with — live assignment, departure recorded (Ready tap /
+`startOdoAt` / STARTED trip), no Back tap, and the **effective end**
+(`estimatedReturnAt ?? endDate`) in the past. The driver lane of `TripProgress`
+wears a red `⚠ Overdue return` chip, and Administration gets a
+**Close trip manually** button that opens a modal: return km (validated against
+the departure reading before the request is sent), an "estimate" checkbox that
+reveals a required reason (≥ 5 chars), and a start-km / distance preview. It
+POSTs `…/trip/close` only — never the odometer endpoint, which requires a photo
+and would reject a km-only close before the close ever ran. `Fleet.tsx` and the
+requester fleet card render `overdueReturn` as a red tag beside the `IN_USE`
+badge (no new status value).
 
 ### Tests green at this commit
 
-`tsc -p tsconfig.json --noEmit` → 0, `frontend` `tsc -b` → 0. Suites:
-`overdue-return` 28, `overdue-fleet` 13 (9 + 4 Step 4 guards), `cars-fixes` 72,
-`telegram-car-request` 219 checks, `car-lifecycle` 24, `car-odometer` 25,
-`fleet-expiry` 10 — all 0 failed.
+`tsc -p tsconfig.json --noEmit` → 0, `frontend` `npm run build` → 0. Suites:
+`overdue-return` 35 (28 + 6 Step 5 + 1 STARTED-trip guard), `overdue-fleet` 13
+(9 + 4 Step 4 guards), `cars-fixes` 72, `telegram-car-request` 219 checks,
+`car-lifecycle` 24, `car-odometer` 25, `fleet-expiry` 10 — all 0 failed.
 
 ### Next up
 
-1. Step 6 — the admin UI for the manual close (trip panel button + modal) and
-   rendering `overdueReturn` in the fleet and request cards.
-2. One deploy of Steps 1–6 (§9), then watch the first real late return.
+1. One deploy of Steps 1–6 (§9), then watch the first real late return. Nothing
+   in the plan is left to build.

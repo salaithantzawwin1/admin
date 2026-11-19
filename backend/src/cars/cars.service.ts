@@ -2628,9 +2628,15 @@ export class CarsService {
     if (!isOutOnRoad(assignment) && assignment.trip?.status !== 'STARTED') {
       throw new ConflictException('This request has no ride to close — no departure was recorded');
     }
-    if (assignment.startOdoKm != null && endOdoKm < assignment.startOdoKm) {
+    // The departure reading lives on either record: the assignment's departure
+    // capture columns (Ready + km) or the trip row's `startMileage` (Start trip
+    // / OdometerBox). Checking only `startOdoKm` let a STARTED trip close below
+    // its own start, which is a negative distance on the monthly report —
+    // completeTrip already refuses exactly that.
+    const departureKm = assignment.startOdoKm ?? assignment.trip?.startMileage ?? null;
+    if (departureKm != null && endOdoKm < departureKm) {
       throw new BadRequestException(
-        `Return reading (${endOdoKm.toLocaleString()} km) cannot be less than the departure reading (${assignment.startOdoKm.toLocaleString()} km)`,
+        `Return reading (${endOdoKm.toLocaleString()} km) cannot be less than the departure reading (${departureKm.toLocaleString()} km)`,
       );
     }
 

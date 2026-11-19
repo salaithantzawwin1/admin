@@ -83,6 +83,8 @@ interface Vehicle {
   capacity: number;
   currentMileage: number;
   status: string;
+  /** departure recorded, no return yet — the server holds the car (Step 3) */
+  overdueReturn?: boolean;
   driver?: { name: string } | null;
   driverId?: string | null;
   vin?: string | null;
@@ -1382,7 +1384,14 @@ export default function Fleet() {
                   <ExpiryPill label="Reg" date={v.registrationExpiry} status={v.registrationExpiryStatus} />
                   <ExpiryPill label="Insurance" date={v.insuranceExpiry} status={v.insuranceExpiryStatus} />
                 </td>
-                <td className="px-4 py-3 text-center"><Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge></td>
+                <td className="px-4 py-3 text-center">
+                  <Badge color={VEHICLE_STATUS[v.status] ?? 'gray'}>{v.status}</Badge>
+                  {v.overdueReturn && (
+                    <div className="mt-1" title="Departure recorded, no return yet — close the trip to free the car">
+                      <Badge color="red">⚠ Overdue return</Badge>
+                    </div>
+                  )}
+                </td>
                 {canManage && (
                   <td className="px-4 py-3 text-center whitespace-nowrap">
                     <button
