@@ -55,7 +55,7 @@ export function CloseTripModal({
         body: {
           endOdoKm: value,
           estimated,
-          ...(reason.trim() ? { reason: reason.trim() } : {}),
+          reason: reason.trim() || undefined,
         },
       });
       toast('Trip closed — the car is back in the pool');

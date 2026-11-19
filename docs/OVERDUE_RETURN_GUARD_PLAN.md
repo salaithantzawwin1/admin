@@ -614,7 +614,7 @@ they inherit the fix, but their rendering of `overdueReturn` is unverified.
 
 ## 12. Progress state (19 Nov 2026)
 
-Server `/opt/admin`, branch `master`. **No deploy, no push** — §9 still
+Server `/opt/admin`, branch `main`. **No deploy, no push** — §9 still
 requires Steps 1–6 to ship as one release.
 
 | Step | State | Where |
@@ -623,18 +623,15 @@ requires Steps 1–6 to ship as one release.
 | 2a — ETA-aware escalation, 24 h driver-nudge cap | **done** — `5bd8c13` | `escalateOverdueRunning` `:1331` |
 | 2b — two-stage admin alert (+2 h, daily after 25 h) | **done** — `5bd8c13` | same |
 | 2.6 — day-end digest held bucket | **done** — `5bd8c13`; multi-day carry-over added later | `dayEndDigest` `:934` (held `:970`) |
-| 3 — badges + `overdueReturn`, `overlaps()` hold, `driverClash`, busy lists | **done**, in this commit | §Step 3 above |
-| 4.1 — Telegram vehicle picker hides/labels a held car | **done**, uncommitted — `🏁 Still out` line, no button | `telegram-car-actions.service.ts` vehicle list |
-| 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **done**, uncommitted | `assign()` |
-| 4.6 — web picker (`CarPanel`) hides a held car | **done**, uncommitted (`!v.overdueReturn`) | `CarPanel.tsx` |
+| 3 — badges + `overdueReturn`, `overlaps()` hold, `driverClash`, busy lists | **done** — `f09a876` | §Step 3 above |
+| 4.1 — Telegram vehicle picker hides/labels a held car | **done** — `3531b82` (`🏁 Still out` line, no button) | `telegram-car-actions.service.ts` vehicle list |
+| 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **done** — `3531b82` | `assign()` |
+| 4.6 — web picker (`CarPanel`) hides a held car | **done** — `3531b82` (`!v.overdueReturn`) | `CarPanel.tsx` |
 | 4.7 — `reassign()` refuses an out-on-road ride | **done** — `3531b82`; `release()` too (§7 edge case) | `reassign()`, `release()` |
 | 5 — admin manual close (API, audit, notices, no fake Back tap) | **done** — `7c673c7` | `closeTripManually()` + `POST requests/:requestId/trip/close` |
-| 6 — admin UI for the manual close | **done**, in this commit | `CarPanel.tsx` (chip, button), `CloseTripModal.tsx` |
-| — `overdueReturn` rendered in the UI | **done**, in this commit | `Fleet.tsx`, `CarRequests.tsx` fleet card, `TripProgress` lane (prop) |
+| 6 — admin UI for the manual close | **done** — `51b1b85`; dialog extracted in `0c2b776` | `CarPanel.tsx` (chip, button), `CloseTripModal.tsx` |
+| — `overdueReturn` rendered in the UI | **done** — `51b1b85`; one rule + prop since `0c2b776` | `Fleet.tsx`, `CarRequests.tsx` fleet card, `TripProgress` lane (prop) |
 | — deploy / push | **deliberately not done** — §9 gate | — |
-
-Step 4 landed in `3531b82` (4.1, 4.2/4.4/4.5, 4.6, 4.7 + `release()`), so the
-row above is no longer uncommitted.
 
 Step 5 detail (as built): `closeTripManually()` validates the reading, refuses a
 closed row with 409 (`releasedAt` / `driverBackAtOfficeAt` / `endOdoAt` set) and a
@@ -660,7 +657,15 @@ reveals a required reason (≥ 5 chars), and a start-km / distance preview. It
 POSTs `…/trip/close` only — never the odometer endpoint, which requires a photo
 and would reject a km-only close before the close ever ran. `Fleet.tsx` and the
 requester fleet card render `overdueReturn` as a red tag beside the `IN_USE`
-badge (no new status value). The rule is computed in ONE place: `CarPanel` evaluates `overdueReturn` and hands it to `TripProgress` as a prop (`TripProgress` used to recompute its own copy), and the dialog body moved to `components/CloseTripModal.tsx` so the panel only owns the open/closed state. The rule also requires `endOdoAt = null`: a BACK reading recorded through `OdometerBox` already closes the ride for the server (`outOnRoadWhere` needs `endOdoAt: null`), so without that guard the chip and the Close button stayed on a closed trip and the POST came back 409.
+badge (no new status value).
+
+The rule is computed in ONE place: `CarPanel` evaluates `overdueReturn` and hands
+it to `TripProgress` as a prop (`TripProgress` used to recompute its own copy),
+and the dialog body moved to `components/CloseTripModal.tsx` so the panel only
+owns the open/closed state. The rule also requires `endOdoAt = null`: a BACK
+reading recorded through `OdometerBox` already closes the ride for the server
+(`outOnRoadWhere` needs `endOdoAt: null`), so without that guard the chip and the
+Close button stayed on a closed trip and the POST came back 409.
 
 ### Tests green at this commit
 

@@ -325,7 +325,7 @@ export function CarPanel({
     rideEnd.getTime() < Date.now()
   );
   // the departure reading the modal validates against (assignment or trip row)
-  const departureKm = liveAssignment ? liveAssignment.startOdoKm ?? trip?.startMileage ?? null : null;
+  const departureKm = liveAssignment?.startOdoKm ?? trip?.startMileage ?? null;
   // Administration fleet-plan controls: cancel or shift time on live requests
   const showAdminControls = canAssign && ['APPROVED', 'PENDING_APPROVAL', 'IN_PROGRESS'].includes(status);
 
