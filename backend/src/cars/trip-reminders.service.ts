@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { ODO_FILE_NAME, ODO_FILE_TTL_MS, ODO_PENDING_DIR, odoPath } from './odometer-files';
+import { isOutOnRoad } from './overdue.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
@@ -316,6 +317,24 @@ export class TripRemindersService {
           continue;
         }
       }
+      // The convoy branch ABOVE must stay first: "Back at Office" is a per-row
+      // stamp (telegram.manualAck stamps one row, and captureOdometer copies the
+      // reading — not the tap — to the partner rows), so a convoy partner whose
+      // own window closed early can carry no evidence on its row while the group
+      // has long returned. Holding it here instead of closing it with its group
+      // would keep that row live for ever.
+      if (isOutOnRoad(a)) {
+        // The ride left the office and never came back: hold instead of closing.
+        // "Noted/Ready" only says the driver acknowledged the trip; the proof of
+        // return is the 🏁 Back tap or a return reading, and neither happened.
+        if (a.vehicleId) {
+          await this.prisma.vehicle
+            .update({ where: { id: a.vehicleId }, data: { status: 'IN_USE' } })
+            .catch(() => undefined);
+        }
+        await this.auditHeldOnce(a);
+        continue;
+      }
       if (a.driverNotedAt || a.driverArrivedAt) {
         // driver confirmed the ride → complete it, do NOT re-await a car
         await this.prisma.$transaction([
@@ -397,11 +416,47 @@ export class TripRemindersService {
         console.log(`[cars] released ${a.request.docNumber} at window end (no driver confirmation)`);
       }
     }
-    if (stuck.length > 0) {
-      console.log(`[cars] auto-released ${stuck.length} expired assignment(s): ${stuck.map((a) => a.request.docNumber).join(', ')}`);
-    }
     await this.freeOrphanedDrivers();
     await this.renormalizeVehicleStatuses();
+  }
+
+  /**
+   * One `CAR_OVERDUE_RETURN_HELD` row per request per 12 h — the same throttle
+   * style `escalateOverdueRunning` uses for its ESCALATED notice, so a 30-minute
+   * sweep cannot flood the audit trail with the same hold. Never throws: the
+   * hold itself is the status write above, this is only the trail.
+   */
+  private async auditHeldOnce(a: {
+    requestId: string;
+    vehicleId: string | null;
+    driverId: string | null;
+    request: { docNumber: string; carRequest?: { endDate: Date } | null };
+  }): Promise<void> {
+    try {
+      const since = new Date(Date.now() - 12 * 3600 * 1000);
+      const recent = await this.prisma.auditLog.findFirst({
+        where: { action: 'CAR_OVERDUE_RETURN_HELD', recordId: a.requestId, createdAt: { gte: since } },
+        select: { id: true },
+      });
+      if (recent) return;
+      const endDate = a.request.carRequest?.endDate ?? null;
+      await this.prisma.auditLog.create({
+        data: {
+          action: 'CAR_OVERDUE_RETURN_HELD', module: 'CARS', recordId: a.requestId,
+          newValue: {
+            reason: 'Window ended with the ride still out and no "Back at Office" tap — vehicle held IN_USE, manual close required',
+            vehicleId: a.vehicleId,
+            driverId: a.driverId,
+            endDate: endDate ? endDate.toISOString() : null,
+            minutesOver: endDate ? Math.round((Date.now() - endDate.getTime()) / 60000) : null,
+            auto: true,
+          },
+        },
+      });
+      console.log(`[cars] holding ${a.request.docNumber} — ride out past window, no Back tap`);
+    } catch {
+      /* best-effort — a missing audit must not stop the sweep */
+    }
   }
 
   /**
@@ -489,7 +544,22 @@ export class TripRemindersService {
         select: {
           id: true, vehicleNo: true,
           carRequests: { where: { request: { status: { in: ['SUBMITTED', 'PENDING_APPROVAL', 'APPROVED', 'IN_PROGRESS'] as never } } }, select: { startDate: true, endDate: true } },
-          assignments: { where: { releasedAt: null, trip: { status: 'STARTED' } }, select: { id: true } },
+          // a held ride is live too: releasedAt/back/return are all empty and the
+          // sweep already excluded a STARTED trip, so without the ride-evidence
+          // arm this self-heal would free the held car every 30 minutes (and log
+          // a VEHICLE_AUTO_FREED for it).
+          assignments: {
+            where: {
+              releasedAt: null, driverBackAtOfficeAt: null, endOdoAt: null,
+              OR: [
+                { startOdoKm: { not: null } },
+                { startOdoAt: { not: null } },
+                { driverArrivedAt: { not: null } },
+                { trip: { status: 'STARTED' } },
+              ],
+            },
+            select: { id: true },
+          },
         },
       });
       for (const v of inUse) {
