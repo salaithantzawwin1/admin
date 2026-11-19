@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma/prisma.module';
 import { ODO_FILE_NAME, ODO_FILE_TTL_MS, ODO_PENDING_DIR, odoPath } from './odometer-files';
-import { isOutOnRoad } from './overdue.util';
+import { isHeldRide, isOutOnRoad, liveRideWhere } from './overdue.util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { PermissionsService } from '../auth/permissions.service';
@@ -937,8 +937,16 @@ export class TripRemindersService {
       const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 17, 30)); // yesterday 17:30 UTC ≈ today 00:00 Yangon
       const assignments = await this.prisma.carAssignment.findMany({
         where: {
-          request: { carRequest: { endDate: { gte: dayStart, lte: now } } },
-          OR: [{ driverBackAtOfficeAt: null }, { driverBackAtOfficeAt: { gte: dayStart } }],
+          // Today's misses, PLUS every ride still out from an earlier day: a car
+          // nobody closed is an open item until Administration closes it, so it
+          // must not drop off this list after one night.
+          OR: [
+            {
+              request: { carRequest: { endDate: { gte: dayStart, lte: now } } },
+              OR: [{ driverBackAtOfficeAt: null }, { driverBackAtOfficeAt: { gte: dayStart } }],
+            },
+            { AND: [liveRideWhere, { request: { status: 'IN_PROGRESS', carRequest: { endDate: { lt: dayStart } } } }] },
+          ],
         },
         include: {
           driver: { select: { name: true } },
@@ -956,15 +964,24 @@ export class TripRemindersService {
       // office, so the request stays IN_PROGRESS and neither bucket above keeps
       // it — the miss would vanish from the one list Administration reads at
       // 17:30. An ⏰ ETA still in the future means the ride is not overdue yet.
+      // The query carries these over from earlier days, so one stuck car nags
+      // every evening until it is closed; `isHeldRide` keeps a STARTED trip in
+      // the mileage bucket instead of counting it twice.
       const held = assignments.filter(
-        (a) => a.request.status === 'IN_PROGRESS' && isOutOnRoad(a) &&
+        (a) => a.request.status === 'IN_PROGRESS' && isOutOnRoad(a) && isHeldRide(a) &&
           !(a.estimatedReturnAt && a.estimatedReturnAt > now),
       );
       if (noBack.length === 0 && mileageOpen.length === 0 && held.length === 0) return;
       const lines: string[] = ['📋 <b>Day-end — trips without "Back at Office"</b>'];
       if (held.length > 0) {
         lines.push('', '<b>🏁 Overdue returns — close with the return km:</b>');
-        for (const a of held) lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.driver?.name ?? 'no driver')} · ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} · ended ${fmtYgn(a.request.carRequest!.endDate)}`);
+        for (const a of held) {
+          // the date, not just a clock time: a car held since Monday must not
+          // read like it ended at 17:30 today
+          const ended = new Date(a.request.carRequest!.endDate);
+          const daysLate = Math.floor((now.getTime() - ended.getTime()) / 86_400_000);
+          lines.push(`• ${escapeHtml(a.request.docNumber)} — ${escapeHtml(a.driver?.name ?? 'no driver')} · ${escapeHtml(a.vehicle?.vehicleNo ?? '—')} · ended ${yangonShort(ended)}${daysLate > 0 ? ` · ${daysLate} d late` : ''}`);
+        }
       }
       if (noBack.length > 0) {
         lines.push('', '<b>🤖 Auto-closed (window ended, driver never tapped):</b>');

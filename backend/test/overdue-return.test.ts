@@ -387,10 +387,41 @@ async function main() {
   });
 
   // ------------------------------------------------ 7) Step 2.6: day-end digest
+  /**
+   * Minimal Prisma `where` evaluator (OR/AND, dates, null, not) so the digest
+   * tests run the QUERY, not only the in-memory bucket filters — a row that no
+   * arm asks for must never reach the message.
+   */
+  function matchesWhere(row: any, where: any): boolean {
+    return Object.entries(where ?? {}).every(([key, cond]: [string, any]) => {
+      if (key === 'OR') return (cond as any[]).some((c) => matchesWhere(row, c));
+      if (key === 'AND') return (cond as any[]).every((c) => matchesWhere(row, c));
+      const value = row?.[key];
+      if (cond === null) return value == null;
+      if (cond instanceof Date) return value != null && new Date(value).getTime() === cond.getTime();
+      if (typeof cond !== 'object') return value === cond;
+      const ops = Object.keys(cond);
+      if (!ops.some((op) => ['not', 'lt', 'lte', 'gt', 'gte'].includes(op))) return matchesWhere(value, cond);
+      if ('not' in cond) return cond.not === null ? value != null : value !== cond.not;
+      if (value == null) return false;
+      const t = new Date(value).getTime();
+      if ('lt' in cond && !(t < new Date(cond.lt).getTime())) return false;
+      if ('lte' in cond && !(t <= new Date(cond.lte).getTime())) return false;
+      if ('gt' in cond && !(t > new Date(cond.gt).getTime())) return false;
+      if ('gte' in cond && !(t >= new Date(cond.gte).getTime())) return false;
+      return true;
+    });
+  }
+
   function digest(assignments: any[]) {
     const sent: string[] = [];
     const prisma: any = {
-      carAssignment: { findMany: async () => assignments },
+      carAssignment: {
+        findMany: async (args: any) => {
+          assert.ok(args?.where, 'the digest must ask for a window');
+          return assignments.filter((a) => matchesWhere(a, args.where));
+        },
+      },
       user: { findMany: async () => [{ telegramChatId: 'chat-admin' }] },
     };
     const svc: any = new TripRemindersService(
@@ -425,6 +456,34 @@ async function main() {
     const t = digest([digestRow({ estimatedReturnAt: new Date(Date.now() + 3600 * 1000) })]);
     await t.svc.dayEndDigest();
     assert.strictEqual(t.sent.length, 0, 'not overdue until the ETA passes');
+  });
+
+  await test('dayEndDigest: a ride held for days is still listed every evening', async () => {
+    // the window ended four days ago — a `endDate >= dayStart` floor dropped it
+    const t = digest([digestRow({
+      request: { docNumber: 'CAR-202611-0039', status: 'IN_PROGRESS', carRequest: { endDate: endedAgo(4 * 24 * 60) } },
+    })]);
+    await t.svc.dayEndDigest();
+    assert.strictEqual(t.sent.length, 1, 'a car stuck since last week still reports');
+    assert.match(t.sent[0], /Overdue returns — close with the return km/);
+    assert.match(t.sent[0], /4 d late/, 'the message says how long it has been out');
+  });
+
+  await test('dayEndDigest: an old ride that was closed is not dragged back in', async () => {
+    const t = digest([digestRow({
+      driverBackAtOfficeAt: endedAgo(4 * 24 * 60),
+      request: { docNumber: 'CAR-202611-0030', status: 'COMPLETED', carRequest: { endDate: endedAgo(4 * 24 * 60) } },
+    })]);
+    await t.svc.dayEndDigest();
+    assert.strictEqual(t.sent.length, 0, 'history stays history');
+  });
+
+  await test('dayEndDigest: a STARTED trip stays in the mileage bucket, not the hold', async () => {
+    const t = digest([digestRow({ trip: { status: 'STARTED' } })]);
+    await t.svc.dayEndDigest();
+    assert.strictEqual(t.sent.length, 1);
+    assert.match(t.sent[0], /Mileage open/);
+    assert.doesNotMatch(t.sent[0], /Overdue returns/, 'a STARTED trip has its own close-out, not the manual hold');
   });
 
   // ------------------------------------------------------------------ summary

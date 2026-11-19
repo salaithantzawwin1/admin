@@ -282,6 +282,9 @@ body : Naing Naing Tun has not tapped "Back at Office". 9F1213 is still held
    drops out of the digest; the "Auto-closed" heading would also become a lie
    once Step 1 lands. Add `overdue` (held, `endDate` today, no Back tap) and
    render it first: `🏁 Overdue returns — close with the return km`.
+   The list is carried over from earlier days too (a car stuck since Monday keeps
+   reporting every evening, now with the date and `N d late`), and a `STARTED`
+   trip stays in the mileage bucket instead of landing in both.
 
 Acceptance: with effective end `now − 30 min`, driver nudge only (plus the
 existing immediate alert for a `STARTED` trip); with effective end `now − 3 h`,
@@ -291,82 +294,46 @@ window suppresses nudge, hold and escalation until that ETA passes.
 
 ### Step 3 — Badge: "departure recorded, return missing" holds the car
 
-The predicate and its Prisma fragment already exist from Step 1
-(`backend/src/cars/overdue.util.ts` — `outOnRoadWhere` / `isOutOnRoad`). Every
-reader below imports them; there is no second definition to drift.
+Implemented. The predicate and its Prisma fragment have one home,
+`backend/src/cars/overdue.util.ts` — `outOnRoadWhere` `:18` /
+`isOutOnRoad` `:50`, the union `liveRideWhere` `:35` and
+`isHeldRide` `:45`, the non-`STARTED` half of that union). Every reader
+below imports them; there is no second definition to drift.
 
-Then replace the `startedTrips` queries with an OR of both holds:
+- `fleet.service.ts:485` (`listVehicles`, live query
+  `:514`, flag `:531`) — one `liveRideWhere` query replaces
+  `startedTrips`; the row already maps to `IN_USE` and now carries
+  `overdueReturn: boolean`.
+- `cars.service.ts:336` (`requesterFleetOverview`, `liveRides`
+  `:405`, `heldNow` `:419`) — same union, `effectiveEnd` still
+  stretches coverage for a ⏰ ETA. The hold forces `coversNow` `:425`
+  directly instead of travelling through the ETA map: for an overdue ride
+  `lateEnd` is already in the past, so the badge would still read AVAILABLE.
+  Row carries `overdueReturn` `:443`.
+- `fleet.service.ts:719` (`listDrivers`, live query
+  `:746`, status map `:760`) — same union, so a held
+  driver stays `ON_TRIP` instead of being derived back to `AVAILABLE`.
+- `cars.service.ts:547` (`overlaps()`, conflicts `:576`, hold check
+  `:606–622`) — a window that starts inside the hand-back
+  buffer (`bufferMinutes()`, default 30 min) on a held car is refused with the
+  synthetic conflict `🏁 Still out — return overdue`. Two query
+  savings: the hold query is skipped entirely when the window starts beyond the
+  buffer (tomorrow stays bookable), and the caller's `sharedTripId` lookup only
+  runs when something can overlap (`stretched.length > 0 || held`), so a free
+  car costs one query. A hold in the caller's own `sharedTripId` is not a
+  conflict (a convoy may extend its own ride). `findMany({ take: 1 })` rather
+  than `findFirst` keeps the existing test mocks working.
+- `cars.service.ts:659` (`driverClash`) — a third `OR` arm
+  `{ assignment: outOnRoadWhere }`: a held ride clashes for any window because
+  the driver is provably still on the road.
+- `fleet.service.ts:692` (`busyDriverIds`) and the inline list in
+  `telegram-car-actions.service.ts:772` (`:784`) — union with
+  `outOnRoadWhere`, so both driver pickers see a held driver as busy.
 
-- `fleet.service.ts:511` (`listVehicles`, `:484`) — union `STARTED` trips and
-  `outOnRoadWhere`; the row already maps to `IN_USE`. Add
-  `overdueReturn: boolean` to the returned row.
-- `cars.service.ts:403` (`requesterFleetOverview`, `:335`) — same union, keep
-  `effectiveEnd` so an ETA still stretches the coverage; add `overdueReturn`.
-  **Careful:** for an overdue ride `lateEnd` is already in the past, so
-  `lateEnd >= now` is false and the badge would still read AVAILABLE (or BOOKED
-  through the `mine.length` fallback). The hold must force `coversNow = true`
-  directly (`|| heldNow.has(v.id)`), not travel through the ETA map.
-- `fleet.service.ts:733` (busy/availability maps) — same union.
-- `cars.service.ts overlaps()` — after the ETA-stretched conflict filter, add:
-
-```ts
-// after the ETA-stretched conflict filter, before the shared-group reconciliation
-const now = new Date();
-const held = await this.prisma.carAssignment.findFirst({
-  where: {
-    vehicleId, ...outOnRoadWhere,
-    ...(excludeRequestId ? { requestId: { not: excludeRequestId } } : {}),
-  },
-  select: {
-    requestId: true,
-    request: { select: { docNumber: true, carRequest: { select: { startDate: true, endDate: true, sharedTripId: true } } } },
-  },
-});
-// A late car only poisons the near future. Refuse a window that starts inside
-// the hand-back buffer (default 30 min, bufferMinutes() :302); tomorrow's
-// booking is legitimate business and must stay bookable while today's car is out.
-const bufferMs = (await this.bufferMinutes()) * 60_000;
-if (held && start.getTime() < now.getTime() + bufferMs) {
-  const own = excludeRequestId
-    ? await this.prisma.carRequest.findUnique({ where: { requestId: excludeRequestId }, select: { sharedTripId: true } })
-    : null;
-  const heldGroup = held.request.carRequest?.sharedTripId ?? null;
-  if (!own?.sharedTripId || own.sharedTripId !== heldGroup) {
-    return {
-      available: false,
-      conflicts: [{
-        requestId: held.requestId,
-        sharedTripId: heldGroup,
-        startDate: now,
-        endDate: new Date(now.getTime() + bufferMs),
-        request: { docNumber: '🏁 Still out — return overdue' },
-      }],
-    };
-  }
-}
-```
-
-  The buffer guard is not optional: without it the hold refuses *every* future
-  window for that car, so a car 20 minutes late could not be booked for next
-  week — the same over-blocking the ETA stretch exists to avoid. A hold that
-  belongs to the caller's own `sharedTripId` is not a conflict (a convoy may
-  still extend its own ride). The synthetic `conflicts[]` entry carries
-  `requestId`, `startDate`, `endDate`, `sharedTripId` and `request.docNumber`
-  because `assign()` reads `conflicts[0].startDate/endDate` for its 409 message
-  (`:815`) and the picker form renders them.
-- `cars.service.driverClash` — treat an overdue out-on-road assignment of the
-  same driver as a clash (the driver is provably still driving).
-- `fleet.service.listDrivers` (`:706`, status map `:746`) — its effective-status
-  map turns a DB `ON_TRIP` with no live window into `AVAILABLE`. A held driver
-  would read AVAILABLE on the Fleet page.
-- `fleet.service.busyDriverIds` (`:685`) and the inline busy-driver list in
-  `telegram-car-actions.service.ts:779` — both are window-only, so a held driver
-  is offered for a new trip.
-
-Acceptance: a held car reports `IN_USE` + `overdueReturn: true` in both fleet
-endpoints, `checkAvailability` rejects a window starting within the hand-back
-buffer (and still accepts a window for tomorrow), and a request submitted for the
-same car now shows the "still out" conflict instead of "free".
+Acceptance met: a held car reports `IN_USE` + `overdueReturn: true` in both
+fleet endpoints, `overlaps()` rejects a window starting within the hand-back
+buffer (and still accepts tomorrow), and `driverClash` refuses the same driver
+for a new window. Covered by `backend/test/overdue-fleet.test.ts` (9 tests).
 
 ### Step 4 — Telegram picker and assign guard
 
@@ -609,20 +576,20 @@ draft of this plan would have collided with existing logic.
 | 3 | `release()` on an out-on-road ride → `APPROVED` → `expireStaleRequests` cancels it 2 h later | `cars.service.ts:1832 release` (`STARTED` guard `:1849`), `trip-reminders.service.ts:619` | §7 edge case + guard |
 | 4 | `assign()` upsert wipes `startOdo*/endOdo*/driver*At` on a released row | `cars.service.ts:841–857` | Same guard: no release while ride evidence exists |
 | 5 | `captureOdometer` requires a photo; `manualAck('returned')` fakes the driver's Back tap | `cars.service.ts:1021, 1072–1075` | Step 5.4 — own write, no `driverBackAtOfficeAt` |
-| 6 | `requesterFleetOverview` would still show AVAILABLE: `lateEnd` is in the past | `cars.service.ts:403–430` (`coversNow` `:420`) | Step 3 — `coversNow` forced by the hold |
-| 7 | `overlaps()` callers read `conflicts[0].startDate/endDate` | `cars.service.ts:540, 815` | Step 3 — synthetic conflict carries the full shape |
-| 8 | `dayEndDigest` only lists `APPROVED`/`COMPLETED` and `STARTED` trips → held rides vanish and the "auto-closed" bucket goes empty | `trip-reminders.service.ts:863` (`noBack` `:879`) | Step 2.6 + a third bucket |
+| 6 | `requesterFleetOverview` would still show AVAILABLE: `lateEnd` is in the past | `cars.service.ts:336–443` (`coversNow` `:425`) | Step 3 — `coversNow` forced by the hold |
+| 7 | `overlaps()` callers read `conflicts[0].startDate/endDate` | `cars.service.ts:474, 862` | Step 3 — synthetic conflict carries the full shape |
+| 8 | `dayEndDigest` only lists `APPROVED`/`COMPLETED` and `STARTED` trips → held rides vanish and the "auto-closed" bucket goes empty | `trip-reminders.service.ts:934` (`noBack` `:958`, `held` `:970`) | Step 2.6 + a third bucket |
 | 9 | Telegram picker allows `IN_USE` and filters only by window overlap; a held car is listed | `telegram-car-actions.service.ts:714` | Step 4.1 |
 | 10 | Web picker allows `IN_USE` | `CarPanel.tsx:698, 772` | Step 4.6 |
-| 11 | `driverClash` is window-only, so a held driver is free for a new window | `cars.service.ts:618` | Step 3 union |
+| 11 | `driverClash` is window-only, so a held driver is free for a new window | `cars.service.ts:659` | Step 3 union |
 | 12 | `completeTrip` requires a `STARTED` trip row, so it cannot close the no-trip rides this feature is about | `cars.service.ts:2414`, guard `:2420` | Step 5 — new endpoint, reuse only the trip-row body |
 | 13 | Faking `driverBackAtOfficeAt` would hide the miss from the discipline report | `fleet.service.ts:964 driverMisses`, `missedBack` `:1018` | Step 5.4 — leave the stamp null |
 | 14 | `freeOrphanedDrivers` keeps the driver `ON_TRIP` while the request is `IN_PROGRESS` | `trip-reminders.service.ts:454` | No change needed (verified) |
 | 15 | `escalateUnacknowledged` fires only when `driverNotedAt = null` | `trip-reminders.service.ts:96` | No change needed (verified) |
 | 16 | `startPassedNudge` skips requests with a live assignment | `trip-reminders.service.ts:526` | No change needed (verified) |
 | 17 | **Change vehicle/driver** is allowed on an out-on-road ride and frees the old car, nulls every tap and both odometers | `cars.service.ts:1613 reassign` (nulls `:1746–1754`) | Step 4.7 — refuse it while ride evidence exists |
-| 18 | Driver list turns a held driver into `AVAILABLE` (window-only derivation) | `fleet.service.ts:706 listDrivers` (map `:746`) | Step 3 — hold union |
-| 19 | Both driver-busy lists are window-only, so a held driver is offered | `fleet.service.ts:685`, `telegram-car-actions.service.ts:779` | Step 3 — hold union |
+| 18 | Driver list turns a held driver into `AVAILABLE` (window-only derivation) | `fleet.service.ts:719 listDrivers` (map `:760`) | Step 3 — hold union |
+| 19 | Both driver-busy lists are window-only, so a held driver is offered | `fleet.service.ts:692`, `telegram-car-actions.service.ts:772` | Step 3 — hold union |
 | 20 | Two existing tests assert the old auto-complete behaviour | `cars-fixes.test.ts:819`, `car-lifecycle.test.ts:304` | Update them in the same commit (behaviour change is the point) |
 
 Not inspected in this pass: the mobile/Telegram **requester** fleet card renderer
@@ -644,3 +611,41 @@ they inherit the fix, but their rendering of `overdueReturn` is unverified.
 5. Should the Telegram driver card keep the ⏰ ETA button after the hold starts?
    It still works (`setEstimatedReturn` accepts an `IN_PROGRESS` ride) and pushes
    the admin alert later, which is useful for a long delay.
+
+## 12. Progress state (19 Nov 2026)
+
+Server `/opt/admin`, branch `master`. **No deploy, no push** — §9 still
+requires Steps 1–6 to ship as one release.
+
+| Step | State | Where |
+|---|---|---|
+| 1 — janitor holds instead of auto-completing | **done** — `d8b1c69` | `overdue.util.ts`, `releaseExpired` |
+| 2a — ETA-aware escalation, 24 h driver-nudge cap | **done** — `5bd8c13` | `escalateOverdueRunning` `:1331` |
+| 2b — two-stage admin alert (+2 h, daily after 25 h) | **done** — `5bd8c13` | same |
+| 2.6 — day-end digest held bucket | **done** — `5bd8c13`; multi-day carry-over added later | `dayEndDigest` `:934` (held `:970`) |
+| 3 — badges + `overdueReturn`, `overlaps()` hold, `driverClash`, busy lists | **done**, in this commit | §Step 3 above |
+| 4.1 — Telegram vehicle picker hides/labels a held car | **not started** | `telegram-car-actions.service.ts` vehicle list |
+| 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **not started** | `assign()` |
+| 4.6 — web picker (`CarPanel`) hides a held car | **not started** | `CarPanel.tsx` |
+| 4.7 — `reassign()` refuses an out-on-road ride | **not started** | `reassign()` |
+| 5 — admin manual close (API, audit, notices, no fake Back tap) | **not started** | new endpoint |
+| 6 — admin UI for the manual close | **not started** | request trip panel |
+| — `overdueReturn` rendered in the UI | **not started** — payload only | fleet cards, `CarPanel` |
+| — deploy / push | **deliberately not done** — §9 gate | — |
+
+### Tests green at this commit
+
+`tsc -p tsconfig.json --noEmit` → 0. Suites: `overdue-return` 28 (25 + 3 new
+digest cases), `overdue-fleet` 9, `cars-fixes` 72, `telegram-car-request` 215
+checks, `fleet-expiry` 10 — all 0 failed.
+
+### Next up
+
+1. Step 4.1 / 4.6 — both vehicle pickers: a held car is listed as
+   `🏁 … still out (return overdue)`, never selectable.
+2. Step 4.2 / 4.4 / 4.5 — `assign()` refuses a held vehicle before the
+   overlap check, and re-checks inside the transaction.
+3. Step 4.7 — `reassign()` refuses while ride evidence exists.
+4. Steps 5–6 — the manual close (the exit that makes the hold safe),
+   then render `overdueReturn` in the fleet and request cards.
+5. One deploy of Steps 1–6 (§9), then watch the first real late return.

@@ -5,6 +5,7 @@ import { WorkflowService } from '../workflow/workflow.module';
 import { PermissionsService } from '../auth/permissions.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { CarsService } from './cars.service';
+import { outOnRoadWhere } from './overdue.util';
 import { yangonNow, yangonShort, yangonShortPadded, yangonClock } from '../util/yangon-time';
 
 /**
@@ -785,6 +786,12 @@ export class TelegramCarActionsService {
               endDate: { gt: cr.carRequest.startDate },
               assignment: { releasedAt: null, driverBackAtOfficeAt: null },
             },
+            select: { driverId: true },
+          })).map((x) => x.driverId),
+          // still out on a ride nobody closed — its window is in the past, so the
+          // overlap query above cannot see it
+          ...(await this.prisma.carAssignment.findMany({
+            where: { ...outOnRoadWhere, requestId: { not: payload.requestId } },
             select: { driverId: true },
           })).map((x) => x.driverId),
         ].filter(Boolean)

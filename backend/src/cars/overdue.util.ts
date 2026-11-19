@@ -26,6 +26,26 @@ export const outOnRoadWhere = {
   ],
 };
 
+/**
+ * Every assignment that holds a car or driver right now: a STARTED trip (the
+ * mileage close-out is still open) OR a ride that is provably out (above). The
+ * fleet/requester badges and the busy-driver lists looked at STARTED trips
+ * only, so a held car read AVAILABLE and was offered for a new trip.
+ */
+export const liveRideWhere = {
+  releasedAt: null,
+  OR: [{ trip: { status: 'STARTED' as const } }, outOnRoadWhere],
+};
+
+/**
+ * A live assignment whose ride was never started: departure recorded, no return
+ * yet — the janitor's hold. This is the non-STARTED half of `liveRideWhere`, so
+ * every reader agrees on which live rows are holds and which are plain trips.
+ */
+export function isHeldRide(a: { trip: { status: string } | null }): boolean {
+  return a.trip?.status !== 'STARTED';
+}
+
 /** The same rule for an assignment row that is already loaded. */
 export function isOutOnRoad(a: {
   releasedAt: Date | null;

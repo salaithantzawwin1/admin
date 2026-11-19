@@ -149,7 +149,9 @@ async function main() {
   await test('overlaps(): Back-at-Office assignments exempt from blocking', async () => {
     const prismaBao: any = {
       carRequest: { findMany: async (args: any) => { captured.push(args); return []; } },
-      carAssignment: { findMany: async () => [{ requestId: 'req-bao' }] },
+      // only the Back-at-Office exemption query sees this row; the hold query
+      // (outOnRoadWhere) requires driverBackAtOfficeAt = null, so it gets none
+      carAssignment: { findMany: async (args: any) => (args.where.driverBackAtOfficeAt ? [{ requestId: 'req-bao' }] : []) },
       vehicleUnavailability: { findFirst: async () => null },
     };
     const svcBao: any = new CarsService(prismaBao, {} as any, {} as any, {} as any, {} as any, {} as any);

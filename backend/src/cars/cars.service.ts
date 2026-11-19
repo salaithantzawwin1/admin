@@ -17,6 +17,7 @@ import { EventsService } from '../events/events.service';
 import { yangonShort } from '../util/yangon-time';
 import { Actor } from '../org/org.service';
 import { FleetComplianceService } from '../fleet/compliance.service';
+import { isHeldRide, liveRideWhere, outOnRoadWhere } from './overdue.util';
 
 @Injectable()
 export class CarsService {
@@ -401,23 +402,27 @@ export class CarsService {
     // would flash AVAILABLE and let someone else book the car. Treat the trip
     // as still covering now until its odometer close-out (Back at Office /
     // completeTrip) — the same exemption the conflict checks apply.
-    const startedTrips = await this.prisma.carAssignment.findMany({
-      where: { releasedAt: null, trip: { status: 'STARTED' } },
-      select: { vehicleId: true, estimatedReturnAt: true, request: { select: { carRequest: { select: { endDate: true } } } } },
+    const liveRides = await this.prisma.carAssignment.findMany({
+      where: liveRideWhere,
+      select: { vehicleId: true, estimatedReturnAt: true, trip: { select: { status: true } }, request: { select: { carRequest: { select: { endDate: true } } } } },
     });
     // running-late map carries the EFFECTIVE end (planned end vs driver ETA —
-    // whichever is later) so a delayed STARTED trip keeps covering "now" that long
+    // whichever is later) so a delayed ride keeps covering "now" that long
     const runningLate = new Map(
-      startedTrips
+      liveRides
         .filter((t) => t.request.carRequest)
         .map((t) => [t.vehicleId, this.effectiveEnd(new Date(t.request.carRequest!.endDate), t.estimatedReturnAt)] as const),
     );
+    // A held ride (departure recorded, no return) has every window in the past,
+    // so lateEnd is too and the badge would fall through to AVAILABLE. The hold
+    // covers "now" directly instead of travelling through the ETA map.
+    const heldNow = new Set(liveRides.filter(isHeldRide).map((t) => t.vehicleId));
     const buf = await this.bufferMinutes();
     return vehicles.map((v) => {
       const mine = bookings.filter((b) => b.vehicleId === v.id);
       const parked = v.status === 'UNDER_MAINTENANCE' || v.status === 'OUT_OF_SERVICE';
       const lateEnd = runningLate.get(v.id);
-      const coversNow = mine.some((b) => b.startDate <= now && b.endDate >= now) || (lateEnd !== undefined && lateEnd >= now);
+      const coversNow = mine.some((b) => b.startDate <= now && b.endDate >= now) || (lateEnd !== undefined && lateEnd >= now) || heldNow.has(v.id);
       // Administration-blocked window (service/inspection) covering now → the car
       // is physically not drivable regardless of any booking around it.
       const blockedNow = blocks.some((u) => u.vehicleId === v.id && u.startsAt <= now && u.endsAt > now);
@@ -434,6 +439,8 @@ export class CarsService {
       return {
         ...v,
         status,
+        // departure recorded, return missing — the badge is IN_USE + still out
+        overdueReturn: heldNow.has(v.id),
         bookings: [
           // effective end (planned end vs driver-reported ETA) + the hand-back
           // buffer produce the "likely free from ~HH:mm" hint requesters see
@@ -590,16 +597,48 @@ export class CarsService {
     const stretched = conflicts
       .filter((c) => this.effectiveEnd(c.endDate, c.assignment?.estimatedReturnAt) > start)
       .map(({ assignment: _assignment, ...rest }) => rest);
+    // A ride that left the office and never came back is not free, whatever its
+    // windows say: refuse a booking that starts inside the hand-back buffer. Only
+    // the near future — a car an hour late must still be bookable next week,
+    // which is exactly what a blanket block would prevent — so a window beyond
+    // the buffer skips this query entirely.
+    const bufferMs = (await this.bufferMinutes()) * 60_000;
+    const [held] = start.getTime() < Date.now() + bufferMs
+      ? await this.prisma.carAssignment.findMany({
+          where: { vehicleId, ...outOnRoadWhere, ...(excludeRequestId ? { requestId: { not: excludeRequestId } } : {}) },
+          select: { requestId: true, request: { select: { carRequest: { select: { sharedTripId: true } } } } },
+          take: 1,
+        })
+      : [];
+    const heldGroup = held?.request?.carRequest?.sharedTripId ?? null;
+    // the caller's own shared-trip group — only worth a query when something
+    // can overlap (an empty window on a free car costs nothing extra)
+    const own = excludeRequestId && (stretched.length > 0 || held)
+      ? await this.prisma.carRequest.findUnique({ where: { requestId: excludeRequestId }, select: { sharedTripId: true } })
+      : null;
+    const ownGroup = own?.sharedTripId ?? null;
+    // block unless the caller rides in the held ride's own group (both null =
+    // no group at all, which must still block)
+    if (held && (!ownGroup || ownGroup !== heldGroup)) {
+      const now = new Date();
+      return {
+        available: false,
+        conflicts: [{
+          requestId: held.requestId,
+          sharedTripId: heldGroup,
+          startDate: now,
+          endDate: new Date(now.getTime() + bufferMs),
+          request: { docNumber: '🏁 Still out — return overdue' },
+        }],
+      };
+    }
     // a shared-trip member only blocks rides OUTSIDE its own group — when the
     // caller belongs to a group, same-group bookings are not conflicts
-    if (excludeRequestId) {
-      const own = await this.prisma.carRequest.findUnique({ where: { requestId: excludeRequestId }, select: { sharedTripId: true } });
-      if (own?.sharedTripId) {
-        const inGroup = stretched.filter((c) => c.sharedTripId === own.sharedTripId);
-        if (inGroup.length > 0) {
-          const remaining = stretched.filter((c) => c.sharedTripId !== own.sharedTripId);
-          return { available: remaining.length === 0, conflicts: remaining };
-        }
+    if (ownGroup) {
+      const inGroup = stretched.filter((c) => c.sharedTripId === ownGroup);
+      if (inGroup.length > 0) {
+        const remaining = stretched.filter((c) => c.sharedTripId !== ownGroup);
+        return { available: remaining.length === 0, conflicts: remaining };
       }
     }
     return { available: stretched.length === 0, conflicts: stretched };
@@ -611,9 +650,11 @@ export class CarsService {
    * (fleet.busyDriverIds), but a direct API call bypassed that check. Window
    * rule = the ⏰ Delay stretch (effectiveEnd), the same one the pickers and
    * overlaps() use; a released row or a ride the driver already closed with
-   * "🏁 Back at Office" is free again and never blocks. Convoy members share one
-   * driver on purpose; those callers skip the guard themselves, so this helper
-   * only answers "is this driver holding another overlapping trip?".
+   * "🏁 Back at Office" is free again and never blocks. A held ride (departed,
+   * never returned) has no usable window left, so it clashes for ANY window —
+   * the driver is provably still on the road. Convoy members share one driver on
+   * purpose; those callers skip the guard themselves, so this helper only
+   * answers "is this driver holding another trip?".
    */
   private async driverClash(driverId: string, window: { start: Date; end: Date }, opts: { excludeRequestId?: string; sharedTripId?: string | null } = {}) {
     const hit = await this.prisma.carRequest.findFirst({
@@ -623,7 +664,13 @@ export class CarsService {
         status: 'IN_PROGRESS',
         assignment: { releasedAt: null, driverBackAtOfficeAt: null },
         startDate: { lt: window.end },
-        OR: [{ endDate: { gt: window.start } }, { assignment: { estimatedReturnAt: { gt: window.start } } }],
+        OR: [
+          { endDate: { gt: window.start } },
+          { assignment: { estimatedReturnAt: { gt: window.start } } },
+          // provably still out: no return on the ride at all, so no window of it
+          // can be trusted to be free (a departed ride always starts before `end`)
+          { assignment: outOnRoadWhere },
+        ],
       },
       orderBy: { startDate: 'asc' },
       select: {

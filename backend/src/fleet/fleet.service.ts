@@ -12,6 +12,7 @@ import { EventsService } from '../events/events.service';
 import { Actor } from '../org/org.service';
 import { FleetComplianceService, ComplianceViolation } from './compliance.service';
 import { VehiclePhotosService } from './vehicle-photos.service';
+import { isHeldRide, liveRideWhere, outOnRoadWhere } from '../cars/overdue.util';
 import { EXPIRY_WARNING_DAYS, ExpiryStatus, expiryStatus, daysUntilExpiry, ymd } from './expiry';
 
 // Phase A helpers moved to ./expiry.ts in Phase B — re-exported so existing
@@ -505,23 +506,29 @@ export class FleetService {
     const onRoad = new Set(live.map((r) => r.vehicleId as string));
     // §6.5 dispatch-compliance chip (only when the compliance service is wired)
     const blocked = this.compliance ? await this.compliance.blockedMap(rows, now) : null;
-    // a trip the driver STARTED that runs past its window must keep the car
-    // IN_USE until the odometer close-out — otherwise a running-late ride
-    // flashes AVAILABLE and someone else books the car mid-trip
-    const startedTrips = await this.prisma.carAssignment.findMany({
-      where: { releasedAt: null, trip: { status: 'STARTED' } },
-      select: { vehicleId: true },
+    // Two ways a car is physically out: a STARTED trip running past its window
+    // (keep IN_USE until the odometer close-out, or a running-late ride flashes
+    // AVAILABLE and someone else books it mid-trip), and a ride that left the
+    // office and never came back — the janitor's hold has no STARTED trip, so
+    // that car used to read AVAILABLE while it was still on the road.
+    const liveRides = await this.prisma.carAssignment.findMany({
+      where: liveRideWhere,
+      select: { vehicleId: true, trip: { select: { status: true } } },
     });
-    const started = new Set(startedTrips.map((t) => t.vehicleId));
+    const onRide = new Set(liveRides.map((t) => t.vehicleId));
+    // no trip row / NOT_STARTED = departure recorded, return missing
+    const overdueReturn = new Set(liveRides.filter(isHeldRide).map((t) => t.vehicleId));
     return rows.map((v) => {
       const violations = blocked?.get(v.id);
       return {
         ...v,
-        status: onRoad.has(v.id) || started.has(v.id)
+        status: onRoad.has(v.id) || onRide.has(v.id)
           ? 'IN_USE'
           : v.status === 'IN_USE'
             ? 'AVAILABLE'
             : v.status,
+        // the badge must never say AVAILABLE for a car whose ride never returned
+        overdueReturn: overdueReturn.has(v.id),
         // VMS spec §6.3 — shared server-side expiry status (lists, dashboard, alerts)
         registrationExpiryStatus: expiryStatus(v.registrationExpiry, now),
         insuranceExpiryStatus: expiryStatus(v.insuranceExpiry, now),
@@ -683,16 +690,22 @@ export class FleetService {
    * yet "Back at Office") — CarPanel and the Telegram picker both exclude them.
    */
   async busyDriverIds(start: Date, end: Date): Promise<string[]> {
-    const rows = await this.prisma.carRequest.findMany({
-      where: {
-        status: 'IN_PROGRESS',
-        driverId: { not: null },
-        startDate: { lt: end },
-        endDate: { gt: start },
-        assignment: { releasedAt: null, driverBackAtOfficeAt: null },
-      },
-      select: { driverId: true },
-    });
+    const [windows, held] = await Promise.all([
+      this.prisma.carRequest.findMany({
+        where: {
+          status: 'IN_PROGRESS',
+          driverId: { not: null },
+          startDate: { lt: end },
+          endDate: { gt: start },
+          assignment: { releasedAt: null, driverBackAtOfficeAt: null },
+        },
+        select: { driverId: true },
+      }),
+      // window logic cannot see a held ride — its window is already in the past,
+      // yet the driver is provably still on the road
+      this.prisma.carAssignment.findMany({ where: outOnRoadWhere, select: { driverId: true } }),
+    ]);
+    const rows = [...windows, ...held];
     return [...new Set(rows.map((r) => r.driverId).filter(Boolean) as string[])];
   }
 
@@ -728,23 +741,23 @@ export class FleetService {
       select: { driverId: true },
     });
     const onRoad = new Set(live.map((r) => r.driverId as string));
-    // same running-late rule as vehicles: a STARTED trip keeps the driver
-    // ON_TRIP until the odometer close-out, window or not
-    const startedTrips = await this.prisma.carAssignment.findMany({
-      where: { releasedAt: null, trip: { status: 'STARTED' } },
-      select: { driverId: true, estimatedReturnAt: true },
+    // same rule as vehicles: a STARTED trip, or a ride that never came back,
+    // keeps the driver ON_TRIP until the close-out — window or not
+    const liveRides = await this.prisma.carAssignment.findMany({
+      where: liveRideWhere,
+      select: { driverId: true, estimatedReturnAt: true, trip: { select: { status: true } } },
     });
-    const started = new Set(startedTrips.map((t) => t.driverId).filter(Boolean) as string[]);
+    const onRide = new Set(liveRides.map((t) => t.driverId).filter(Boolean) as string[]);
     // driver → live ⏰ ETA (only when the ETA is still in the future — an expired
     // one means the driver is overdue, which the escalations already surface)
     const etaByDriver = new Map(
-      startedTrips
-        .filter((t) => t.driverId && t.estimatedReturnAt && t.estimatedReturnAt > now)
+      liveRides
+        .filter((t) => t.trip?.status === 'STARTED' && t.driverId && t.estimatedReturnAt && t.estimatedReturnAt > now)
         .map((t) => [t.driverId as string, t.estimatedReturnAt as Date]),
     );
     return rows.map((d) => ({
       ...d,
-      status: onRoad.has(d.id) || started.has(d.id)
+      status: onRoad.has(d.id) || onRide.has(d.id)
         ? 'ON_TRIP'
         : d.status === 'ON_TRIP'
           ? 'AVAILABLE'
