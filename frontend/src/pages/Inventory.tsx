@@ -1223,7 +1223,7 @@ export default function Inventory() {
                       );
                     })()}
                     <div className="flex flex-wrap gap-2">
-                      {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
+                      {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="ghost" onClick={() => openBuy(r)}>🛒 Buying — set collection day</Button>
                       )}
                       {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
