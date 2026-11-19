@@ -624,10 +624,10 @@ requires Steps 1–6 to ship as one release.
 | 2b — two-stage admin alert (+2 h, daily after 25 h) | **done** — `5bd8c13` | same |
 | 2.6 — day-end digest held bucket | **done** — `5bd8c13`; multi-day carry-over added later | `dayEndDigest` `:934` (held `:970`) |
 | 3 — badges + `overdueReturn`, `overlaps()` hold, `driverClash`, busy lists | **done**, in this commit | §Step 3 above |
-| 4.1 — Telegram vehicle picker hides/labels a held car | **not started** | `telegram-car-actions.service.ts` vehicle list |
-| 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **not started** | `assign()` |
-| 4.6 — web picker (`CarPanel`) hides a held car | **not started** | `CarPanel.tsx` |
-| 4.7 — `reassign()` refuses an out-on-road ride | **not started** | `reassign()` |
+| 4.1 — Telegram vehicle picker hides/labels a held car | **done**, uncommitted — `🏁 Still out` line, no button | `telegram-car-actions.service.ts` vehicle list |
+| 4.2 / 4.4 / 4.5 — `assign()` hard block + transaction re-check | **done**, uncommitted | `assign()` |
+| 4.6 — web picker (`CarPanel`) hides a held car | **done**, uncommitted (`!v.overdueReturn`) | `CarPanel.tsx` |
+| 4.7 — `reassign()` refuses an out-on-road ride | **done**, uncommitted — `release()` too (§7 edge case) | `reassign()`, `release()` |
 | 5 — admin manual close (API, audit, notices, no fake Back tap) | **not started** | new endpoint |
 | 6 — admin UI for the manual close | **not started** | request trip panel |
 | — `overdueReturn` rendered in the UI | **not started** — payload only | fleet cards, `CarPanel` |
@@ -635,17 +635,14 @@ requires Steps 1–6 to ship as one release.
 
 ### Tests green at this commit
 
-`tsc -p tsconfig.json --noEmit` → 0. Suites: `overdue-return` 28 (25 + 3 new
-digest cases), `overdue-fleet` 9, `cars-fixes` 72, `telegram-car-request` 215
-checks, `fleet-expiry` 10 — all 0 failed.
+`tsc -p tsconfig.json --noEmit` → 0, `frontend` `tsc -b` → 0. Suites:
+`overdue-return` 28, `overdue-fleet` 13 (9 + 4 Step 4 guards), `cars-fixes` 72,
+`telegram-car-request` 219 checks, `car-lifecycle` 24, `car-odometer` 25,
+`fleet-expiry` 10 — all 0 failed.
 
 ### Next up
 
-1. Step 4.1 / 4.6 — both vehicle pickers: a held car is listed as
-   `🏁 … still out (return overdue)`, never selectable.
-2. Step 4.2 / 4.4 / 4.5 — `assign()` refuses a held vehicle before the
-   overlap check, and re-checks inside the transaction.
-3. Step 4.7 — `reassign()` refuses while ride evidence exists.
-4. Steps 5–6 — the manual close (the exit that makes the hold safe),
+1. Commit Step 4 (4.1, 4.2/4.4/4.5, 4.6, 4.7 + `release()`).
+2. Steps 5–6 — the manual close (the exit that makes the hold safe),
    then render `overdueReturn` in the fleet and request cards.
-5. One deploy of Steps 1–6 (§9), then watch the first real late return.
+3. One deploy of Steps 1–6 (§9), then watch the first real late return.

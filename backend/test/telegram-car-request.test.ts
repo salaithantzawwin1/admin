@@ -879,6 +879,8 @@ async function approvalCardTests() {
   (prisma.carRequest as any).findMany = async () => [];
   prisma.vehicle = { findMany: async () => [{ id: 'v1', vehicleNo: 'YC-1', brandModel: 'Hiace' }] };
   prisma.vehicleUnavailability = { findMany: async () => [] };
+  // Step 4: a car whose ride never came back is named, never offered
+  prisma.carAssignment = { findMany: async () => [{ vehicle: { id: 'v-held', vehicleNo: '9F1213' } }] };
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
     id: where.id,
     docNumber: 'CAR-PAST-1',
@@ -896,11 +898,14 @@ async function approvalCardTests() {
   await (svc as any).offerAssignVehicle('req-past-pick', CHAT);
   const pastPick = apiLog.filter((l) => l.method === 'sendMessage').map((l) => String(l.payload?.text ?? '')).join('\n');
   check(pastPick.includes('Assign a vehicle — CAR-PAST-1') && pastPick.includes('Window already passed'), 'past-window assign picker carries the ⌛ warning');
+  check(pastPick.includes('Still out') && pastPick.includes('9F1213'), 'a held car is listed as still out in the picker');
+  check(!JSON.stringify(apiLog.map((l: any) => l.payload?.reply_markup ?? [])).includes('9F1213'), 'a held car is never offered as a button');
   // restore
   if (prevCarFindMany) (prisma.carRequest as any).findMany = prevCarFindMany;
   else delete (prisma.carRequest as any).findMany;
   delete prisma.vehicle;
   delete prisma.vehicleUnavailability;
+  delete prisma.carAssignment;
   prisma.requestDocument.findUnique = async ({ where }: any) => ({
     id: where.id,
     docNumber: `CAR-DOC-${String(where.id).slice(0, 4)}`,

@@ -17,7 +17,7 @@ import { EventsService } from '../events/events.service';
 import { yangonShort } from '../util/yangon-time';
 import { Actor } from '../org/org.service';
 import { FleetComplianceService } from '../fleet/compliance.service';
-import { isHeldRide, liveRideWhere, outOnRoadWhere } from './overdue.util';
+import { isHeldRide, isOutOnRoad, liveRideWhere, outOnRoadWhere } from './overdue.util';
 
 @Injectable()
 export class CarsService {
@@ -296,6 +296,24 @@ export class CarsService {
    */
   private effectiveEnd(plannedEnd: Date, eta?: Date | null): Date {
     return eta && eta > plannedEnd ? eta : plannedEnd;
+  }
+
+  /**
+   * Refuse a car whose ride left the office and never came back (the Step 1
+   * hold). `client` is either `this.prisma` (the fast pre-check) or the
+   * transaction, so the pre-check and the insert ask the very same question.
+   */
+  private async assertVehicleNotHeld(
+    client: { carAssignment: { findMany: (args: unknown) => PromiseLike<unknown[]> } },
+    vehicleId: string,
+    vehicleNo: string,
+  ) {
+    const [held] = await client.carAssignment.findMany({
+      where: { vehicleId, ...outOnRoadWhere },
+      select: { id: true },
+      take: 1,
+    });
+    if (held) throw new ConflictException(`Vehicle ${vehicleNo} is still out on an overdue trip — close that trip first`);
   }
 
   /** Administration-configured hand-back buffer (Settings → Fleet), default 30 min.
@@ -758,6 +776,10 @@ export class CarsService {
     if (vehicle.status === 'OUT_OF_SERVICE' || vehicle.status === 'UNDER_MAINTENANCE') {
       throw new ConflictException(`Vehicle ${vehicle.vehicleNo} is ${vehicle.status}`);
     }
+    // A ride that left the office and never came back is not a free car, however
+    // empty its calendar looks (Step 3 keeps it IN_USE). Deliberately not exempt
+    // for shared trips: the car really is on the road somewhere.
+    await this.assertVehicleNotHeld(this.prisma, data.vehicleId, vehicle.vehicleNo);
     // VMS §6.5 + §8.2 step 6 — a mandatory document that is expired or missing
     // (or the assigned driver's expired licence) blocks allocation. Policy is
     // configured per document type (mandatoryForDispatch), default off.
@@ -815,6 +837,9 @@ export class CarsService {
     // double-booking prevention: transaction + overlap re-check
     // (skipped for explicit shared trips — see the group stamp inside the tx)
     const assignment = await this.prisma.$transaction(async (tx) => {
+      // the pre-check is not race-safe — the janitor can hold this car between it
+      // and this insert, so ask again inside the transaction
+      await this.assertVehicleNotHeld(tx, data.vehicleId, vehicle.vehicleNo);
       // shared-trip group: join the overlapping booking already riding this car+driver
       // (looked up INSIDE the tx; the stamped group makes overlaps() skip the pair)
       let sharedTripId: string | null = null;
@@ -1674,6 +1699,12 @@ export class CarsService {
     if (assignment.trip && assignment.trip.status === 'STARTED') {
       throw new BadRequestException('Trip already started — complete or cancel the trip first');
     }
+    // "Change vehicle / driver" rewrites this row and nulls every tap and both
+    // odometer readings — the exact evidence an overdue return is judged on.
+    // A ride that left and never came back must be closed with its return km.
+    if (isOutOnRoad(assignment)) {
+      throw new BadRequestException('Ride is still out — close it with the return km instead of changing the car or driver');
+    }
     if (data.vehicleId === assignment.vehicleId && (data.driverId ?? null) === (assignment.driverId ?? null)) {
       throw new ConflictException('Pick a different vehicle or driver');
     }
@@ -1893,6 +1924,12 @@ export class CarsService {
     }
     if (assignment.trip && assignment.trip.status === 'STARTED') {
       throw new BadRequestException('Trip already started — complete or cancel the trip first');
+    }
+    // Releasing a ride that left and never came back would unlink the car, send
+    // the request back to APPROVED (then cancel it 2 h later) and wipe its
+    // odometer on the next assign. Point Administration at the manual close.
+    if (isOutOnRoad(assignment)) {
+      throw new BadRequestException('Ride is still out — close it with the return km instead of releasing it');
     }
 
     await this.prisma.$transaction(async (tx) => {

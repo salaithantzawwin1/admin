@@ -230,6 +230,7 @@ async function main() {
       driver: { update: async () => {} },
     };
     const prismaGuard: any = {
+      carAssignment: { findMany: async () => [] },
       requestDocument: {
         findUnique: async () => ({
           id: 'r1', docNumber: 'CAR-NEW', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
@@ -318,6 +319,7 @@ async function main() {
       driver: { update: async () => {} },
     };
     const prismaOcr: any = {
+      carAssignment: { findMany: async () => [] },
       requestDocument: {
         findUnique: async () => ({
           id: 'r1', docNumber: 'CAR-OCR-1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
@@ -478,6 +480,7 @@ async function main() {
       driver: { update: async () => {} },
     };
     const prismaDrv: any = {
+      carAssignment: { findMany: async () => [] },
       requestDocument: {
         findUnique: async () => ({
           id: 'r1', docNumber: 'r1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
@@ -513,6 +516,7 @@ async function main() {
       driver: { update: async () => {} },
     };
     const prismaNoDrv: any = {
+      carAssignment: { findMany: async () => [] },
       requestDocument: {
         findUnique: async () => ({
           id: 'r1', docNumber: 'r1', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
@@ -755,6 +759,7 @@ async function main() {
   const tgCaptured: any[] = [];
   const CR = { startDate: new Date('2026-09-24T08:00Z'), endDate: new Date('2026-09-24T17:00Z'), destination: 'Naypyitaw' };
   const prismaTg: any = {
+    carAssignment: { findMany: async () => [] },
     requestDocument: { findUnique: async () => ({ id: 'req-1', docNumber: 'CAR-1', requester: { fullName: 'A B' }, carRequest: CR }) },
     carRequest: { findMany: async (args: any) => { tgCaptured.push(args); return []; } },
     vehicle: { findMany: async () => [{ id: 'v1', vehicleNo: 'YC-1', brandModel: 'Hiace' }] },

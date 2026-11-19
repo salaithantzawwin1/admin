@@ -707,7 +707,17 @@ export class TelegramCarActionsService {
       where: { status: 'ACTIVE', startsAt: { lt: cr.endDate }, endsAt: { gt: cr.startDate } },
       select: { vehicleId: true },
     });
-    const exclude = [...new Set([...busyIds, ...blocked.map((b) => b.vehicleId)])];
+    // A car whose ride never came back is physically out, and its window is in
+    // the past so the overlap filter above cannot see it. Name it in the message
+    // but never offer it as a button.
+    const held = (await this.prisma.carAssignment.findMany({
+      where: outOnRoadWhere,
+      select: { vehicle: { select: { id: true, vehicleNo: true } } },
+    })).map((h) => h.vehicle);
+    const exclude = [...new Set([...busyIds, ...blocked.map((b) => b.vehicleId), ...held.map((v) => v.id)])];
+    const heldNote = held.length
+      ? `\n\n🏁 <b>Still out — return overdue, close that trip first:</b>\n${held.map((v) => `• ${escapeHtml(v.vehicleNo)}`).join('\n')}`
+      : '';
     const vehicles = await this.prisma.vehicle.findMany({
       // DB status IN_USE also covers cars committed to a FUTURE trip — those are
       // physically free now; the busyIds window-overlap filter is the real gate.
@@ -728,13 +738,13 @@ export class TelegramCarActionsService {
     if (vehicles.length === 0) {
       await this.telegram.sendRaw(
         chatId,
-        `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${pastWarn}${special}\n\n⚠️ No AVAILABLE vehicles for this window right now — free one up or retry later with <b>/assign ${escapeHtml(request.docNumber)}</b>`,
+        `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${pastWarn}${special}${heldNote}\n\n⚠️ No AVAILABLE vehicles for this window right now — free one up or retry later with <b>/assign ${escapeHtml(request.docNumber)}</b>`,
       );
       return;
     }
     await this.telegram.sendRaw(
       chatId,
-      `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${pastWarn}${special}`,
+      `🚗 <b>Assign a vehicle — ${escapeHtml(request.docNumber)}</b>${who}${dest}${when}${pastWarn}${special}${heldNote}`,
       {
         reply_markup: {
           inline_keyboard: vehicles.map((v) => [{ text: `${v.vehicleNo} — ${v.brandModel}`, callback_data: `wfa:pv:${this.newToken({ requestId: request.id, vehicleId: v.id })}` }]),

@@ -68,6 +68,8 @@ interface Vehicle {
   vehicleNo: string;
   brandModel: string;
   status: string;
+  /** departure recorded, no return yet — the server holds the car IN_USE */
+  overdueReturn?: boolean;
 }
 interface Driver {
   id: string;
@@ -695,7 +697,7 @@ export function CarPanel({
           <div className="flex flex-wrap gap-2 items-center">
             <Select className="!w-56" value={assignForm.vehicleId} onChange={(e) => setAssignForm({ ...assignForm, vehicleId: e.target.value })}>
               <option value="">— Vehicle —</option>
-              {vehicles.filter((v) => v.status === 'AVAILABLE' || v.status === 'IN_USE').map((v) => (
+              {vehicles.filter((v) => (v.status === 'AVAILABLE' || v.status === 'IN_USE') && !v.overdueReturn).map((v) => (
                 <option key={v.id} value={v.id}>{v.vehicleNo} — {v.brandModel} ({v.status})</option>
               ))}
             </Select>
@@ -769,7 +771,7 @@ export function CarPanel({
             <Select className="!w-56" value={reassignForm.vehicleId} onChange={(e) => setReassignForm({ ...reassignForm, vehicleId: e.target.value, driverId: e.target.value === reassignForm.driverId ? '' : reassignForm.driverId })}>
               <option value="">— Vehicle —</option>
               {vehicles
-                .filter((v) => v.status === 'AVAILABLE' || v.status === 'IN_USE' || v.id === car.vehicle?.id)
+                .filter((v) => ((v.status === 'AVAILABLE' || v.status === 'IN_USE') && !v.overdueReturn) || v.id === car.vehicle?.id)
                 .map((v) => (
                   <option key={v.id} value={v.id}>{v.vehicleNo} — {v.brandModel}{v.id === car.vehicle?.id ? ' (current)' : ''}</option>
                 ))}

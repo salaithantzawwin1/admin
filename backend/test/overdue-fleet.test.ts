@@ -1,5 +1,6 @@
 /**
- * Overdue-return guard — Step 3: badges, the conflict check and the busy lists.
+ * Overdue-return guard — Step 3 (badges, conflict check, busy lists) and
+ * Step 4 (assign/reassign/release guards, pickers).
  *
  * A ride that left the office and never came back (Step 1's hold) was invisible
  * to every reader that only looked at STARTED trips: the fleet badge said
@@ -208,6 +209,110 @@ async function main() {
     assert.ok(where.startDate.lt instanceof Date, 'the window net stays open-ended on the start side');
     assert.strictEqual(where.OR.length, 3);
     assert.deepStrictEqual(where.OR[2].assignment.OR, outOnRoadWhere.OR, 'the last arm is the hold, not another window');
+  });
+
+  // ------------------------------------------------- 4) assign / reassign guard
+  const assignedRequest = (over: Record<string, unknown> = {}) => ({
+    id: 'r1', docNumber: 'CAR-NEW', docType: 'CAR_REQUEST', status: 'APPROVED', requesterId: 'u1',
+    carRequest: {
+      id: 'cr1', requestId: 'r1', sharedTripId: null, assignment: null,
+      startDate: new Date(Date.now() + 600000), endDate: new Date(Date.now() + 3600000),
+    },
+    ...over,
+  });
+
+  await test('assign(): a held vehicle is refused before anything is written', async () => {
+    let wrote = false;
+    const where: any[] = [];
+    const prisma: any = {
+      requestDocument: { findUnique: async () => assignedRequest() },
+      vehicle: { findUnique: async () => ({ id: 'v-held', vehicleNo: '9F1213', brandModel: 'HiAce', status: 'IN_USE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      carAssignment: { findMany: async (p: any) => { where.push(p.where); return [{ id: 'a-held' }]; } },
+      $transaction: async () => { wrote = true; return null; },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any);
+    let msg = '';
+    try { await svc.assign('r1', { vehicleId: 'v-held' }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('still out on an overdue trip'), `assign must refuse the held car, got: ${msg}`);
+    assert.strictEqual(wrote, false, 'the hold is refused before the transaction');
+    assert.strictEqual(where[0].vehicleId, 'v-held');
+    assert.deepStrictEqual(where[0].OR, outOnRoadWhere.OR);
+  });
+
+  await test('assign(): the hold is re-checked inside the transaction', async () => {
+    let upserted = false;
+    const tx: any = {
+      carAssignment: {
+        findMany: async () => [{ id: 'a-held' }],
+        upsert: async () => { upserted = true; return { id: 'a1' }; },
+      },
+      carRequest: { findMany: async () => [], update: async () => {} },
+      requestDocument: { update: async () => {} },
+      vehicle: { update: async () => {} },
+      driver: { update: async () => {} },
+    };
+    const prisma: any = {
+      requestDocument: { findUnique: async () => assignedRequest() },
+      vehicle: { findUnique: async () => ({ id: 'v-held', vehicleNo: '9F1213', brandModel: 'HiAce', status: 'AVAILABLE' }) },
+      vehicleUnavailability: { findFirst: async () => null },
+      driverAbsence: { findFirst: async () => null },
+      carRequest: { findFirst: async () => null },
+      // the janitor holds the car AFTER the pre-check, before the insert
+      carAssignment: { findMany: async () => [] },
+      $transaction: async (fn: any) => fn(tx),
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any);
+    let msg = '';
+    try { await svc.assign('r1', { vehicleId: 'v-held' }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('still out on an overdue trip'), `the tx must refuse the raced hold, got: ${msg}`);
+    assert.strictEqual(upserted, false);
+  });
+
+  const heldAssignment = (over: Record<string, unknown> = {}) => ({
+    id: 'a1', requestId: 'r1', vehicleId: 'v-held', driverId: 'd-held', releasedAt: null,
+    driverNotedAt: null, driverArrivedAt: minsAgo(230), driverBackAtOfficeAt: null,
+    startOdoKm: 341626, startOdoAt: minsAgo(240), endOdoKm: null, endOdoAt: null,
+    estimatedReturnAt: null, trip: null,
+    vehicle: { vehicleNo: '9F1213' }, driver: { name: 'Naing Naing Tun' },
+    ...over,
+  });
+
+  await test('reassign(): a held ride is refused — its evidence stays until the close', async () => {
+    const prisma: any = {
+      requestDocument: {
+        findUnique: async () => ({
+          id: 'r1', docNumber: 'CAR-202611-0039', docType: 'CAR_REQUEST', status: 'IN_PROGRESS', requesterId: 'u1',
+          carRequest: {
+            id: 'cr1', requestId: 'r1', sharedTripId: null,
+            startDate: minsAgo(300), endDate: minsAgo(180),
+            vehicle: { vehicleNo: '9F1213' }, assignment: heldAssignment(),
+          },
+        }),
+      },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any);
+    let msg = '';
+    try { await svc.reassign('r1', { vehicleId: 'v2' }, { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('return km'), `reassign must route to the manual close, got: ${msg}`);
+  });
+
+  await test('release(): a held ride is refused too (no APPROVED bounce, no wiped km)', async () => {
+    let wrote = false;
+    const prisma: any = {
+      carAssignment: {
+        findUnique: async () => ({
+          ...heldAssignment(),
+          request: { id: 'r1', status: 'IN_PROGRESS', carRequest: { startDate: minsAgo(300), endDate: minsAgo(180) } },
+        }),
+      },
+      $transaction: async () => { wrote = true; },
+    };
+    const svc: any = new CarsService(prisma, {} as any, {} as any, {} as any, {} as any, {} as any);
+    let msg = '';
+    try { await svc.release('r1', { userId: 'u9', username: 'admin' }); } catch (e: any) { msg = e.message; }
+    assert.ok(msg.includes('return km'), `release must route to the manual close, got: ${msg}`);
+    assert.strictEqual(wrote, false);
   });
 
   // ------------------------------------------------------------------ summary
