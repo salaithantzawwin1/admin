@@ -629,8 +629,8 @@ requires Steps 1–6 to ship as one release.
 | 4.6 — web picker (`CarPanel`) hides a held car | **done**, uncommitted (`!v.overdueReturn`) | `CarPanel.tsx` |
 | 4.7 — `reassign()` refuses an out-on-road ride | **done** — `3531b82`; `release()` too (§7 edge case) | `reassign()`, `release()` |
 | 5 — admin manual close (API, audit, notices, no fake Back tap) | **done** — `7c673c7` | `closeTripManually()` + `POST requests/:requestId/trip/close` |
-| 6 — admin UI for the manual close | **done**, uncommitted | `CarPanel.tsx` (chip, button, modal) |
-| — `overdueReturn` rendered in the UI | **done**, uncommitted | `Fleet.tsx`, `CarRequests.tsx` fleet card, `TripProgress` lane |
+| 6 — admin UI for the manual close | **done**, in this commit | `CarPanel.tsx` (chip, button), `CloseTripModal.tsx` |
+| — `overdueReturn` rendered in the UI | **done**, in this commit | `Fleet.tsx`, `CarRequests.tsx` fleet card, `TripProgress` lane (prop) |
 | — deploy / push | **deliberately not done** — §9 gate | — |
 
 Step 4 landed in `3531b82` (4.1, 4.2/4.4/4.5, 4.6, 4.7 + `release()`), so the
@@ -660,7 +660,7 @@ reveals a required reason (≥ 5 chars), and a start-km / distance preview. It
 POSTs `…/trip/close` only — never the odometer endpoint, which requires a photo
 and would reject a km-only close before the close ever ran. `Fleet.tsx` and the
 requester fleet card render `overdueReturn` as a red tag beside the `IN_USE`
-badge (no new status value).
+badge (no new status value). The rule is computed in ONE place: `CarPanel` evaluates `overdueReturn` and hands it to `TripProgress` as a prop (`TripProgress` used to recompute its own copy), and the dialog body moved to `components/CloseTripModal.tsx` so the panel only owns the open/closed state. The rule also requires `endOdoAt = null`: a BACK reading recorded through `OdometerBox` already closes the ride for the server (`outOnRoadWhere` needs `endOdoAt: null`), so without that guard the chip and the Close button stayed on a closed trip and the POST came back 409.
 
 ### Tests green at this commit
 

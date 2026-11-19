@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, getUser, hasPermission, hasRole } from '../api';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Disclosure } from './Disclosure';
-import { Modal } from './Modal';
+import { CloseTripModal } from './CloseTripModal';
 import { OdometerBox } from './OdometerBox';
 import { Badge, Button, Card, Empty, Input, Select } from './ui';
 import { toast } from './Toast';
@@ -180,9 +180,7 @@ export function CarPanel({
   const [confirmManagerAck, setConfirmManagerAck] = useState(false);
   // Administration manual close of an overdue ride (departure recorded, return
   // missing) — the only way out of the hold: release/reassign are refused.
-  const [closeForm, setCloseForm] = useState<{ km: string; estimated: boolean; reason: string } | null>(null);
-  const [closeError, setCloseError] = useState('');
-  const [closing, setClosing] = useState(false);
+  const [closeOpen, setCloseOpen] = useState(false);
   // Administration ⏰ ETA override (driver reported a delay by phone — record it)
   const [etaBusy, setEtaBusy] = useState(false);
   const [etaMinutes, setEtaMinutes] = useState('30');
@@ -318,6 +316,10 @@ export function CarPanel({
     liveAssignment &&
     rideDeparted &&
     !liveAssignment.driverBackAtOfficeAt &&
+    // a recorded BACK reading (OdometerBox) already closes the ride for the
+    // server — `outOnRoadWhere` requires endOdoAt = null — so offering the
+    // manual close here only ever ended in a 409 "already closed"
+    liveAssignment.endOdoAt == null &&
     rideEnd &&
     !Number.isNaN(rideEnd.getTime()) &&
     rideEnd.getTime() < Date.now()
@@ -340,32 +342,6 @@ export function CarPanel({
       specialRequest: car.specialRequest ?? '',
     });
     setEditing(true);
-  };
-
-  // Close-trip modal submit. POSTs the close ONLY — the odometer endpoints need a
-  // dashboard photo, so a km-only pre-post would be rejected before the close
-  // ever ran (the close writes the BACK reading itself).
-  const closeTripManually = async () => {
-    if (!closeForm) return;
-    setCloseError('');
-    setClosing(true);
-    try {
-      await api(`/cars/requests/${requestId}/trip/close`, {
-        method: 'POST',
-        body: {
-          endOdoKm: Number(closeForm.km),
-          estimated: closeForm.estimated,
-          ...(closeForm.reason.trim() ? { reason: closeForm.reason.trim() } : {}),
-        },
-      });
-      toast('Trip closed — the car is back in the pool');
-      setCloseForm(null);
-      load();
-    } catch (e) {
-      setCloseError(e instanceof Error ? e.message : 'Failed');
-    } finally {
-      setClosing(false);
-    }
   };
 
   const saveEdit = async () => {
@@ -421,7 +397,7 @@ export function CarPanel({
             Back at office are the driver's. They fail independently, so they get
             separate lanes — "approved but no car" must not look like "driver
             never tapped Noted". */}
-        <TripProgress status={status} car={car} />
+        <TripProgress status={status} car={car} overdueReturn={overdueReturn} />
         {/* Assigned takes the rest of the row: plate, driver, ack timeline and the
             ETA controls all live here — a 1/4-width column used to cram them into an
             unreadable stack. The tinted box reads as "this ride has a car". */}
@@ -959,83 +935,15 @@ export function CarPanel({
         />
       )}
 
-      {closeForm && liveAssignment && (() => {
-        const km = Number(closeForm.km);
-        const kmOk =
-          closeForm.km.trim() !== '' &&
-          Number.isInteger(km) &&
-          km >= 0 &&
-          (departureKm == null || km >= departureKm);
-        const reasonOk = !closeForm.estimated || closeForm.reason.trim().length >= 5;
-        const distance = kmOk && departureKm != null ? km - departureKm : null;
-        return (
-          <Modal title="Close trip manually" onClose={() => { if (!closing) setCloseForm(null); }} error={closeError}>
-            <div className="space-y-3 text-sm">
-              <p className="text-xs text-gray-500">
-                Records the return reading, frees {car.vehicle?.vehicleNo ?? 'the car'} and its driver, and completes the request.
-                The driver's 🏁 Back at office tap stays unrecorded on purpose — it belongs in the discipline report.
-              </p>
-              {departureKm != null && (
-                <div className="text-xs text-gray-500">
-                  Departure reading: <b>{departureKm.toLocaleString()} km</b>
-                </div>
-              )}
-              <div>
-                <label className="block text-xs text-gray-500 mb-1" htmlFor="close-odo-km">Return odometer (km)</label>
-                <Input
-                  id="close-odo-km"
-                  type="number"
-                  min={departureKm ?? 0}
-                  step={1}
-                  placeholder="e.g. 341651"
-                  value={closeForm.km}
-                  onChange={(e) => setCloseForm({ ...closeForm, km: e.target.value })}
-                />
-                {closeForm.km.trim() !== '' && !kmOk && (
-                  <div className="text-[11px] text-red-600 mt-1">
-                    Enter whole kilometres{departureKm != null ? ` — not below the departure reading (${departureKm.toLocaleString()} km)` : ''}.
-                  </div>
-                )}
-                {distance != null && (
-                  <div className="text-[11px] text-gray-500 mt-1">Distance: {distance.toLocaleString()} km</div>
-                )}
-              </div>
-              <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={closeForm.estimated}
-                  onChange={(e) => setCloseForm({ ...closeForm, estimated: e.target.checked, reason: e.target.checked ? closeForm.reason : '' })}
-                  className="h-3.5 w-3.5 rounded border-gray-300 text-gold focus:ring-gold/50"
-                />
-                Return km is an estimate / could not be read
-              </label>
-              {closeForm.estimated && (
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1" htmlFor="close-odo-reason">Reason (required)</label>
-                  <Input
-                    id="close-odo-reason"
-                    placeholder="Why is the reading an estimate? (e.g. driver phoned it in)"
-                    value={closeForm.reason}
-                    onChange={(e) => setCloseForm({ ...closeForm, reason: e.target.value })}
-                  />
-                  {closeForm.reason.trim().length > 0 && !reasonOk && (
-                    <div className="text-[11px] text-red-600 mt-1">At least 5 characters — the next reader needs to know why it is a guess.</div>
-                  )}
-                </div>
-              )}
-              <p className="text-[11px] text-gray-400">
-                The requester is notified, the driver gets a Telegram message, and both the reading and the manual close are audited.
-              </p>
-              <div className="flex justify-end gap-2 pt-1">
-                <Button variant="ghost" disabled={closing} onClick={() => setCloseForm(null)}>Cancel</Button>
-                <Button variant="danger" disabled={closing || !kmOk || !reasonOk} onClick={closeTripManually}>
-                  {closing ? 'Closing…' : 'Close trip'}
-                </Button>
-              </div>
-            </div>
-          </Modal>
-        );
-      })()}
+      {closeOpen && (
+        <CloseTripModal
+          requestId={requestId}
+          vehicleNo={car.vehicle?.vehicleNo}
+          departureKm={departureKm}
+          onClose={() => setCloseOpen(false)}
+          onClosed={() => { setCloseOpen(false); load(); }}
+        />
+      )}
 
       {canManageAssignment && (
         <div className="border-t border-gray-100 pt-4 mt-4">
@@ -1081,7 +989,7 @@ export function CarPanel({
             and no return has been recorded — the return window ended {rideEnd ? fmtDateTime(rideEnd) : 'already'}. The car stays
             out of the fleet pool until this trip is closed.
           </p>
-          <Button variant="danger" onClick={() => { setCloseError(''); setCloseForm({ km: '', estimated: false, reason: '' }); }}>
+          <Button variant="danger" onClick={() => setCloseOpen(true)}>
             Close trip manually
           </Button>
         </div>
@@ -1179,16 +1087,17 @@ export function CarPanel({
  * with no car and an assigned car the driver never acknowledged are different
  * problems for different people, and one joined row hid which side was stuck.
  */
-export function TripProgress({ status, car }: { status: string; car: CarRequest }) {
+export function TripProgress({
+  status,
+  car,
+  overdueReturn,
+}: {
+  status: string;
+  car: CarRequest;
+  /** ONE overdue rule lives in CarPanel — the driver lane only renders the verdict */
+  overdueReturn: boolean;
+}) {
   const a = car.assignment;
-  // departure recorded, return missing, window over — the server holds this car
-  // for every reader (assign/release refuse it), so the lane says why
-  const overdue = !!a &&
-    !a.releasedAt &&
-    !a.driverBackAtOfficeAt &&
-    (a.startOdoKm != null || a.startOdoAt != null || a.driverArrivedAt != null || a.trip?.status === 'STARTED') &&
-    !Number.isNaN(new Date(a.estimatedReturnAt ?? car.endDate).getTime()) &&
-    new Date(a.estimatedReturnAt ?? car.endDate).getTime() < Date.now();
   // once the booking was released, a tap that never came is history ("– Noted"),
   // not a pending step the driver is still expected to press
   const never: 'off' | 'pending' = a?.releasedAt ? 'off' : 'pending';
@@ -1239,7 +1148,7 @@ export function TripProgress({ status, car }: { status: string; car: CarRequest 
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="w-28 shrink-0 text-[11px] uppercase tracking-wide text-gray-400">Driver</span>
-        {overdue && (
+        {overdueReturn && (
           <span
             className="px-2 py-0.5 rounded-full border border-red-300 bg-red-50 text-red-700 text-xs font-semibold whitespace-nowrap"
             title={`Departure recorded, no return — the return window ended ${fmtDateTime(car.assignment?.estimatedReturnAt ?? car.endDate)}`}
