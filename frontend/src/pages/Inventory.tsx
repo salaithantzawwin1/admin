@@ -1234,7 +1234,9 @@ export default function Inventory() {
                       {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') &&
                         (() => {
                           const open = (r.supplyRequest?.lines ?? []).filter((l) => l.status !== 'FULFILLED');
-                          return open.length > 0 && !open.every((l) => l.quantity <= l.item.balance);
+                          const issuable = open.filter((l) => l.quantity <= l.item.balance);
+                          // nothing to give out → wait; everything to give out → hand over
+                          return issuable.length > 0 && issuable.length < open.length;
                         })() && (
                         <Button variant="ghost" onClick={() => void doIssueAvailable(r.id)}>📦 Issue in-stock items now</Button>
                       )}
@@ -1798,8 +1800,7 @@ export default function Inventory() {
             <div className="text-xs text-gray-500">
               {(handOverFor.supplyRequest?.lines ?? []).map((l) => (
                 <div key={l.id}>
-                  {l.item.code} — {l.item.name} ×{l.status === 'FULFILLED' ? 0 : l.quantity}
-                  {l.status === 'FULFILLED' ? ' (already issued)' : ''}
+                  {l.item.code} — {l.item.name}{l.status === 'FULFILLED' ? ' — already issued' : ` ×${l.quantity}`}
                 </div>
               ))}
             </div>
