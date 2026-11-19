@@ -36,6 +36,15 @@ export class IssueRequestDto {
   @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
+export class FulfillDto {
+  /** who physically collected the items at the counter (typed by Administration) */
+  @IsOptional() @IsString() @MaxLength(120) receivedByName?: string;
+}
+
+export class EditLinesDto {
+  @IsArray() items!: { itemId: string; quantity: number }[];
+}
+
 export class StartPurchasingDto {
   /** the day the items will be collectable ("today" / "tomorrow" in the UI) */
   @IsDateString() expectedReadyOn!: string;
@@ -178,8 +187,66 @@ export class InventoryController {
   /** Hand the items over — the only step that deducts stock. */
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
   @Post('requests/:requestId/fulfill')
-  fulfill(@Req() req, @Param('requestId') requestId: string) {
-    return this.inventory.fulfill(requestId, this.actor(req));
+  fulfill(@Req() req, @Param('requestId') requestId: string, @Body() dto: FulfillDto) {
+    return this.inventory.fulfill(requestId, this.actor(req), { receivedByName: dto?.receivedByName });
+  }
+
+  /** Mixed sourcing — issue the lines already on the shelf, keep buying the rest. */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('requests/:requestId/issue-available')
+  issueAvailable(@Req() req, @Param('requestId') requestId: string) {
+    return this.inventory.issueInStock(requestId, this.actor(req));
+  }
+
+  /** Link the PR raised to buy this request's missing items (traceability). */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('requests/:requestId/link-pr')
+  linkPurchaseRequest(@Req() req, @Param('requestId') requestId: string, @Body() body: { purchaseRequestId: string }) {
+    return this.inventory.linkPurchaseRequest(requestId, body.purchaseRequestId, this.actor(req));
+  }
+
+  /** The requester confirms they collected the items. */
+  @RequirePermissions(PERMISSIONS.REQUESTS_CREATE)
+  @Post('requests/:requestId/confirm-receipt')
+  confirmReceipt(@Req() req, @Param('requestId') requestId: string) {
+    return this.inventory.confirmReceipt(requestId, this.actor(req));
+  }
+
+  /** The requester withdraws a request that is still awaiting approval. */
+  @RequirePermissions(PERMISSIONS.REQUESTS_CREATE)
+  @Post('requests/:requestId/withdraw')
+  withdraw(@Req() req, @Param('requestId') requestId: string) {
+    return this.inventory.withdraw(requestId, this.actor(req));
+  }
+
+  /** Fix the items/quantities of an own request that is still awaiting approval. */
+  @RequirePermissions(PERMISSIONS.REQUESTS_CREATE)
+  @Patch('requests/:requestId/lines')
+  editLines(@Req() req, @Param('requestId') requestId: string, @Body() dto: EditLinesDto) {
+    return this.inventory.editLines(requestId, dto.items, this.actor(req));
+  }
+
+  /** Supply consumption per department / item for a month (defaults to this month). */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Get('consumption')
+  consumption(@Query('start') start?: string, @Query('end') end?: string) {
+    return this.inventory.consumptionReport(start || undefined, end || undefined);
+  }
+
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Get('consumption.csv')
+  async consumptionCsv(@Query('start') start?: string, @Query('end') end?: string, @Res() res?: Response) {
+    const { filename, content } = await this.inventory.consumptionCsv(start || undefined, end || undefined);
+    res!.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res!.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res!.send(content);
+  }
+
+  /** Manual trigger for the stale-pickup reminder pass (also runs daily at 08:30). */
+  @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
+  @Post('pickup-reminders')
+  pickupReminders() {
+    return this.inventory.remindStalePickupsNow();
   }
 
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)

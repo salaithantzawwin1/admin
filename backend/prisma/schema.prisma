@@ -1231,11 +1231,21 @@ model OfficeSupplyRequest {
   /// free text shown to the requester while buying (supplier, PO number, …)
   purchaseNote String?
   fulfilledAt DateTime?
+  /// hand-over record: who handed the items over in Administration and, when
+  /// the counter staff typed it in, who physically collected them
+  handedOverByName String?
+  receivedByName    String?
+  /// the requester pressed "I received these" — the other half of the hand-over
+  receivedConfirmedAt DateTime?
+  /// last stale-pickup reminder (once per day, deduped)
+  lastReminderAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
   request RequestDocument     @relation("SupplyRequest", fields: [requestId], references: [id], onDelete: Cascade)
   lines   SupplyRequestLine[]
+  /// purchase requests raised to buy this request's missing items (traceability)
+  purchaseRequests PurchaseRequest[] @relation("PrFromSupply")
 
   @@map("office_supply_requests")
 }
@@ -1838,12 +1848,17 @@ model PurchaseRequest {
   // display classification — money movement lives in the petty-cash ledger.
   purchaseType  String           @default("NORMAL") // NORMAL / EMERGENCY / DIRECT / PETTY_CASH
   purchaseReason String?
+  /// the office supply request this PR was raised for (OSR → PR → PO → GRN chain)
+  sourceSupplyRequestId String? @db.Uuid
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
   request        RequestDocument       @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  sourceSupplyRequest OfficeSupplyRequest? @relation("PrFromSupply", fields: [sourceSupplyRequestId], references: [requestId], onDelete: SetNull)
   items          PurchaseRequestItem[]
   purchaseOrders PurchaseOrder[]
+
+  @@index([sourceSupplyRequestId])
 
   @@map("purchase_requests")
 }

@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { InventoryService } from '../inventory/inventory.service';
 import { BudgetService } from '../budget/budget.service';
 import { AssetsService } from '../assets/assets.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { Actor } from '../org/org.service';
 import { normalizePurchaseType } from './purchase-types';
 
@@ -90,6 +91,7 @@ export class PurchaseOrdersService {
     private inventory: InventoryService,
     private budget: BudgetService,
     private assets: AssetsService,
+    private notifications: NotificationsService,
   ) {}
 
   // ---------- PO lifecycle ----------
@@ -422,6 +424,45 @@ export class PurchaseOrdersService {
         assetErrors,
       },
     });
+
+    // Receiving is the moment the requester can act on: the PR requester was
+    // never told anything after approval, and an office supply request that was
+    // bought for needs its collection notice. Both come from the PO's PR.
+    if (po.purchaseRequestId) {
+      const acceptedTotal = lines.reduce((s, l) => s + l.acceptedQty, 0);
+      const pr = await this.prisma.purchaseRequest.findUnique({
+        where: { id: po.purchaseRequestId },
+        include: {
+          request: { select: { id: true, docNumber: true, requesterId: true } },
+          sourceSupplyRequest: {
+            select: { requestId: true, request: { select: { id: true, docNumber: true, requesterId: true } } },
+          },
+        },
+      });
+      if (pr?.request) {
+        await this.notifications.notify({
+          userId: pr.request.requesterId, type: 'SUPPLY_READY_FOR_PICKUP' as never,
+          title: `Goods received — ${pr.request.docNumber}`,
+          body: `${grnNumber} accepted ${acceptedTotal} item(s) from ${po.poNumber}. Collect them from the Administration store.`,
+          link: `/requests/${pr.request.id}`, requestId: pr.request.id,
+        });
+      }
+      const osr = pr?.sourceSupplyRequest;
+      if (osr?.request) {
+        await this.notifications.notify({
+          userId: osr.request.requesterId, type: 'SUPPLY_PURCHASING' as never,
+          title: `Your items arrived — ${osr.request.docNumber}`,
+          body: `${grnNumber} (PO ${po.poNumber}) delivered the items being bought for you. Administration will hand them over next.`,
+          link: `/requests/${osr.request.id}`, requestId: osr.request.id,
+        });
+        // the buying note the requester sees now carries the real source
+        await this.prisma.officeSupplyRequest.update({
+          where: { requestId: osr.requestId },
+          data: { purchaseNote: `${grnNumber} · ${po.poNumber}` },
+        });
+      }
+    }
+
     return { ...grn, poStatus: newStatus, assetsCreated, assetErrors };
   }
 

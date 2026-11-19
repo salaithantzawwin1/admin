@@ -55,14 +55,25 @@ interface SupplyHeader {
   expectedReadyOn?: string | null;
   purchaseNote?: string | null;
   readyAt?: string | null;
+  handedOverByName?: string | null;
+  receivedByName?: string | null;
+  receivedConfirmedAt?: string | null;
 }
+
+/** OSR → PR → PO → GRN, as returned on the supply header. */
+interface PurchaseLink {
+  request: { id?: string; docNumber: string; status: string };
+  purchaseOrders: { poNumber: string; status: string; supplier?: { name: string } | null; goodsReceipts: { grnNumber: string }[] }[];
+}
+
+type SupplyWithChain = SupplyHeader & { purchaseRequests?: PurchaseLink[] };
 
 interface MyRequest {
   id: string;
   docNumber: string;
   status: string;
   createdAt: string;
-  supplyRequest?: (SupplyHeader & { lines: SupplyLine[] }) | null;
+  supplyRequest?: (SupplyWithChain & { lines: SupplyLine[] }) | null;
 }
 
 interface PendingRequest {
@@ -72,7 +83,16 @@ interface PendingRequest {
   status?: string;
   requester?: { fullName: string } | null;
   department?: { name: string } | null;
-  supplyRequest?: (SupplyHeader & { lines: (SupplyLine & { item: { code: string; name: string; unit: string; balance: number } })[] }) | null;
+  supplyRequest?: (SupplyWithChain & { lines: (SupplyLine & { item: { code: string; name: string; unit: string; balance: number } })[] }) | null;
+}
+
+interface ConsumptionRow { name: string; code?: string; unit?: string; qty: number; value: number; lines: number; unpriced: number }
+interface Consumption {
+  totalQty: number;
+  totalValue: number;
+  unpricedLines: number;
+  departments: ConsumptionRow[];
+  items: ConsumptionRow[];
 }
 
 interface Txn {
@@ -122,7 +142,7 @@ function dayInput(offsetDays = 0) {
 }
 
 type Tab = 'catalog' | 'management' | 'purchases';
-type MgmtTab = 'queue' | 'restock' | 'alerts' | 'reorder' | 'items';
+type MgmtTab = 'queue' | 'restock' | 'alerts' | 'reorder' | 'items' | 'usage';
 
 const ITEMS_PER_PAGE = 10;
 
@@ -173,7 +193,7 @@ export default function Inventory() {
   // so refresh / back / shared links land on the exact working view
   const mgmtParam = searchParams.get('sub') as MgmtTab | null;
   const mgmtTab: MgmtTab =
-    mgmtParam === 'queue' || mgmtParam === 'restock' || mgmtParam === 'alerts' || mgmtParam === 'reorder' || mgmtParam === 'items'
+    mgmtParam === 'queue' || mgmtParam === 'restock' || mgmtParam === 'alerts' || mgmtParam === 'reorder' || mgmtParam === 'items' || mgmtParam === 'usage'
       ? mgmtParam
       : 'queue';
   const setMgmtTab = (m: MgmtTab) => setSearchParams({ tab: 'management', ...(m === 'queue' ? {} : { sub: m }) }, { replace: false });
@@ -229,6 +249,21 @@ export default function Inventory() {
   const [buyForm, setBuyForm] = useState({ date: '', note: '' });
   const [buyBusy, setBuyBusy] = useState(false);
   const [buyError, setBuyError] = useState('');
+  // hand-over record — who collected the items at the counter (optional)
+  const [handOverFor, setHandOverFor] = useState<PendingRequest | null>(null);
+  const [handOverName, setHandOverName] = useState('');
+  const [handOverBusy, setHandOverBusy] = useState(false);
+  const [handOverError, setHandOverError] = useState('');
+  // requester side: withdraw a request still awaiting approval
+  const [withdrawFor, setWithdrawFor] = useState<MyRequest | null>(null);
+  // requester side: fix items/quantities while the request is still pending
+  const [editFor, setEditFor] = useState<MyRequest | null>(null);
+  const [editDraft, setEditDraft] = useState<{ itemId: string; quantity: number }[]>([]);
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState('');
+  // consumption report (management)
+  const [consumption, setConsumption] = useState<Consumption | null>(null);
+  const [useMonth, setUseMonth] = useState(() => new Date());
 
   // history viewer
   const [historyFor, setHistoryFor] = useState<Item | null>(null);
@@ -267,6 +302,13 @@ export default function Inventory() {
     api<Spending>(`/inventory/spending?start=${w.start}&end=${w.end}`).then(setSpending).catch(() => setSpending(null));
     api<ReorderRow[]>('/inventory/reorder-suggestions').then(setReorder).catch(() => setReorder([]));
   }, [spendMonth, canManage]);
+
+  // supply consumption for the management "Usage" tab — loaded on demand
+  useEffect(() => {
+    if (!canManage || mgmtTab !== 'usage') return;
+    const w = spendWindow(useMonth);
+    api<Consumption>(`/inventory/consumption?start=${w.start}&end=${w.end}`).then(setConsumption).catch(() => setConsumption(null));
+  }, [useMonth, mgmtTab, canManage]);
 
   // accounts feed the purchase's budget classification — optional, so a
   // missing grant or an empty master never blocks a restock
@@ -411,6 +453,29 @@ export default function Inventory() {
     }
   };
 
+  /** Supply consumption CSV — per department / per item for the chosen month. */
+  const downloadConsumptionCsv = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      const w = spendWindow(useMonth);
+      const res = await fetch(`/api/inventory/consumption.csv?start=${w.start}&end=${w.end}`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error('Export failed');
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `supply-consumption-${useMonth.getFullYear()}-${String(useMonth.getMonth() + 1).padStart(2, '0')}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const submitCart = async () => {
     const lines = Object.entries(cart).filter(([, q]) => q > 0).map(([itemId, quantity]) => ({ itemId, quantity }));
     if (lines.length === 0) return;
@@ -450,14 +515,91 @@ export default function Inventory() {
     }
   };
 
-  const doFulfill = async (requestId: string) => {
+  const doFulfill = async (requestId: string, receivedByName?: string) => {
+    setError('');
+    await api(`/inventory/requests/${requestId}/fulfill`, {
+      method: 'POST',
+      body: { receivedByName: receivedByName?.trim() || undefined },
+    });
+    toast('Handed over — stock deducted');
+    load();
+  };
+
+  const openHandOver = (r: PendingRequest) => {
+    setHandOverFor(r);
+    setHandOverName('');
+    setHandOverError('');
+  };
+
+  const doHandOver = async () => {
+    if (!handOverFor) return;
+    setHandOverBusy(true);
+    setHandOverError('');
+    try {
+      await doFulfill(handOverFor.id, handOverName);
+      setHandOverFor(null);
+    } catch (e) {
+      setHandOverError(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setHandOverBusy(false);
+    }
+  };
+
+  /** Mixed sourcing — give out the lines already on the shelf, buy the rest. */
+  const doIssueAvailable = async (requestId: string) => {
     setError('');
     try {
-      await api(`/inventory/requests/${requestId}/fulfill`, { method: 'POST' });
-      toast('Handed over — stock deducted');
+      await api(`/inventory/requests/${requestId}/issue-available`, { method: 'POST' });
+      toast('In-stock items issued — the rest stays in the buying queue');
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const doWithdraw = async (requestId: string) => {
+    setError('');
+    try {
+      await api(`/inventory/requests/${requestId}/withdraw`, { method: 'POST' });
+      toast('Request withdrawn');
+      setWithdrawFor(null);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+      throw e;
+    }
+  };
+
+  const doConfirmReceipt = async (requestId: string) => {
+    setError('');
+    try {
+      await api(`/inventory/requests/${requestId}/confirm-receipt`, { method: 'POST' });
+      toast('Thanks — collection confirmed');
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed');
+    }
+  };
+
+  const openEdit = (r: MyRequest) => {
+    setEditFor(r);
+    setEditDraft((r.supplyRequest?.lines ?? []).map((l) => ({ itemId: l.itemId, quantity: l.quantity })));
+    setEditError('');
+  };
+
+  const doSaveEdit = async () => {
+    if (!editFor) return;
+    setEditBusy(true);
+    setEditError('');
+    try {
+      await api(`/inventory/requests/${editFor.id}/lines`, { method: 'PATCH', body: { items: editDraft } });
+      toast('Request updated — the approver sees the new items');
+      setEditFor(null);
+      load();
+    } catch (e) {
+      setEditError(e instanceof Error ? e.message : 'Failed');
+    } finally {
+      setEditBusy(false);
     }
   };
 
@@ -926,6 +1068,7 @@ export default function Inventory() {
                     <th className="px-4 py-3 font-medium">Items</th>
                     <th className="px-4 py-3 font-medium text-center">Status</th>
                     <th className="px-4 py-3 font-medium">Created</th>
+                    <th className="px-4 py-3 font-medium text-center"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -949,8 +1092,28 @@ export default function Inventory() {
                         {r.supplyRequest?.status === 'READY_FOR_PICKUP' && (
                           <div className="text-[11px] text-green-700 mt-1">waiting at the store</div>
                         )}
+                        {r.supplyRequest?.purchaseNote && r.supplyRequest.status !== 'PENDING' && (
+                          <div className="text-[11px] text-gray-500 mt-1">{r.supplyRequest.purchaseNote}</div>
+                        )}
+                        {r.supplyRequest?.receivedConfirmedAt ? (
+                          <div className="text-[11px] text-green-700 mt-1">✓ you confirmed collection</div>
+                        ) : r.supplyRequest?.receivedByName ? (
+                          <div className="text-[11px] text-gray-500 mt-1">collected by {r.supplyRequest.receivedByName}</div>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-gray-500">{fmtDate(r.createdAt)}</td>
+                      <td className="px-4 py-3 text-center space-x-2 whitespace-nowrap">
+                        {r.status === 'PENDING_APPROVAL' && (
+                          <>
+                            <Button variant="ghost" onClick={() => openEdit(r)}>Edit</Button>
+                            <Button variant="ghost" onClick={() => setWithdrawFor(r)}>Withdraw</Button>
+                          </>
+                        )}
+                        {['PARTIAL', 'FULFILLED'].includes(r.supplyRequest?.status ?? '') &&
+                          !r.supplyRequest?.receivedConfirmedAt && (
+                          <Button variant="ghost" onClick={() => void doConfirmReceipt(r.id)}>I got these</Button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -971,6 +1134,7 @@ export default function Inventory() {
               ['alerts', `🔔 Low stock${lowCount > 0 ? ` (${lowCount})` : ''}`],
               ['reorder', `♻️ Reorder${reorder.length > 0 ? ` (${reorder.length})` : ''}`],
               ['items', '🗂 Items'],
+              ['usage', '📊 Usage'],
             ] as [MgmtTab, string][]).map(([k, label]) => (
               <button
                 key={k}
@@ -1020,6 +1184,13 @@ export default function Inventory() {
                             <td className={`py-1 text-right ${l.quantity > l.item.balance ? 'text-red-600' : 'text-green-700'}`}>
                               {l.quantity > l.item.balance ? `only ${l.item.balance} in stock` : `${l.item.balance} in stock`}
                             </td>
+                            <td className="py-1 text-right text-xs">
+                              {l.status === 'FULFILLED'
+                                ? <span className="text-green-700">issued {l.fulfilledQty}/{l.quantity}</span>
+                                : l.status === 'OUT_OF_STOCK'
+                                  ? <span className="text-red-600">out of stock — retry</span>
+                                  : <span className="text-gray-400">{l.quantity <= l.item.balance ? 'in stock — can issue now' : 'needs purchase'}</span>}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1031,15 +1202,38 @@ export default function Inventory() {
                         {r.supplyRequest.purchaseNote ? ` · ${r.supplyRequest.purchaseNote}` : ''}
                       </div>
                     )}
+                    {(() => {
+                      // OSR → PR → PO → GRN chain: what we bought for this request
+                      const links = r.supplyRequest?.purchaseRequests ?? [];
+                      if (links.length === 0) return null;
+                      return (
+                        <div className="text-xs text-gray-500 mb-2 space-y-0.5">
+                          {links.map((p, idx) => (
+                            <div key={`${p.request.docNumber}-${idx}`}>
+                              Bought via <b>{p.request.docNumber}</b>
+                              {p.purchaseOrders.length > 0 && ` → ${p.purchaseOrders.map((po) => {
+                                const grns = po.goodsReceipts.map((g) => g.grnNumber).join(', ');
+                                return `${po.poNumber}${grns ? ` (${grns})` : ''}`;
+                              }).join(' · ')}`}
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
                     <div className="flex flex-wrap gap-2">
                       {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="ghost" onClick={() => openBuy(r)}>🛒 Buying — set collection day</Button>
                       )}
-                      {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
+                      {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="ghost" onClick={() => void doReady(r.id)}>✅ Ready for pickup</Button>
                       )}
-                      {r.supplyRequest?.status === 'READY_FOR_PICKUP' && (
-                        <Button onClick={() => void doFulfill(r.id)}>📦 Hand over (issue stock)</Button>
+                      {/* mixed sourcing: give out the in-stock lines instead of making them wait */}
+                      {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') &&
+                        (r.supplyRequest?.lines ?? []).some((l) => l.status !== 'FULFILLED' && l.quantity <= l.item.balance) && (
+                        <Button variant="ghost" onClick={() => void doIssueAvailable(r.id)}>📦 Issue in-stock items now</Button>
+                      )}
+                      {['READY_FOR_PICKUP', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') && (
+                        <Button onClick={() => openHandOver(r)}>📦 Hand over (issue stock)</Button>
                       )}
                       {['PENDING', 'PURCHASING'].includes(r.supplyRequest?.status ?? '') && (
                         <Button variant="danger" onClick={() => setRejectFor(r)}>Cannot fulfill</Button>
@@ -1280,8 +1474,6 @@ export default function Inventory() {
             )}
           </Card>
           )}
-
-          {/* monthly spending lives in its own Purchases tab now */}
         </>
       )}
 
@@ -1424,10 +1616,196 @@ export default function Inventory() {
               </tbody>
             </table>
           </Card>
+
+          {/* ---- sub-tab: usage / consumption report ---- */}
+          {mgmtTab === 'usage' && (
+          <Card className="mb-5 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
+              <div>
+                <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Supply consumed</h2>
+                <p className="text-xs text-gray-400">
+                  What left the shelf in {useMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}, per department and per item.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="month"
+                  className="!w-40"
+                  value={`${useMonth.getFullYear()}-${String(useMonth.getMonth() + 1).padStart(2, '0')}`}
+                  onChange={(e) => {
+                    const [y, m] = e.target.value.split('-').map(Number);
+                    if (y && m) setUseMonth(new Date(y, m - 1, 1));
+                  }}
+                />
+                <Button variant="ghost" disabled={busy} onClick={() => void downloadConsumptionCsv()}>⬇ CSV</Button>
+              </div>
+            </div>
+            {!consumption ? (
+              <Empty label="No consumption data" />
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+                  <div className="border border-gray-200 rounded-lg p-3">
+                    <div className="text-xs text-gray-500">Items issued</div>
+                    <div className="text-lg font-semibold">{consumption.totalQty}</div>
+                  </div>
+                  <div className="border border-gray-200 rounded-lg p-3">
+                    <div className="text-xs text-gray-500">Value</div>
+                    <div className="text-lg font-semibold">{fmtMoney(consumption.totalValue)} Ks</div>
+                  </div>
+                  <div className="border border-gray-200 rounded-lg p-3">
+                    <div className="text-xs text-gray-500">Lines without a price</div>
+                    <div className="text-lg font-semibold">{consumption.unpricedLines}</div>
+                  </div>
+                </div>
+                <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">By department</h3>
+                <table className="w-full text-sm mb-5">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                      <th className="px-3 py-2 font-medium">Department</th>
+                      <th className="px-3 py-2 font-medium text-right">Qty issued</th>
+                      <th className="px-3 py-2 font-medium text-right">Value (Ks)</th>
+                      <th className="px-3 py-2 font-medium text-right">Lines</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {consumption.departments.length === 0 && <tr><td colSpan={4}><Empty label="Nothing issued this month" /></td></tr>}
+                    {consumption.departments.map((d) => (
+                      <tr key={d.name}>
+                        <td className="px-3 py-2">{d.name}</td>
+                        <td className="px-3 py-2 text-right">{d.qty}</td>
+                        <td className="px-3 py-2 text-right">{fmtMoney(d.value)}</td>
+                        <td className="px-3 py-2 text-right text-gray-500">{d.lines}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <h3 className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">By item</h3>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                      <th className="px-3 py-2 font-medium">Item</th>
+                      <th className="px-3 py-2 font-medium text-right">Qty issued</th>
+                      <th className="px-3 py-2 font-medium text-right">Value (Ks)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {consumption.items.map((i) => (
+                      <tr key={i.code}>
+                        <td className="px-3 py-2">{i.code} — {i.name}</td>
+                        <td className="px-3 py-2 text-right">{i.qty} {i.unit}</td>
+                        <td className="px-3 py-2 text-right">{fmtMoney(i.value)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+          </Card>
+          )}
+
+          {/* monthly spending lives in its own Purchases tab now */}
         </>
       )}
 
       {/* ============ modals ============ */}
+
+      {/* requester withdraws a request that is still waiting for approval */}
+      {withdrawFor && (
+        <ConfirmDialog
+          title={`Withdraw ${withdrawFor.docNumber}?`}
+          description="The request is cancelled and disappears from the approver's inbox. You can raise a new one afterwards."
+          confirmLabel="Withdraw"
+          variant="danger"
+          onClose={() => setWithdrawFor(null)}
+          onConfirm={async () => { await doWithdraw(withdrawFor.id); }}
+        />
+      )}
+
+      {/* edit an own request while it is still awaiting approval */}
+      {editFor && (
+        <Modal title={`Edit ${editFor.docNumber}`} onClose={() => { if (!editBusy) setEditFor(null); }} error={editError}>
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500">
+              The approver has not decided yet, so the items can still be corrected. Adding a missing item? Add a line here.
+            </p>
+            {editDraft.map((line, idx) => (
+              <div key={idx} className="flex items-center gap-2">
+                <Select
+                  className="flex-1"
+                  value={line.itemId}
+                  onChange={(e) => setEditDraft((d) => d.map((l, i) => (i === idx ? { ...l, itemId: e.target.value } : l)))}
+                >
+                  <option value="">— Item —</option>
+                  {items.map((i) => <option key={i.id} value={i.id}>{i.code} — {i.name}</option>)}
+                </Select>
+                <NumberField
+                  min={1}
+                  integer
+                  className="!w-24"
+                  value={line.quantity}
+                  onChange={(quantity) => setEditDraft((d) => d.map((l, i) => (i === idx ? { ...l, quantity } : l)))}
+                />
+                <button
+                  type="button"
+                  className="text-xs text-red-600 hover:underline"
+                  onClick={() => setEditDraft((d) => d.filter((_, i) => i !== idx))}
+                >
+                  remove
+                </button>
+              </div>
+            ))}
+            <Button variant="ghost" onClick={() => setEditDraft((d) => [...d, { itemId: '', quantity: 1 }])}>+ Add item</Button>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" disabled={editBusy} onClick={() => setEditFor(null)}>Cancel</Button>
+              <Button
+                disabled={editBusy || editDraft.length === 0 || editDraft.some((l) => !l.itemId || l.quantity < 1)}
+                onClick={() => void doSaveEdit()}
+              >
+                {editBusy ? 'Saving…' : 'Save changes'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* hand-over record — who collected the items */}
+      {handOverFor && (
+        <Modal
+          title={`Hand over ${handOverFor.docNumber}`}
+          onClose={() => { if (!handOverBusy) setHandOverFor(null); }}
+          error={handOverError}
+        >
+          <div className="space-y-3 text-sm">
+            <p className="text-xs text-gray-500">
+              Stock is deducted now. Recording who collected the items closes the gap between "handed over" and "I never got them".
+            </p>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1" htmlFor="handover-received-by">Received by (optional)</label>
+              <Input
+                id="handover-received-by"
+                placeholder="Name of the person collecting"
+                value={handOverName}
+                onChange={(e) => setHandOverName(e.target.value)}
+              />
+            </div>
+            <div className="text-xs text-gray-500">
+              {(handOverFor.supplyRequest?.lines ?? []).map((l) => (
+                <div key={l.id}>
+                  {l.item.code} — {l.item.name} ×{l.status === 'FULFILLED' ? 0 : l.quantity}
+                  {l.status === 'FULFILLED' ? ' (already issued)' : ''}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" disabled={handOverBusy} onClick={() => setHandOverFor(null)}>Cancel</Button>
+              <Button disabled={handOverBusy} onClick={() => void doHandOver()}>
+                {handOverBusy ? 'Handing over…' : 'Hand over & deduct stock'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
       {/* buying stage — the day the requester should come back (today / tomorrow quick picks) */}
       {buyFor && (
         <Modal title={`Buying ${buyFor.docNumber}`} onClose={() => { if (!buyBusy) setBuyFor(null); }} error={buyError}>

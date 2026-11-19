@@ -25,6 +25,8 @@ export interface CreatePrInput {
   /** §W4 — NORMAL / EMERGENCY / DIRECT / PETTY_CASH (+ reason for the exceptions). */
   purchaseType?: string;
   purchaseReason?: string;
+  /** Office supply request this PR is buying for (OSR → PR → PO → GRN chain). */
+  sourceSupplyRequestId?: string;
   items: PrItemInput[];
 }
 
@@ -228,6 +230,15 @@ export class ProcurementService {
   /** Creates a PR as a workflow document (DRAFT). The requester submits it via the standard POST /requests/:id/submit afterwards — same flow as car and meeting-room requests. */
   async create(data: CreatePrInput, actor: Actor) {
     const items = this.normalizeItems(data.items);
+    // link back to the supply request this PR is buying for — a dangling id
+    // would make the traceability chain lie, so refuse it here
+    if (data.sourceSupplyRequestId) {
+      const supply = await this.prisma.officeSupplyRequest.findUnique({
+        where: { requestId: data.sourceSupplyRequestId },
+        select: { requestId: true },
+      });
+      if (!supply) throw new BadRequestException('Linked supply request not found');
+    }
     const total = items.reduce((sum, it) => sum + (it.estimatedUnitPrice ?? 0) * it.quantity, 0);
     const title = (data.title?.trim() || items[0].description).slice(0, 200);
     const priority = data.priority === 'URGENT' ? 'URGENT' : 'NORMAL';
@@ -256,6 +267,7 @@ export class ProcurementService {
         budgetCode: data.budgetCode?.trim() || undefined,
         purchaseType: purchase.purchaseType,
         purchaseReason: purchase.purchaseReason,
+        sourceSupplyRequestId: data.sourceSupplyRequestId || undefined,
         items: {
           create: items.map((it) => ({
             description: it.description,

@@ -186,11 +186,31 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
   const [budgetCode, setBudgetCode] = useState('');
   const [justification, setJustification] = useState('');
   const [items, setItems] = useState<DraftItem[]>([emptyItem()]);
+  // optional OSR link — the purchase then shows up on that supply request
+  const [sourceOsr, setSourceOsr] = useState('');
+  const [osrOptions, setOsrOptions] = useState<{ id: string; docNumber: string; items: string }[]>([]);
   // §9 budget block — friendly explain modal instead of a raw 409 message
   const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
 
   const setItem = (idx: number, patch: Partial<DraftItem>) =>
     setItems((prev) => prev.map((it, i) => (i === idx ? { ...it, ...patch } : it)));
+
+  // my approved supply requests still waiting for items — candidates for the link
+  useEffect(() => {
+    api<any[]>('/inventory/requests/mine')
+      .then((rows) => setOsrOptions(
+        (rows ?? [])
+          .filter((r) => r.docType === 'OFFICE_SUPPLY_REQUEST' && r.status === 'APPROVED' && r.supplyRequest)
+          .filter((r) => ['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest.status))
+          .filter((r) => (r.supplyRequest.purchaseRequests ?? []).length === 0)
+          .map((r) => ({
+            id: r.id,
+            docNumber: r.docNumber,
+            items: (r.supplyRequest.lines ?? []).map((l: any) => `${l.item?.name ?? ''} ×${l.quantity}`).join(', '),
+          })),
+      ))
+      .catch(() => setOsrOptions([]));
+  }, []);
 
   const total = items.reduce((sum, it) => sum + (Number(it.estimatedUnitPrice) || 0) * (Number(it.quantity) || 0), 0);
   const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
@@ -209,6 +229,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
           requiredDate: requiredDate || undefined,
           budgetCode: budgetCode.trim() || undefined,
           justification: justification.trim() || undefined,
+          sourceSupplyRequestId: sourceOsr || undefined,
           items: items.map((it) => ({
             description: it.description.trim(),
             quantity: Number(it.quantity),
@@ -314,6 +335,20 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
         </div>
+        {osrOptions.length > 0 && (
+          <div>
+            <label htmlFor="pr-supply-request" className="text-xs text-gray-500 block mb-1">Buying for an office supply request (optional)</label>
+            <Select id="pr-supply-request" value={sourceOsr} onChange={(e) => setSourceOsr(e.target.value)}>
+              <option value="">— not linked —</option>
+              {osrOptions.map((o) => (
+                <option key={o.id} value={o.id}>{o.docNumber} — {o.items}</option>
+              ))}
+            </Select>
+            <div className="text-[11px] text-gray-400 mt-1">
+              Links this PR to the supply request, so the OSR shows the PR → PO → GRN it was bought through.
+            </div>
+          </div>
+        )}
         <div>
           <label htmlFor="pr-justification" className="text-xs text-gray-500 block mb-1">Purpose / justification (optional)</label>
           <Textarea id="pr-justification" rows={2} placeholder="Why is this purchase needed?" value={justification} onChange={(e) => setJustification(e.target.value)} />

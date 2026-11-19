@@ -374,8 +374,45 @@ export class InventoryService {
   async findByRequest(requestId: string) {
     return this.prisma.officeSupplyRequest.findUnique({
       where: { requestId },
-      include: { lines: { include: { item: { select: { code: true, name: true, unit: true, balance: true } } } } },
+      include: {
+        lines: { include: { item: { select: { code: true, name: true, unit: true, balance: true } } } },
+        // OSR → PR → PO → GRN: what we bought for this request and where it came from
+        purchaseRequests: {
+          include: {
+            request: { select: { id: true, docNumber: true, status: true } },
+            purchaseOrders: {
+              select: {
+                id: true, poNumber: true, status: true,
+                supplier: { select: { name: true } },
+                goodsReceipts: { select: { grnNumber: true, receivedAt: true } },
+              },
+            },
+          },
+        },
+      },
     });
+  }
+
+  /**
+   * Raise this request's missing items as a purchase request (traceability).
+   * Validation is minimal by design — the PR module owns its own approval and
+   * budget rules; here we only refuse a request that is not an OSR of the caller.
+   */
+  async linkPurchaseRequest(requestId: string, purchaseRequestId: string, actor: Actor) {
+    const supply = await this.prisma.officeSupplyRequest.findUnique({ where: { requestId } });
+    if (!supply) throw new NotFoundException('Supply request not found');
+    const pr = await this.prisma.purchaseRequest.findUnique({ where: { id: purchaseRequestId } });
+    if (!pr) throw new NotFoundException('Purchase request not found');
+    await this.prisma.purchaseRequest.update({
+      where: { id: purchaseRequestId },
+      data: { sourceSupplyRequestId: requestId },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'SUPPLY_REQUEST_LINKED_TO_PR', module: 'INVENTORY', recordId: requestId,
+      newValue: { purchaseRequestId },
+    });
+    return { success: true };
   }
 
   /** My requests history for the employee view. */
@@ -385,7 +422,23 @@ export class InventoryService {
       orderBy: { createdAt: 'desc' },
       take: 100,
       include: {
-        supplyRequest: { include: { lines: { include: { item: { select: { code: true, name: true, unit: true } } } } } },
+        supplyRequest: {
+          include: {
+            lines: { include: { item: { select: { code: true, name: true, unit: true } } } },
+            purchaseRequests: {
+              select: {
+                request: { select: { docNumber: true, status: true } },
+                purchaseOrders: {
+                  select: {
+                    poNumber: true, status: true,
+                    supplier: { select: { name: true } },
+                    goodsReceipts: { select: { grnNumber: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -409,7 +462,24 @@ export class InventoryService {
       include: {
         requester: { select: { username: true, fullName: true } },
         department: { select: { name: true } },
-        supplyRequest: { include: { lines: { include: { item: { select: { code: true, name: true, unit: true, balance: true } } } } } },
+        supplyRequest: {
+          include: {
+            lines: { include: { item: { select: { code: true, name: true, unit: true, balance: true } } } },
+            // where the missing items were bought (OSR → PR → PO → GRN)
+            purchaseRequests: {
+              select: {
+                request: { select: { id: true, docNumber: true, status: true } },
+                purchaseOrders: {
+                  select: {
+                    poNumber: true, status: true,
+                    supplier: { select: { name: true } },
+                    goodsReceipts: { select: { grnNumber: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
       },
     });
   }
@@ -452,7 +522,8 @@ export class InventoryService {
     if (Number.isNaN(expected.getTime())) throw new BadRequestException('Choose the day the items will be ready');
     const doc = await this.supplyDoc(requestId);
     const supply = doc.supplyRequest!;
-    if (!['PENDING', 'PURCHASING'].includes(supply.status)) {
+    // PARTIAL = some lines were already issued from the shelf; the rest is still bought
+    if (!['PENDING', 'PURCHASING', 'PARTIAL'].includes(supply.status)) {
       throw new ConflictException(`Already ${supply.status} — the buying stage is over`);
     }
     if (doc.status !== 'APPROVED') throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
@@ -484,7 +555,7 @@ export class InventoryService {
   async markReady(requestId: string, actor: Actor) {
     const doc = await this.supplyDoc(requestId);
     const supply = doc.supplyRequest!;
-    if (!['PENDING', 'PURCHASING'].includes(supply.status)) {
+    if (!['PENDING', 'PURCHASING', 'PARTIAL'].includes(supply.status)) {
       throw new ConflictException(`Already ${supply.status} — nothing to mark ready`);
     }
     if (doc.status !== 'APPROVED') throw new BadRequestException(`Workflow status is ${doc.status} — not approved yet`);
@@ -513,7 +584,7 @@ export class InventoryService {
    * request completes only when every line is fulfilled. This is the ONLY place
    * stock leaves the shelf — approval and the buying stage never deduct.
    */
-  async fulfill(requestId: string, actor: Actor) {
+  async fulfill(requestId: string, actor: Actor, opts: { partial?: boolean; receivedByName?: string } = {}) {
     const doc = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: {
@@ -524,9 +595,18 @@ export class InventoryService {
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
     const supply = doc.supplyRequest;
     // Stock leaves the shelf only here — at hand-over. PREPARING/BUYING rows are
-    // still not collectable; PARTIAL is a retry after restocking.
-    if (!['READY_FOR_PICKUP', 'PARTIAL'].includes(supply.status)) {
-      throw new ConflictException('Mark the items ready for collection before handing them over');
+    // still not collectable; PARTIAL is a retry after restocking. `partial` is
+    // the mixed-sourcing path: issue the lines we already have and keep buying
+    // the rest, instead of making the employee wait for the whole basket.
+    const allowed = opts.partial
+      ? ['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL']
+      : ['READY_FOR_PICKUP', 'PARTIAL'];
+    if (!allowed.includes(supply.status)) {
+      throw new ConflictException(
+        opts.partial
+          ? `Nothing can be issued from stock at stage ${supply.status}`
+          : 'Mark the items ready for collection before handing them over',
+      );
     }
     // the document stays APPROVED while waiting; a partly handed-over request
     // (OUT_OF_STOCK lines) can be retried after restocking
@@ -537,6 +617,8 @@ export class InventoryService {
       throw new BadRequestException('Request is still awaiting approval');
     }
 
+    const handedOverBy = (await this.prisma.user.findUnique({ where: { id: actor.userId }, select: { fullName: true } }))?.fullName ?? actor.username;
+    let issuedNow = 0;
     const result = await this.prisma.$transaction(async (tx) => {
       const shortages: { code: string; requested: number; available: number }[] = [];
       for (const line of supply.lines) {
@@ -547,6 +629,9 @@ export class InventoryService {
         // could have consumed stock between the load above and this transaction)
         const current = await tx.inventoryItem.findUnique({ where: { id: line.itemId }, select: { code: true, balance: true } });
         if (!current || line.quantity > current.balance) {
+          // mixed sourcing: a line we do not have yet is simply bought later —
+          // do not brand it OUT_OF_STOCK before the purchase has even started
+          if (opts.partial) continue;
           await tx.supplyRequestLine.update({ where: { id: line.id }, data: { status: 'OUT_OF_STOCK' } });
           shortages.push({ code: current?.code ?? line.item.code, requested: line.quantity, available: current?.balance ?? 0 });
           continue;
@@ -557,14 +642,31 @@ export class InventoryService {
           where: { id: line.id },
           data: { status: 'FULFILLED', fulfilledQty: line.quantity },
         });
+        issuedNow++;
       }
       const after = await tx.supplyRequestLine.findMany({ where: { supplyRequestId: supply.id } });
       const allFulfilled = after.every((l) => l.status === 'FULFILLED');
       const anyFulfilled = after.some((l) => l.status === 'FULFILLED');
+      if (opts.partial && issuedNow === 0) {
+        // roll the whole attempt back — nothing was on the shelf to give out
+        throw new ConflictException('Nothing on this request is fully in stock yet — buy the items first');
+      }
       const newStatus = allFulfilled ? 'FULFILLED' : anyFulfilled ? 'PARTIAL' : 'PENDING';
       await tx.officeSupplyRequest.update({
         where: { requestId: doc.id },
-        data: { status: newStatus, fulfilledAt: allFulfilled ? new Date() : null },
+        data: {
+          status: newStatus,
+          fulfilledAt: allFulfilled ? new Date() : null,
+          // the hand-over record belongs to the counter action, not to a
+          // shelf-only issue; a partial issue does not close the request
+          ...(opts.partial
+            ? {}
+            : {
+                handedOverByName: handedOverBy,
+                receivedByName: opts.receivedByName?.trim() || null,
+                receivedConfirmedAt: null,
+              }),
+        },
       });
       if (doc.status === 'APPROVED') {
         await tx.requestDocument.update({ where: { id: doc.id }, data: { status: 'COMPLETED' } });
@@ -581,21 +683,131 @@ export class InventoryService {
         body: `Short items: ${result.shortages.map((s) => `${s.code} (need ${s.requested}, have ${s.available})`).join(', ')}. Administration will restock and fulfill later.`,
         link: `/requests/${doc.id}`, requestId: doc.id,
       });
-    } else {
+    } else if (result.newStatus === 'FULFILLED') {
       await this.notifications.notify({
         userId: doc.requesterId, type: 'TRIP_COMPLETED' as never,
         title: `Supplies handed over — ${doc.docNumber}`,
-        body: 'The items were handed over and the stock ledger has been updated.',
+        body: 'The items were handed over and the stock ledger has been updated. Please confirm you received them.',
+        link: `/requests/${doc.id}`, requestId: doc.id,
+      });
+    } else {
+      // mixed sourcing — part of the basket left the shelf, the rest is bought
+      await this.notifications.notify({
+        userId: doc.requesterId, type: 'SUPPLY_PURCHASING' as never,
+        title: `Some items issued — ${doc.docNumber}`,
+        body: 'The items we had in stock were handed over. The rest is being bought and we will tell you when it is ready.',
         link: `/requests/${doc.id}`, requestId: doc.id,
       });
     }
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
-      action: 'SUPPLY_REQUEST_FULFILLED', module: 'INVENTORY', recordId: doc.id,
-      newValue: { status: result.newStatus, shortages: result.shortages },
+      action: opts.partial ? 'SUPPLY_REQUEST_ISSUED_FROM_STOCK' : 'SUPPLY_REQUEST_FULFILLED', module: 'INVENTORY', recordId: doc.id,
+      newValue: {
+        status: result.newStatus, shortages: result.shortages,
+        handedOverBy: opts.partial ? null : handedOverBy,
+        receivedByName: opts.partial ? null : opts.receivedByName?.trim() || null,
+        issuedLines: issuedNow,
+      },
     });
     return result;
+  }
+
+  /** Mixed sourcing: hand over what the shelf already has, keep buying the rest. */
+  async issueInStock(requestId: string, actor: Actor) {
+    return this.fulfill(requestId, actor, { partial: true });
+  }
+
+  /**
+   * The requester says "I got the items" — the other half of the hand-over
+   * record, so a later "I never received them" has an answer.
+   */
+  async confirmReceipt(requestId: string, actor: Actor) {
+    const doc = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      include: { supplyRequest: true, requester: { select: { fullName: true, username: true } } },
+    });
+    if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
+    if (doc.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can confirm receipt');
+    if (doc.supplyRequest.receivedConfirmedAt) return { success: true, already: true, receivedConfirmedAt: doc.supplyRequest.receivedConfirmedAt };
+    // only a hand-over can be confirmed: READY rows are still on the shelf and
+    // the stock has not moved, so "I got these" there would contradict the ledger
+    if (!['PARTIAL', 'FULFILLED'].includes(doc.supplyRequest.status)) {
+      throw new BadRequestException('Nothing has been handed over yet');
+    }
+    const now = new Date();
+    await this.prisma.officeSupplyRequest.update({
+      where: { requestId },
+      data: {
+        receivedConfirmedAt: now,
+        receivedByName: doc.supplyRequest.receivedByName ?? doc.requester.fullName,
+      },
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'SUPPLY_RECEIPT_CONFIRMED', module: 'INVENTORY', recordId: doc.id,
+      newValue: { docNumber: doc.docNumber, receivedByName: doc.supplyRequest.receivedByName ?? doc.requester.fullName },
+    });
+    const managers = await this.permissions.usersWithPermissions(['inventory.manage']);
+    await this.notifications.notifyMany(managers, {
+      type: 'SUPPLY_COLLECTED' as never,
+      title: `Collection confirmed — ${doc.docNumber}`,
+      body: `${doc.requester.fullName ?? doc.requester.username} confirmed receiving the items.`,
+      link: `/requests/${doc.id}`, requestId: doc.id,
+    });
+    return { success: true, receivedConfirmedAt: now };
+  }
+
+  /** The requester withdraws their own request before it is approved. */
+  async withdraw(requestId: string, actor: Actor) {
+    const doc = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { docType: true } });
+    if (!doc || doc.docType !== 'OFFICE_SUPPLY_REQUEST') throw new NotFoundException('Supply request not found');
+    await this.workflow.cancel(requestId, actor);
+    // workflow.cancel mirrors REJECTED onto the supply lines and notifies
+    // approvers; the requester's own confirmation is recorded here
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'SUPPLY_REQUEST_WITHDRAWN', module: 'INVENTORY', recordId: requestId,
+    });
+    return { success: true };
+  }
+
+  /** Fix a request that is still waiting for approval (items + quantities). */
+  async editLines(requestId: string, items: { itemId: string; quantity: number }[], actor: Actor) {
+    if (!items?.length) throw new BadRequestException('At least one item is required');
+    for (const line of items) {
+      if (!line.itemId) throw new BadRequestException('itemId is required');
+      if (!Number.isInteger(line.quantity) || line.quantity <= 0) {
+        throw new BadRequestException('Quantity must be a positive whole number');
+      }
+    }
+    const found = await this.prisma.inventoryItem.findMany({
+      where: { id: { in: items.map((i) => i.itemId) }, isActive: true },
+      select: { id: true },
+    });
+    if (found.length !== new Set(items.map((i) => i.itemId)).size) {
+      throw new BadRequestException('One of the items does not exist or is inactive');
+    }
+    const doc = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, include: { supplyRequest: true } });
+    if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
+    if (doc.requesterId !== actor.userId) throw new ForbiddenException('Not your request');
+    if (doc.status !== 'PENDING_APPROVAL') {
+      throw new BadRequestException('Only a request still awaiting approval can be edited — withdraw it and raise a new one');
+    }
+    const before = await this.prisma.supplyRequestLine.findMany({ where: { supplyRequestId: doc.supplyRequest.id } });
+    await this.prisma.$transaction([
+      this.prisma.supplyRequestLine.deleteMany({ where: { supplyRequestId: doc.supplyRequest.id } }),
+      this.prisma.supplyRequestLine.createMany({
+        data: items.map((i) => ({ supplyRequestId: doc.supplyRequest!.id, itemId: i.itemId, quantity: i.quantity })),
+      }),
+    ]);
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'SUPPLY_REQUEST_EDITED', module: 'INVENTORY', recordId: requestId,
+      oldValue: { lines: before.map((l) => ({ itemId: l.itemId, quantity: l.quantity })) },
+      newValue: { lines: items },
+    });
+    return { success: true };
   }
 
   /**
@@ -1156,10 +1368,152 @@ export class InventoryService {
     return sent;
   }
 
+  /**
+   * Supply consumption in a period — what left the shelf, per department and per
+   * item, valued at the ledger's unit price (falling back to the item's latest
+   * known price). This is the "what did each department use this month" report.
+   */
+  async consumptionReport(monthStart?: string, monthEnd?: string) {
+    const now = new Date();
+    const start = monthStart ? new Date(monthStart) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const end = monthEnd ? new Date(monthEnd) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      throw new BadRequestException('Invalid period');
+    }
+    const rows = await this.prisma.stockTransaction.findMany({
+      where: { type: 'ISSUE', createdAt: { gte: start, lt: end }, item: { isActive: true } },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        item: { select: { code: true, name: true, unit: true, lastUnitPrice: true } },
+        request: {
+          select: {
+            docNumber: true,
+            department: { select: { name: true } },
+            requester: { select: { fullName: true, employee: { select: { department: { select: { name: true } } } } } },
+          },
+        },
+      },
+    });
+
+    type Row = { name: string; qty: number; value: number; lines: number; unpriced: number };
+    const departments = new Map<string, Row>();
+    const items = new Map<string, Row & { code: string; unit: string }>();
+    let totalQty = 0;
+    let totalValue = 0;
+    let unpricedLines = 0;
+    for (const t of rows) {
+      const qty = Math.abs(t.quantity);
+      const unit = t.unitPrice !== null ? Number(t.unitPrice) : t.item.lastUnitPrice !== null ? Number(t.item.lastUnitPrice) : null;
+      const value = unit !== null ? Math.round(qty * unit * 100) / 100 : 0;
+      if (unit === null) unpricedLines++;
+      totalQty += qty;
+      totalValue += value;
+
+      const dept = t.request?.department?.name ?? t.request?.requester.employee?.department?.name ?? 'Unassigned';
+      const d = departments.get(dept) ?? { name: dept, qty: 0, value: 0, lines: 0, unpriced: 0 };
+      d.qty += qty; d.value += value; d.lines++;
+      if (unit === null) d.unpriced++;
+      departments.set(dept, d);
+
+      const i = items.get(t.item.code) ?? { name: t.item.name, code: t.item.code, unit: t.item.unit, qty: 0, value: 0, lines: 0, unpriced: 0 };
+      i.qty += qty; i.value += value; i.lines++;
+      if (unit === null) i.unpriced++;
+      items.set(t.item.code, i);
+    }
+
+    return {
+      monthStart: start.toISOString(),
+      monthEnd: end.toISOString(),
+      totalQty,
+      totalValue: Math.round(totalValue * 100) / 100,
+      unpricedLines,
+      departments: [...departments.values()]
+        .map((d) => ({ ...d, value: Math.round(d.value * 100) / 100 }))
+        .sort((a, b) => b.value - a.value || b.qty - a.qty),
+      items: [...items.values()]
+        .map((i) => ({ ...i, value: Math.round(i.value * 100) / 100 }))
+        .sort((a, b) => b.qty - a.qty),
+    };
+  }
+
+  /** Consumption report as CSV — one row per issue, plus the department summary. */
+  async consumptionCsv(monthStart?: string, monthEnd?: string) {
+    const report = await this.consumptionReport(monthStart, monthEnd);
+    const esc = (v: string | number | null | undefined) => csvCell(v);
+    const lines: string[] = [];
+    lines.push(['Department', 'Total qty', 'Total value (Ks)', 'Lines'].join(','));
+    for (const d of report.departments) {
+      lines.push([esc(d.name), d.qty, d.value, d.lines].join(','));
+    }
+    lines.push(['', '', '', ''].join(','));
+    lines.push(['Item code', 'Item name', 'Unit', 'Qty issued', 'Value (Ks)', 'Lines'].join(','));
+    for (const i of report.items) {
+      lines.push([esc(i.code), esc(i.name), esc(i.unit), i.qty, i.value, i.lines].join(','));
+    }
+    lines.push(['', '', '', '', 'TOTAL', report.totalValue].join(','));
+    const month = report.monthStart.slice(0, 7);
+    return { filename: `supply-consumption-${month}.csv`, content: '\ufeff' + lines.join('\r\n') };
+  }
+
+  /**
+   * Ready-for-pickup requests nobody collected. Day 3: nudge the requester.
+   * Day 7: tell Administration as well (the items are sitting on the shelf).
+   * Idempotent per day so a cron rerun never spams.
+   */
+  async remindStalePickups(staleDays = 3, escalateDays = 7) {
+    const now = Date.now();
+    const stale = await this.prisma.officeSupplyRequest.findMany({
+      where: { status: 'READY_FOR_PICKUP', readyAt: { lte: new Date(now - staleDays * 24 * 3600 * 1000) } },
+      include: { request: { select: { id: true, docNumber: true, requesterId: true, requester: { select: { fullName: true } } } } },
+    });
+    if (stale.length === 0) return 0;
+    let sent = 0;
+    const managers = await this.permissions.usersWithPermissions(['inventory.manage']);
+    for (const s of stale) {
+      const request = s.request;
+      if (!request) continue;
+      const recent = await this.prisma.notification.findFirst({
+        where: { type: 'SUPPLY_PICKUP_REMINDER' as never, title: `Still waiting — ${request.docNumber}`, createdAt: { gte: new Date(now - 24 * 3600 * 1000) } },
+        select: { id: true },
+      });
+      if (recent) continue;
+      const days = Math.floor((now - (s.readyAt?.getTime() ?? now)) / (24 * 3600 * 1000));
+      await this.notifications.notify({
+        userId: request.requesterId, type: 'SUPPLY_PICKUP_REMINDER' as never,
+        title: `Still waiting — ${request.docNumber}`,
+        body: `Your items have been ready for ${days} day${days === 1 ? '' : 's'}. Please collect them from the Administration store.`,
+        link: `/requests/${request.id}`, requestId: request.id,
+      });
+      if (days >= escalateDays && managers.length > 0) {
+        await this.notifications.notifyMany(managers, {
+          type: 'SUPPLY_PICKUP_REMINDER' as never,
+          title: `Not collected — ${request.docNumber}`,
+          body: `${request.requester?.fullName ?? 'The requester'} has not collected the items for ${days} days; they are still on the shelf.`,
+          link: '/inventory?tab=management', requestId: request.id,
+        });
+      }
+      await this.prisma.officeSupplyRequest.update({ where: { requestId: request.id }, data: { lastReminderAt: new Date() } });
+      sent++;
+    }
+    if (sent > 0) console.log(`[inventory] pickup reminder(s) sent: ${sent}`);
+    return sent;
+  }
+
+  /** Manual trigger for the pickup-reminder pass (also runs daily at 08:30). */
+  async remindStalePickupsNow() {
+    return this.remindStalePickups();
+  }
+
   /** Daily 08:00 — LOW_STOCK alerts + auto-reorder suggestions for Administration. */
   @Cron('0 0 8 * * *')
   async lowStockCron() {
     await this.alertLowStock();
     await this.alertReorder();
+  }
+
+  /** Daily 08:30 — nudge requesters who have not collected ready items. */
+  @Cron('0 30 8 * * *')
+  async pickupReminderCron() {
+    await this.remindStalePickups();
   }
 }
