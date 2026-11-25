@@ -781,6 +781,8 @@ export class InventoryService {
       action: opts.partial ? 'SUPPLY_REQUEST_ISSUED_FROM_STOCK' : 'SUPPLY_REQUEST_FULFILLED', module: 'INVENTORY', recordId: doc.id,
       newValue: {
         status: result.newStatus, shortages: result.shortages,
+        // an explicit takeover of another request's stock must be traceable
+        ...(opts.overrideReserved ? { overrideReserved: true } : {}),
         handedOverBy: opts.partial ? null : handedOverBy,
         receivedByName: opts.partial ? null : opts.receivedByName?.trim() || null,
         issuedLines: issuedNow,
