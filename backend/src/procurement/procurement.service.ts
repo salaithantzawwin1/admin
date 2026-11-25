@@ -238,12 +238,15 @@ export class ProcurementService {
 
   /** DRAFT PR + items for the pricing actions; 404/400 guards shared. */
   private async prForPricing(requestId: string) {
-    const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId } });
-    if (!request || request.docType !== 'PURCHASE_REQUEST') throw new NotFoundException('Purchase request not found');
-    const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId }, include: { items: true } });
-    if (!pr) throw new NotFoundException('Purchase request not found');
+    const request = await this.prisma.requestDocument.findUnique({
+      where: { id: requestId },
+      include: { purchaseRequest: { include: { items: true } } },
+    });
+    if (!request || request.docType !== 'PURCHASE_REQUEST' || !request.purchaseRequest) {
+      throw new NotFoundException('Purchase request not found');
+    }
     if (request.status !== 'DRAFT') throw new BadRequestException('Prices can only be set on a draft');
-    return { request, pr };
+    return { request, pr: request.purchaseRequest };
   }
 
   /**
