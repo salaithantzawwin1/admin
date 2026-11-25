@@ -131,6 +131,8 @@ const money = (v: string | number) =>
   `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} Ks`;
 
 const accepted = (it: PoItem) => (it.grnItems ?? []).reduce((s, g) => s + g.acceptedQty, 0);
+const acceptedTotal = (items: PoItem[]) => items.reduce((s, i) => s + accepted(i), 0);
+const orderedTotal = (items: PoItem[]) => items.reduce((s, i) => s + i.quantity, 0);
 const poTotal = (items: PoItem[]) => items.reduce((s, i) => s + i.quantity * Number(i.unitPrice), 0);
 
 interface LineDraft {
@@ -783,7 +785,7 @@ export default function PurchaseOrders() {
               <div>
                 <div className="text-xs text-gray-400">Received</div>
                 <div className="tabular-nums">
-                  {detail.items.reduce((s, i) => s + accepted(i), 0)} / {detail.items.reduce((s, i) => s + i.quantity, 0)} units
+                  {acceptedTotal(detail.items)} of {orderedTotal(detail.items)} accepted
                 </div>
               </div>
               <div>
