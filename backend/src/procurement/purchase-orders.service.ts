@@ -429,7 +429,10 @@ export class PurchaseOrdersService {
     // never told anything after approval, and an office supply request that was
     // bought for needs its collection notice. Both come from the PO's PR.
     if (po.purchaseRequestId) {
-      const acceptedTotal = lines.reduce((s, l) => s + l.acceptedQty, 0);
+      // "collect them from the store" only makes sense for goods: a service
+      // line is accepted but has nothing to pick up, so it must not inflate
+      // the count the requester reads
+      const collectable = lines.filter((l) => l.inventoryItemId || l.registerAsset).reduce((s, l) => s + l.acceptedQty, 0);
       const pr = await this.prisma.purchaseRequest.findUnique({
         where: { id: po.purchaseRequestId },
         include: {
@@ -445,7 +448,9 @@ export class PurchaseOrdersService {
           title: `Goods received — ${pr.request.docNumber}`,
           // the requester only ever sees "approved", then silence — say plainly
           // that what they asked for has physically arrived and where it is
-          body: `Your order has arrived: ${grnNumber} accepted ${acceptedTotal} item(s) from ${po.poNumber}. Collect them from the Administration store.`,
+          body: collectable > 0
+            ? `Your order has arrived: ${grnNumber} accepted ${collectable} item(s) from ${po.poNumber}. Collect them from the Administration store.`
+            : `Your order has arrived: ${grnNumber} recorded the service bought on ${po.poNumber}. Nothing needs collecting — the Administration office will confirm it with you.`,
           link: `/requests/${pr.request.id}`, requestId: pr.request.id,
         });
       }
