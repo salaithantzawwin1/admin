@@ -32,7 +32,8 @@ interface Item {
 interface SpendingEntry { quantity: number; unitPrice: number | null; reference: string | null; supplier?: string | null; createdAt: string }
 interface ReorderRow {
   itemId: string; code: string; name: string; unit: string;
-  balance: number; threshold: number; reorderLevel: number | null;
+  balance: number; reserved: number; available: number;
+  threshold: number; reorderLevel: number | null;
   suggestedQty: number; lastUnitPrice: number | null; estimatedCost: number | null;
 }
 interface Supplier { id: string; name: string; phone?: string | null; address?: string | null; note?: string | null; isActive: boolean }
@@ -50,7 +51,7 @@ interface SupplyLine {
   quantity: number;
   status: string;
   fulfilledQty: number;
-  item?: { code: string; name: string; unit: string };
+  item?: { code: string; name: string; unit: string; balance?: number; reserved?: number; available?: number };
 }
 
 interface SupplyHeader {
@@ -1183,22 +1184,28 @@ export default function Inventory() {
                     </div>
                     <table className="w-full text-sm mb-2">
                       <tbody className="divide-y divide-gray-100">
-                        {r.supplyRequest?.lines.map((l) => (
+                        {r.supplyRequest?.lines.map((l) => {
+                          // free stock for THIS request: balance minus other requests' promises
+                          const free = l.item.available ?? l.item.balance ?? 0;
+                          return (
                           <tr key={l.id}>
                             <td className="py-1">{l.item.code} — {l.item.name}</td>
                             <td className="py-1 text-right">×{l.quantity} {l.item.unit}</td>
-                            <td className={`py-1 text-right ${l.quantity > l.item.balance ? 'text-red-600' : 'text-green-700'}`}>
-                              {l.quantity > l.item.balance ? `only ${l.item.balance} in stock` : `${l.item.balance} in stock`}
+                            <td className={`py-1 text-right ${l.quantity > free ? 'text-red-600' : 'text-green-700'}`}>
+                              {l.quantity > free
+                                ? `only ${free} free${l.item.reserved ? ` (${l.item.balance} on shelf · ${l.item.reserved} reserved)` : ''}`
+                                : `${free} free${l.item.reserved ? ` (${l.item.reserved} reserved)` : ''}`}
                             </td>
                             <td className="py-1 text-right text-xs">
                               {l.status === 'FULFILLED'
                                 ? <span className="text-green-700">issued {l.fulfilledQty}/{l.quantity}</span>
                                 : l.status === 'OUT_OF_STOCK'
                                   ? <span className="text-red-600">out of stock — retry</span>
-                                  : <span className="text-gray-400">{l.quantity <= l.item.balance ? 'in stock — can issue now' : 'needs purchase'}</span>}
+                                  : <span className="text-gray-400">{l.quantity <= free ? 'in stock — can issue now' : 'needs purchase'}</span>}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     {r.supplyRequest?.note && <div className="text-xs text-gray-500 mb-2">Note: {r.supplyRequest.note}</div>}
@@ -1238,7 +1245,7 @@ export default function Inventory() {
                       {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') &&
                         (() => {
                           const open = (r.supplyRequest?.lines ?? []).filter((l) => l.status !== 'FULFILLED');
-                          const issuable = open.filter((l) => l.quantity <= l.item.balance);
+                          const issuable = open.filter((l) => l.quantity <= (l.item.available ?? l.item.balance ?? 0));
                           // nothing to give out → wait; everything to give out → hand over
                           return issuable.length > 0 && issuable.length < open.length;
                         })() && (
@@ -1355,7 +1362,7 @@ export default function Inventory() {
           <Card className="p-5">
               <div className="flex items-center justify-between mb-2">
                 <h2 className="font-semibold text-gray-800 text-sm uppercase tracking-wide">Auto-reorder suggestions</h2>
-                <span className="text-xs text-gray-400">balance ≤ reorder level (≈3× threshold when unset) · Purchasing is notified daily at 08:00</span>
+                <span className="text-xs text-gray-400">free stock (balance − reserved) ≤ reorder level (≈3× threshold when unset) · Purchasing is notified daily at 08:00</span>
               </div>
               {reorder.length === 0 ? (
                 <p className="text-sm text-gray-400">Nothing to reorder — every item is above its reorder level. ✓</p>
@@ -1366,7 +1373,7 @@ export default function Inventory() {
                       <span className="truncate">
                         <span className="font-medium text-gray-700">{r.code} — {r.name}</span>
                         <span className="text-xs text-gray-400 ml-2">
-                          at {r.balance} {r.unit} · target {r.reorderLevel ?? `≈${r.threshold * 3}`} {r.unit}
+                          {r.available} {r.unit} free{r.reserved > 0 ? ` (${r.balance} on shelf · ${r.reserved} reserved)` : ''} · target {r.reorderLevel ?? `≈${r.threshold * 3}`} {r.unit}
                         </span>
                       </span>
                       <span className="flex items-center gap-2 flex-shrink-0">

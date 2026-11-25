@@ -45,21 +45,31 @@ export class InventoryService {
 
   // ---------- items master ----------
 
+  /** The lines every reservation read counts: still owed to an approved request. */
+  private reservationWhere(extra: Prisma.SupplyRequestLineWhereInput = {}): Prisma.SupplyRequestLineWhereInput {
+    return {
+      status: { in: ['PENDING', 'OUT_OF_STOCK'] },
+      supplyRequest: {
+        status: { in: ['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL'] },
+        request: { status: { in: ['APPROVED', 'COMPLETED'] } },
+      },
+      ...extra,
+    };
+  }
+
   /**
-   * Quantity already promised to approved supply requests that have not been
-   * handed over. It is still on the shelf, but it is not free to give out:
-   * the store has to keep it for that collection.
+   * Quantity already promised per item. It is still on the shelf, but it is not
+   * free to give out: the store has to keep it for that collection.
+   * `excludeSupplyRequestId` drops one request's own promise, so that request
+   * does not see itself as the reason it cannot be issued.
    */
-  private async reservedByItem(): Promise<Map<string, number>> {
+  private async reservedByItem(itemIds?: string[], excludeSupplyRequestId?: string): Promise<Map<string, number>> {
     const rows = await this.prisma.supplyRequestLine.groupBy({
       by: ['itemId'],
-      where: {
-        status: { in: ['PENDING', 'OUT_OF_STOCK'] },
-        supplyRequest: {
-          status: { in: ['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL'] },
-          request: { status: { in: ['APPROVED', 'COMPLETED'] } },
-        },
-      },
+      where: this.reservationWhere({
+        ...(itemIds ? { itemId: { in: itemIds } } : {}),
+        ...(excludeSupplyRequestId ? { supplyRequestId: { not: excludeSupplyRequestId } } : {}),
+      }),
       _sum: { quantity: true },
     });
     return new Map(rows.map((r) => [r.itemId, r._sum.quantity ?? 0]));
@@ -452,7 +462,7 @@ export class InventoryService {
    * must stay visible here until fulfilled or cancelled.
    */
   async pendingRequests() {
-    return this.prisma.requestDocument.findMany({
+    const docs = await this.prisma.requestDocument.findMany({
       where: {
         docType: 'OFFICE_SUPPLY_REQUEST',
         status: { in: ['APPROVED', 'COMPLETED'] },
@@ -471,6 +481,31 @@ export class InventoryService {
           },
         },
       },
+    });
+    const itemIds = [...new Set(docs.flatMap((d) => d.supplyRequest?.lines.map((l) => l.itemId) ?? []))];
+    if (itemIds.length === 0) return docs;
+    const held = await this.reservedByItem(itemIds);
+    return docs.map((d) => {
+      const supply = d.supplyRequest;
+      if (!supply) return d;
+      // this queue is asking "can I issue THIS request?" — its own promise does
+      // not compete with itself, every other approved request does
+      const own = new Map<string, number>();
+      for (const l of supply.lines) {
+        if (l.status === 'PENDING' || l.status === 'OUT_OF_STOCK') {
+          own.set(l.itemId, (own.get(l.itemId) ?? 0) + l.quantity);
+        }
+      }
+      return {
+        ...d,
+        supplyRequest: {
+          ...supply,
+          lines: supply.lines.map((l) => {
+            const other = Math.max(0, (held.get(l.itemId) ?? 0) - (own.get(l.itemId) ?? 0));
+            return { ...l, item: { ...l.item, reserved: other, available: Math.max(0, l.item.balance - other) } };
+          }),
+        },
+      };
     });
   }
 
@@ -720,8 +755,12 @@ export class InventoryService {
       include: { supplyRequest: { include: { lines: { include: { item: { select: { balance: true } } } } } } },
     });
     if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
-    const open = doc.supplyRequest.lines.filter((l) => l.status !== 'FULFILLED');
-    if (open.length > 0 && open.every((l) => l.quantity <= l.item.balance)) {
+    const supply = doc.supplyRequest;
+    // stock promised to OTHER approved requests is not ours to give out here
+    const held = await this.reservedByItem(supply.lines.map((l) => l.itemId), supply.id);
+    const free = (l: (typeof supply.lines)[number]) => l.item.balance - (held.get(l.itemId) ?? 0);
+    const open = supply.lines.filter((l) => l.status !== 'FULFILLED');
+    if (open.length > 0 && open.every((l) => l.quantity <= free(l))) {
       throw new ConflictException('Everything on this request is in stock — hand it over so the collection is recorded');
     }
     return this.fulfill(requestId, actor, { partial: true });
@@ -1127,9 +1166,11 @@ export class InventoryService {
   }
 
   /**
-   * Auto-reorder suggestions — every active item whose balance is at/below its
-   * reorder level (or ≈3× the alert threshold when no reorder level is set),
-   * with the recommended top-up quantity and estimated cost.
+   * Auto-reorder suggestions — every active item whose FREE stock (balance minus
+   * what approved requests already hold) is at/below its reorder level (or ≈3×
+   * the alert threshold when no reorder level is set), with the recommended
+   * top-up quantity and estimated cost. Counting the shelf alone would call an
+   * item healthy while every unit of it is already promised to someone.
    */
   async reorderSuggestions() {
     const items = await this.prisma.inventoryItem.findMany({
@@ -1137,15 +1178,19 @@ export class InventoryService {
       orderBy: { code: 'asc' },
       select: { id: true, code: true, name: true, unit: true, balance: true, minStock: true, reorderLevel: true, lastUnitPrice: true },
     });
+    const reserved = await this.reservedByItem(items.map((i) => i.id));
     return items
       .map((i) => {
+        const held = reserved.get(i.id) ?? 0;
+        const available = Math.max(0, i.balance - held);
         const target = i.reorderLevel ?? (i.minStock > 0 ? i.minStock * 3 : null);
-        if (target === null || i.balance > target) return null;
-        const suggestedQty = Math.max(target - i.balance, i.minStock, 1);
+        if (target === null || available > target) return null;
+        const suggestedQty = Math.max(target - available, i.minStock, 1);
         const lastUnitPrice = i.lastUnitPrice !== null ? Number(i.lastUnitPrice) : null;
         return {
           itemId: i.id, code: i.code, name: i.name, unit: i.unit,
-          balance: i.balance, threshold: i.minStock, reorderLevel: i.reorderLevel,
+          balance: i.balance, reserved: held, available,
+          threshold: i.minStock, reorderLevel: i.reorderLevel,
           suggestedQty,
           lastUnitPrice,
           estimatedCost: lastUnitPrice !== null ? Math.round(lastUnitPrice * suggestedQty * 100) / 100 : null,
@@ -1214,7 +1259,7 @@ export class InventoryService {
       await this.notifications.notifyMany(recipients, {
         type: 'LOW_STOCK',
         title: `Reorder — ${s.name}`,
-        body: `${s.code} is at ${s.balance} ${s.unit} (reorder level ${s.reorderLevel ?? `≈3× threshold ${s.threshold}`}). Suggested order: ${s.suggestedQty} ${s.unit}${s.estimatedCost !== null ? ` (≈ ${s.estimatedCost.toLocaleString()})` : ''}.`,
+        body: `${s.code} has ${s.available} ${s.unit} free${s.reserved > 0 ? ` (${s.balance} on shelf, ${s.reserved} reserved for approved requests)` : ''} (reorder level ${s.reorderLevel ?? `≈3× threshold ${s.threshold}`}). Suggested order: ${s.suggestedQty} ${s.unit}${s.estimatedCost !== null ? ` (≈ ${s.estimatedCost.toLocaleString()})` : ''}.`,
         link: '/inventory',
       });
       sent++;
