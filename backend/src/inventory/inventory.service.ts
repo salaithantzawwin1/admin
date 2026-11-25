@@ -81,9 +81,9 @@ export class InventoryService {
       });
   }
 
-  /** Items + live low-stock computation for the management view. */
+  /** Items + live low-stock computation for the catalog and management view. */
   async itemsWithAlerts() {
-    const items = await this.prisma.inventoryItem.findMany({ orderBy: { code: 'asc' } });
+    const items = await this.listItems(true);
     return items.map((i) => ({ ...i, low: i.balance <= i.minStock, out: i.balance <= 0 }));
   }
 
