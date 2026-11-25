@@ -91,7 +91,8 @@ export class InventoryService {
         ...i,
         reserved: held,
         available: Math.max(0, i.balance - held),
-        low: i.balance <= i.minStock,
+        // low = what is free, not what is on the shelf; out stays physical
+        low: Math.max(0, i.balance - held) <= i.minStock,
         out: i.balance <= 0,
       };
     });
@@ -615,7 +616,11 @@ export class InventoryService {
    * request completes only when every line is fulfilled. This is the ONLY place
    * stock leaves the shelf — approval and the buying stage never deduct.
    */
-  async fulfill(requestId: string, actor: Actor, opts: { partial?: boolean; receivedByName?: string } = {}) {
+  async fulfill(
+    requestId: string,
+    actor: Actor,
+    opts: { partial?: boolean; receivedByName?: string; overrideReserved?: boolean } = {},
+  ) {
     const doc = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: {
@@ -648,6 +653,37 @@ export class InventoryService {
       throw new BadRequestException('Request is still awaiting approval');
     }
 
+    // Stock promised to OTHER approved requests is not ours to hand out. Free
+    // stock is what the shelf has minus those promises; a request's own promise
+    // is not a rival to itself.
+    const held = await this.reservedByItem(supply.lines.map((l) => l.itemId), supply.id);
+    const freeNow = (l: (typeof supply.lines)[number]) => l.item.balance - (held.get(l.itemId) ?? 0);
+    const open = supply.lines.filter((l) => l.status !== 'FULFILLED');
+    // mixed sourcing only makes sense when something has to be bought — an
+    // all-free basket goes through the hand-over record instead
+    if (opts.partial && open.length > 0 && open.every((l) => l.quantity <= freeNow(l))) {
+      throw new ConflictException('Everything on this request is in stock — hand it over so the collection is recorded');
+    }
+    // a hand-over may not quietly take units another approved request is
+    // waiting for; the admin can still override that, explicitly
+    if (!opts.partial && !opts.overrideReserved) {
+      const blocked = open.filter((l) => l.quantity <= l.item.balance && l.quantity > freeNow(l));
+      if (blocked.length > 0) {
+        throw new ConflictException({
+          message: `Stock is reserved for another approved request: ${blocked.map((l) => `${l.item.code} (need ${l.quantity}, ${Math.max(0, freeNow(l))} free)`).join('; ')} — hand over anyway to take it`,
+          code: 'STOCK_RESERVED',
+          lines: blocked.map((l) => ({
+            code: l.item.code,
+            name: l.item.name,
+            requested: l.quantity,
+            balance: l.item.balance,
+            reserved: Math.max(0, held.get(l.itemId) ?? 0),
+            available: Math.max(0, freeNow(l)),
+          })),
+        });
+      }
+    }
+
     const handedOverBy = (await this.prisma.user.findUnique({ where: { id: actor.userId }, select: { fullName: true } }))?.fullName ?? actor.username;
     let issuedNow = 0;
     const result = await this.prisma.$transaction(async (tx) => {
@@ -659,12 +695,21 @@ export class InventoryService {
         // fresh, locked read — line.item.balance may be stale (another request
         // could have consumed stock between the load above and this transaction)
         const current = await tx.inventoryItem.findUnique({ where: { id: line.itemId }, select: { code: true, balance: true } });
-        if (!current || line.quantity > current.balance) {
+        if (!current) {
+          if (opts.partial) continue;
+          await tx.supplyRequestLine.update({ where: { id: line.id }, data: { status: 'OUT_OF_STOCK' } });
+          shortages.push({ code: line.item.code, requested: line.quantity, available: 0 });
+          continue;
+        }
+        const free = current.balance - (held.get(line.itemId) ?? 0);
+        // override = the admin accepted taking units promised to another request
+        const takeable = opts.overrideReserved ? current.balance : Math.min(current.balance, free);
+        if (line.quantity > takeable) {
           // mixed sourcing: a line we do not have yet is simply bought later —
           // do not brand it OUT_OF_STOCK before the purchase has even started
           if (opts.partial) continue;
           await tx.supplyRequestLine.update({ where: { id: line.id }, data: { status: 'OUT_OF_STOCK' } });
-          shortages.push({ code: current?.code ?? line.item.code, requested: line.quantity, available: current?.balance ?? 0 });
+          shortages.push({ code: current.code, requested: line.quantity, available: Math.max(0, takeable) });
           continue;
         }
         // deduct via the ledger (row-locked, negative-proof)
@@ -679,8 +724,8 @@ export class InventoryService {
       const allFulfilled = after.every((l) => l.status === 'FULFILLED');
       const anyFulfilled = after.some((l) => l.status === 'FULFILLED');
       if (opts.partial && issuedNow === 0) {
-        // roll the whole attempt back — nothing was on the shelf to give out
-        throw new ConflictException('Nothing on this request is fully in stock yet — buy the items first');
+        // roll the whole attempt back — nothing free on the shelf to give out
+        throw new ConflictException('Nothing on this request is free yet — the stock is reserved for other requests or still to be bought');
       }
       const newStatus = allFulfilled ? 'FULFILLED' : anyFulfilled ? 'PARTIAL' : 'PENDING';
       await tx.officeSupplyRequest.update({
@@ -745,24 +790,11 @@ export class InventoryService {
   }
 
   /**
-   * Mixed sourcing: hand over what the shelf already has, keep buying the rest.
-   * Refused when every line is available — that request is a normal hand-over,
-   * and skipping it would close the request without a collection record.
+   * Mixed sourcing: issue what the shelf can free, keep buying the rest.
+   * fulfill() owns the free-stock checks (including the "everything is free —
+   * hand it over instead" refusal), so this is only the partial entry point.
    */
-  async issueInStock(requestId: string, actor: Actor) {
-    const doc = await this.prisma.requestDocument.findUnique({
-      where: { id: requestId },
-      include: { supplyRequest: { include: { lines: { include: { item: { select: { balance: true } } } } } } },
-    });
-    if (!doc?.supplyRequest) throw new NotFoundException('Supply request not found');
-    const supply = doc.supplyRequest;
-    // stock promised to OTHER approved requests is not ours to give out here
-    const held = await this.reservedByItem(supply.lines.map((l) => l.itemId), supply.id);
-    const free = (l: (typeof supply.lines)[number]) => l.item.balance - (held.get(l.itemId) ?? 0);
-    const open = supply.lines.filter((l) => l.status !== 'FULFILLED');
-    if (open.length > 0 && open.every((l) => l.quantity <= free(l))) {
-      throw new ConflictException('Everything on this request is in stock — hand it over so the collection is recorded');
-    }
+  issueInStock(requestId: string, actor: Actor) {
     return this.fulfill(requestId, actor, { partial: true });
   }
 
@@ -1124,10 +1156,16 @@ export class InventoryService {
     return { filename: `stock-ledger-${month}.csv`, content: '\ufeff' + lines.join('\r\n') };
   }
 
-  lowStock() {
-    return this.prisma.inventoryItem.findMany({
-      where: { isActive: true, ...Prisma.validator<Prisma.InventoryItemWhereInput>()({}) },
-    }).then((items) => items.filter((i) => i.balance <= i.minStock));
+  /** Active items whose FREE stock (balance − reserved) is at/below threshold. */
+  async lowStock() {
+    const items = await this.prisma.inventoryItem.findMany({ where: { isActive: true } });
+    const reserved = await this.reservedByItem(items.map((i) => i.id));
+    return items
+      .map((i) => {
+        const held = reserved.get(i.id) ?? 0;
+        return { ...i, reserved: held, available: Math.max(0, i.balance - held) };
+      })
+      .filter((i) => i.available <= i.minStock);
   }
 
   /**
@@ -1409,11 +1447,11 @@ export class InventoryService {
           select: { id: true },
         });
         if (recent) continue;
-        const suggested = item.minStock * 3 - item.balance;
+        const suggested = item.minStock * 3 - item.available;
         await this.notifications.notifyMany(admins, {
           type: 'LOW_STOCK',
           title: `Low stock — ${item.name}`,
-          body: `${item.code} is at ${item.balance} ${item.unit} (threshold ${item.minStock}). Suggested restock: ${Math.max(suggested, item.minStock)} ${item.unit}.`,
+          body: `${item.code} has ${item.available} ${item.unit} free${item.reserved > 0 ? ` (${item.balance} on shelf, ${item.reserved} reserved for approved requests)` : ''} (threshold ${item.minStock}). Suggested restock: ${Math.max(suggested, item.minStock)} ${item.unit}.`,
           link: '/inventory',
         });
         sent++;

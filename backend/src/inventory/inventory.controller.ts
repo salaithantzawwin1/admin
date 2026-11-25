@@ -39,6 +39,8 @@ export class IssueRequestDto {
 export class FulfillDto {
   /** who physically collected the items at the counter (typed by Administration) */
   @IsOptional() @IsString() @MaxLength(120) receivedByName?: string;
+  /** true = the admin chose to take stock promised to another approved request */
+  @IsOptional() @IsBoolean() overrideReserved?: boolean;
 }
 
 export class EditLinesDto {
@@ -188,7 +190,10 @@ export class InventoryController {
   @RequirePermissions(PERMISSIONS.INVENTORY_MANAGE)
   @Post('requests/:requestId/fulfill')
   fulfill(@Req() req, @Param('requestId') requestId: string, @Body() dto: FulfillDto) {
-    return this.inventory.fulfill(requestId, this.actor(req), { receivedByName: dto?.receivedByName });
+    return this.inventory.fulfill(requestId, this.actor(req), {
+      receivedByName: dto?.receivedByName,
+      overrideReserved: dto?.overrideReserved === true,
+    });
   }
 
   /** Mixed sourcing — issue the lines already on the shelf, keep buying the rest. */

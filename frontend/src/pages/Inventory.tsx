@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { api, getToken, hasPermission } from '../api';
+import { api, ApiError, getToken, hasPermission } from '../api';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
 import { toast } from '../components/Toast';
@@ -172,11 +172,29 @@ async function resizeToJpeg(file: File, maxDim = 512, quality = 0.82): Promise<B
 const itemImageUrl = (i: Item) =>
   `/api/inventory/items/${i.id}/image?v=${encodeURIComponent(i.updatedAt ?? '')}&token=${encodeURIComponent(getToken() ?? '')}`;
 
+/** Free stock = shelf minus what other approved requests have already claimed. */
+const freeOf = (item?: { available?: number; balance?: number } | null) => item?.available ?? item?.balance ?? 0;
+
+interface ReservedBlock {
+  message: string;
+  lines: { code: string; name: string; requested: number; balance: number; reserved: number; available: number }[];
+}
+
+/** A hand-over the server refused because another request holds the stock. */
+const reservedBlockFrom = (e: unknown): ReservedBlock | null => {
+  if (!(e instanceof ApiError)) return null;
+  const d = e.details as { code?: string; message?: string; lines?: ReservedBlock['lines'] } | undefined;
+  return d?.code === 'STOCK_RESERVED' && Array.isArray(d.lines)
+    ? { message: d.message ?? 'Stock is reserved for another request', lines: d.lines }
+    : null;
+};
+
 /** Stock health: 100% ≈ 3× the alert threshold (or full when no threshold set). */
 const stockPct = (i: Item) => {
   if (i.out) return 0;
-  const target = i.minStock > 0 ? i.minStock * 3 : Math.max(i.balance, 1);
-  return Math.min(100, Math.round((i.balance / target) * 100));
+  const free = freeOf(i);
+  const target = i.minStock > 0 ? i.minStock * 3 : Math.max(free, 1);
+  return Math.min(100, Math.round((free / target) * 100));
 };
 
 const spendWindow = (d: Date) => ({
@@ -259,6 +277,7 @@ export default function Inventory() {
   const [handOverName, setHandOverName] = useState('');
   const [handOverBusy, setHandOverBusy] = useState(false);
   const [handOverError, setHandOverError] = useState('');
+  const [reserveWarn, setReserveWarn] = useState<{ requestId: string; receivedByName?: string; info: ReservedBlock } | null>(null);
   // requester side: withdraw a request still awaiting approval
   const [withdrawFor, setWithdrawFor] = useState<MyRequest | null>(null);
   // requester side: fix items/quantities while the request is still pending
@@ -520,14 +539,26 @@ export default function Inventory() {
     }
   };
 
-  const doFulfill = async (requestId: string, receivedByName?: string) => {
+  /** Returns 'reserved' when the server refused: the caller shows the override dialog. */
+  const doFulfill = async (requestId: string, receivedByName?: string, overrideReserved = false): Promise<'done' | 'reserved'> => {
     setError('');
-    await api(`/inventory/requests/${requestId}/fulfill`, {
-      method: 'POST',
-      body: { receivedByName: receivedByName?.trim() || undefined },
-    });
+    try {
+      await api(`/inventory/requests/${requestId}/fulfill`, {
+        method: 'POST',
+        body: {
+          receivedByName: receivedByName?.trim() || undefined,
+          overrideReserved: overrideReserved || undefined,
+        },
+      });
+    } catch (e) {
+      const info = reservedBlockFrom(e);
+      if (!info) throw e;
+      setReserveWarn({ requestId, receivedByName: receivedByName?.trim() || undefined, info });
+      return 'reserved';
+    }
     toast('Handed over — stock deducted');
     load();
+    return 'done';
   };
 
   const openHandOver = (r: PendingRequest) => {
@@ -541,8 +572,8 @@ export default function Inventory() {
     setHandOverBusy(true);
     setHandOverError('');
     try {
-      await doFulfill(handOverFor.id, handOverName);
-      setHandOverFor(null);
+      const outcome = await doFulfill(handOverFor.id, handOverName);
+      if (outcome === 'done' || outcome === 'reserved') setHandOverFor(null);
     } catch (e) {
       setHandOverError(e instanceof Error ? e.message : 'Failed');
     } finally {
@@ -737,7 +768,7 @@ export default function Inventory() {
 
   /** Pre-fill the restock form from a low-stock suggestion (jumps to the Restock sub-tab). */
   const suggestRestock = (i: Item) => {
-    setRestock({ itemId: i.id, quantity: Math.max(i.minStock * 3 - i.balance, i.minStock), reference: `Restock suggestion — ${i.code}`, unitPrice: i.lastUnitPrice != null ? String(i.lastUnitPrice) : '', supplierId: '', accountId: '' });
+    setRestock({ itemId: i.id, quantity: Math.max(i.minStock * 3 - freeOf(i), i.minStock), reference: `Restock suggestion — ${i.code}`, unitPrice: i.lastUnitPrice != null ? String(i.lastUnitPrice) : '', supplierId: '', accountId: '' });
     setMgmtTab('restock');
   };
 
@@ -796,7 +827,7 @@ export default function Inventory() {
   // is reserved instead of the raw balance
   const shortLines = cartLines
     .map(([id, q]) => ({ item: items.find((i) => i.id === id), q }))
-    .filter((l) => l.item && l.q > (l.item.available ?? l.item.balance));
+    .filter((l) => l.item && l.q > freeOf(l.item));
   const lowCount = items.filter((i) => i.low).length;
 
   // items-master search + pagination (Management → Items)
@@ -943,7 +974,7 @@ export default function Inventory() {
                       <div className="flex items-center gap-2">
                         <div
                           className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden flex-shrink-0"
-                          title={`${i.balance} ${i.unit} / min ${i.minStock} — 100% ≈ 3× threshold`}
+                          title={`${freeOf(i)} ${i.unit} free (${i.balance} on shelf${i.reserved ? `, ${i.reserved} reserved` : ''}) / min ${i.minStock} — 100% ≈ 3× threshold`}
                         >
                           <div
                             className={`h-full ${i.out ? 'bg-red-500' : i.low ? 'bg-yellow-500' : 'bg-green-500'}`}
@@ -953,9 +984,9 @@ export default function Inventory() {
                         {i.out ? (
                           <Badge color="red">OUT</Badge>
                         ) : i.low ? (
-                          <Badge color="yellow">LOW · {i.balance} {i.unit}</Badge>
+                          <Badge color="yellow">LOW · {freeOf(i)} {i.unit} free</Badge>
                         ) : (
-                          <span className="font-medium text-sm">{i.balance} <span className="text-gray-400 text-xs">{i.unit}</span></span>
+                          <span className="font-medium text-sm">{freeOf(i)} <span className="text-gray-400 text-xs">{i.unit}{i.reserved ? ` · ${i.balance} on shelf` : ''}</span></span>
                         )}
                       </div>
                     </td>
@@ -1031,7 +1062,7 @@ export default function Inventory() {
                           style={{ width: `${stockPct(i)}%` }}
                         />
                       </div>
-                      <span className="text-xs whitespace-nowrap">{i.balance} {i.unit}</span>
+                      <span className="text-xs whitespace-nowrap">{freeOf(i)} {i.unit}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <button
@@ -1191,7 +1222,7 @@ export default function Inventory() {
                       <tbody className="divide-y divide-gray-100">
                         {r.supplyRequest?.lines.map((l) => {
                           // free stock for THIS request: balance minus other requests' promises
-                          const free = l.item.available ?? l.item.balance ?? 0;
+                          const free = freeOf(l.item);
                           return (
                           <tr key={l.id}>
                             <td className="py-1">{l.item.code} — {l.item.name}</td>
@@ -1250,7 +1281,7 @@ export default function Inventory() {
                       {['PENDING', 'PURCHASING', 'PARTIAL'].includes(r.supplyRequest?.status ?? '') &&
                         (() => {
                           const open = (r.supplyRequest?.lines ?? []).filter((l) => l.status !== 'FULFILLED');
-                          const issuable = open.filter((l) => l.quantity <= (l.item.available ?? l.item.balance ?? 0));
+                          const issuable = open.filter((l) => l.quantity <= freeOf(l.item));
                           // nothing to give out → wait; everything to give out → hand over
                           return issuable.length > 0 && issuable.length < open.length;
                         })() && (
@@ -1283,7 +1314,7 @@ export default function Inventory() {
                   <option value="">— Item —</option>
                   {items.map((i) => (
                     <option key={i.id} value={i.id}>
-                      {i.code} — {i.name} (now {i.balance} {i.unit}{i.lastUnitPrice != null ? ` · last @${fmtMoney(Number(i.lastUnitPrice))}` : ''})
+                      {i.code} — {i.name} ({freeOf(i)} free{i.reserved ? ` of ${i.balance}` : ''} {i.unit}{i.lastUnitPrice != null ? ` · last @${fmtMoney(Number(i.lastUnitPrice))}` : ''})
                     </option>
                   ))}
                 </Select>
@@ -1345,13 +1376,13 @@ export default function Inventory() {
                     <li key={i.id} className="flex items-center justify-between gap-2 text-sm">
                       <span className="truncate">{i.code} — {i.name}</span>
                       <span className="flex items-center gap-2 flex-shrink-0">
-                        <Badge color={i.out ? 'red' : 'yellow'}>{i.balance} / min {i.minStock} {i.unit}</Badge>
+                        <Badge color={i.out ? 'red' : 'yellow'}>{freeOf(i)} free / min {i.minStock} {i.unit}</Badge>
                         <button
                           className="text-xs text-blue-600 hover:underline whitespace-nowrap"
                           title="Pre-fill the restock form with a suggested quantity (≈ 3× threshold minus current balance)"
                           onClick={() => suggestRestock(i)}
                         >
-                          Restock ×{Math.max(i.minStock * 3 - i.balance, i.minStock)}
+                          Restock ×{Math.max(i.minStock * 3 - freeOf(i), i.minStock)}
                         </button>
                       </span>
                     </li>
@@ -1816,7 +1847,13 @@ export default function Inventory() {
             <div className="text-xs text-gray-500">
               {(handOverFor.supplyRequest?.lines ?? []).map((l) => (
                 <div key={l.id}>
-                  {l.item.code} — {l.item.name}{l.status === 'FULFILLED' ? ' — already issued' : ` ×${l.quantity}`}
+                  {l.item.code} — {l.item.name}
+                  {l.status === 'FULFILLED' ? ' — already issued' : (
+                    <>
+                      {' '}×{l.quantity} · <span className={l.quantity > freeOf(l.item) ? 'text-amber-700 font-medium' : ''}>{freeOf(l.item)} free</span>
+                      {l.item.reserved ? ` (${l.item.balance} on shelf, ${l.item.reserved} reserved)` : ''}
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -1828,6 +1865,35 @@ export default function Inventory() {
             </div>
           </div>
         </Modal>
+      )}
+      {/* hand-over refused: another approved request holds the stock */}
+      {reserveWarn && (
+        <ConfirmDialog
+          title="Stock is reserved for another request"
+          description={
+            <>
+              <p>{reserveWarn.info.message}</p>
+              <ul className="mt-2 space-y-1 text-xs">
+                {reserveWarn.info.lines.map((l) => (
+                  <li key={l.code}>
+                    <span className="font-medium">{l.code}</span> — need {l.requested}, {l.available} free ({l.reserved} reserved of {l.balance} on shelf)
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-gray-500">
+                Handing over anyway takes stock the other approved request is waiting for — that request will come up short later.
+              </p>
+            </>
+          }
+          confirmLabel="Hand over anyway"
+          variant="danger"
+          onClose={() => setReserveWarn(null)}
+          onConfirm={async () => {
+            const w = reserveWarn;
+            await doFulfill(w.requestId, w.receivedByName, true);
+            setReserveWarn(null);
+          }}
+        />
       )}
       {/* buying stage — the day the requester should come back (today / tomorrow quick picks) */}
       {buyFor && (
@@ -1914,9 +1980,9 @@ export default function Inventory() {
           title={`Request ${requestFor.name}?`}
           description={<>
             Request <b>{requestQty} {requestFor.unit}</b> of {requestFor.code} — {requestFor.name}. Available now:{' '}
-            <b>{requestFor.available ?? requestFor.balance}</b>
+            <b>{freeOf(requestFor)}</b>
             {requestFor.reserved ? ` (${requestFor.reserved} reserved for approved requests)` : ''}.{' '}
-            {requestQty > (requestFor.available ?? requestFor.balance) && (
+            {requestQty > freeOf(requestFor) && (
               <span className="text-amber-700">That is more than is available — Administration will buy the shortfall. </span>
             )}
             The Administration Department approves and issues the items.
@@ -1978,7 +2044,7 @@ export default function Inventory() {
           {shortLines.length > 0 && (
             <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               <b>Not enough free stock:</b>{' '}
-              {shortLines.map((l) => `${l.item!.name} — asked ${l.q}, available ${l.item!.available ?? l.item!.balance}${l.item!.reserved ? ` (${l.item!.reserved} reserved for approved requests)` : ''}`).join(' · ')}
+              {shortLines.map((l) => `${l.item!.name} — asked ${l.q}, available ${freeOf(l.item)}${l.item!.reserved ? ` (${l.item!.reserved} reserved for approved requests)` : ''}`).join(' · ')}
               {' — '}Administration will buy the shortfall.
             </div>
           )}
@@ -1991,7 +2057,7 @@ export default function Inventory() {
                     <td className="py-2">
                       <div className="font-medium text-gray-700">{item?.name}</div>
                       <div className="text-[11px] text-gray-400">
-                        {item?.code} · {item?.available ?? item?.balance} available
+                        {item?.code} · {freeOf(item)} available
                         {item?.reserved ? ` · ${item.reserved} reserved` : ''} {item?.unit}
                       </div>
                     </td>
