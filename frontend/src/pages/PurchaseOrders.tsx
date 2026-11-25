@@ -544,11 +544,10 @@ export default function PurchaseOrders() {
                   <th className="px-4 py-3 font-medium">PO</th>
                   <th className="px-4 py-3 font-medium">Supplier</th>
                   <th className="px-4 py-3 font-medium">From PR</th>
-                  <th className="px-4 py-3 font-medium text-right">Lines</th>
+                  <th className="hidden px-4 py-3 font-medium text-right xl:table-cell">Lines</th>
                   <th className="px-4 py-3 font-medium text-right">Total</th>
                   <th className="px-4 py-3 font-medium text-center">Status</th>
-                  <th className="px-4 py-3 font-medium">Ordered</th>
-                  <th className="px-4 py-3 font-medium text-right">Next step</th>
+                  <th className="hidden px-4 py-3 font-medium lg:table-cell">Ordered</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -563,9 +562,9 @@ export default function PurchaseOrders() {
                       onKeyDown={(e) => { if (e.key === 'Enter') openDetail(po); }}
                     >
                       <td className="px-4 py-3 font-medium whitespace-nowrap">{po.poNumber}</td>
-                      <td className="px-4 py-3">{po.supplier.name}</td>
+                      <td className="px-4 py-3 min-w-[9rem]">{po.supplier.name}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-gray-600">{po.purchaseRequest?.request.docNumber ?? '—'}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{po.items.length}</td>
+                      <td className="hidden px-4 py-3 text-right tabular-nums xl:table-cell">{po.items.length}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">{money(tot)}</td>
                       <td className="px-4 py-3 text-center whitespace-nowrap">
                         <Badge color={PO_STATUS[po.status] ?? 'gray'}>{PO_LABEL[po.status] ?? po.status}</Badge>
@@ -574,17 +573,15 @@ export default function PurchaseOrders() {
                             <Badge color={po.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{po.purchaseType}</Badge>
                           </div>
                         )}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{fmtDate(po.orderDate)}</td>
-                      <td className="px-4 py-3 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                        {canRecordGrn(po) ? (
-                          <Button variant="ghost" title="Record the goods received note for this PO" onClick={() => void openGrnFromRow(po)}>
-                            📥 GRN
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-gray-300">—</span>
+                        {canRecordGrn(po) && (
+                          <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+                            <Button variant="ghost" title="Record the goods received note for this PO" onClick={() => void openGrnFromRow(po)}>
+                              📥 GRN
+                            </Button>
+                          </div>
                         )}
                       </td>
+                      <td className="hidden px-4 py-3 whitespace-nowrap text-gray-600 lg:table-cell">{fmtDate(po.orderDate)}</td>
                     </tr>
                   );
                 })}
