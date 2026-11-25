@@ -77,6 +77,20 @@ interface PrOption {
   title?: string | null;
 }
 
+interface PrLineDetail {
+  id: string;
+  description: string;
+  quantity: number;
+  unit?: string | null;
+  estimatedUnitPrice?: string | null;
+  accountId?: string | null;
+}
+
+interface PrDetail {
+  docNumber: string;
+  purchaseRequest?: { items: PrLineDetail[] } | null;
+}
+
 interface AccountOpt {
   id: string;
   code?: string | null;
@@ -168,6 +182,7 @@ export default function PurchaseOrders() {
   const [createOpen, setCreateOpen] = useState(false);
   const [supplierId, setSupplierId] = useState('');
   const [prId, setPrId] = useState('');
+  const [prBusy, setPrBusy] = useState(false);
   const [expectedDelivery, setExpectedDelivery] = useState('');
   const [purchaseType, setPurchaseType] = useState('NORMAL');
   const [purchaseReason, setPurchaseReason] = useState('');
@@ -302,6 +317,48 @@ export default function PurchaseOrders() {
           : l,
       ),
     );
+  };
+
+  /**
+   * Picking an approved PR copies its lines — description, quantity, unit and the
+   * price procurement set — so the PO starts from what was approved and the price
+   * is visible instead of being retyped. The account stays open: §17
+   * classification and the §9 budget check happen on the PO.
+   */
+  const pickPr = async (id: string) => {
+    setPrId(id);
+    if (!id) return;
+    setPrBusy(true);
+    try {
+      const r = await api<PrDetail>(`/procurement/requests/${id}`);
+      const items = r.purchaseRequest?.items ?? [];
+      if (items.length === 0) {
+        toast(`${r.docNumber} has no lines to copy`, 'error');
+        return;
+      }
+      setLines(
+        items.map((it) => ({
+          // a purchased item is a fixed asset until the buyer says otherwise; a
+          // consumable line is flipped to 📦 Stock and pointed at a store item
+          track: 'ASSET' as const,
+          inventoryItemId: '',
+          description: it.description,
+          quantity: String(it.quantity),
+          unit: it.unit ?? '',
+          unitPrice: Number(it.estimatedUnitPrice) > 0 ? String(Number(it.estimatedUnitPrice)) : '',
+          accountId: it.accountId ?? '',
+        })),
+      );
+      const noPrice = items.filter((it) => !(Number(it.estimatedUnitPrice) > 0)).length;
+      toast(
+        `${items.length} line${items.length === 1 ? '' : 's'} copied from ${r.docNumber}`
+          + (noPrice ? ` — ${noPrice} still need${noPrice === 1 ? 's' : ''} a price` : ''),
+      );
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Could not load the PR lines', 'error');
+    } finally {
+      setPrBusy(false);
+    }
   };
 
   const estimatedTotal = () =>
@@ -627,8 +684,8 @@ export default function PurchaseOrders() {
                 <Input id="po-expected" type="date" value={expectedDelivery} onChange={(e) => setExpectedDelivery(e.target.value)} />
               </div>
               <div className="sm:col-span-3">
-                <label htmlFor="po-pr" className="text-xs text-gray-500 block mb-1">From approved PR (optional)</label>
-                <Select id="po-pr" value={prId} onChange={(e) => setPrId(e.target.value)}>
+                <label htmlFor="po-pr" className="text-xs text-gray-500 block mb-1">From approved PR (optional — copies its lines, quantities and prices)</label>
+                <Select id="po-pr" value={prId} onChange={(e) => void pickPr(e.target.value)} disabled={prBusy}>
                   <option value="">— ad-hoc / direct purchase —</option>
                   {approvedPrs.map((p) => <option key={p.id} value={p.id}>{p.docNumber}{p.title ? ` — ${p.title}` : ''}</option>)}
                 </Select>
@@ -694,7 +751,7 @@ export default function PurchaseOrders() {
                         {inventoryItems.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name} ({i.balance} {i.unit})</option>)}
                       </Select>
                     ) : (
-                      <div className="text-[11px] text-orange-700 leading-tight">No stock — GRN adds it to the asset register.</div>
+                      <div className="text-[11px] text-orange-700 leading-tight">Asset — no stock item; the GRN registers it as an AST-… record.</div>
                     )}
                   </div>
                   <div className="col-span-6 md:col-span-3">
