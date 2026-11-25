@@ -1160,14 +1160,8 @@ export class InventoryService {
 
   /** Active items whose FREE stock (balance − reserved) is at/below threshold. */
   async lowStock() {
-    const items = await this.prisma.inventoryItem.findMany({ where: { isActive: true } });
-    const reserved = await this.reservedByItem(items.map((i) => i.id));
-    return items
-      .map((i) => {
-        const held = reserved.get(i.id) ?? 0;
-        return { ...i, reserved: held, available: Math.max(0, i.balance - held) };
-      })
-      .filter((i) => i.available <= i.minStock);
+    // one reservation read, shared with the catalog/alerts view
+    return (await this.itemsWithAlerts()).filter((i) => i.isActive && i.low);
   }
 
   /**
