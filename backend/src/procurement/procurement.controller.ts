@@ -14,7 +14,7 @@ class PrItemDto {
   @IsInt() @Min(1) quantity!: number;
   @IsOptional() @IsString() @MaxLength(32) unit?: string;
   /** blank = "ask Administration to price" (only with askForPricing) */
-  @IsOptional() estimatedUnitPrice?: number | null;
+  @IsOptional() @IsNumber() estimatedUnitPrice?: number | null;
   @IsOptional() @IsString() accountId?: string;
   @IsOptional() @IsString() assetId?: string;
 }

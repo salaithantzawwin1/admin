@@ -284,18 +284,18 @@ export class ProcurementService {
     const given = new Map(prices.map((p) => [p.itemId, Number(p.estimatedUnitPrice)]));
     const items = pr.items.map((i) => ({
       ...i,
-      price: given.has(i.id) ? given.get(i.id)! : i.estimatedUnitPrice === null ? null : Number(i.estimatedUnitPrice),
+      price: given.get(i.id) ?? Number(i.estimatedUnitPrice ?? 0),
     }));
-    const missing = items.filter((i) => !(Number(i.price) > 0));
+    const missing = items.filter((i) => !(i.price > 0));
     if (missing.length > 0) {
       throw new BadRequestException(`Set a price for every line: ${missing.map((i) => i.description).join(', ')}`);
     }
     const lines = items.map((i) => ({
-      description: i.description, quantity: i.quantity, unit: i.unit ?? undefined, estimatedUnitPrice: Number(i.price),
+      description: i.description, quantity: i.quantity, unit: i.unit ?? undefined, estimatedUnitPrice: i.price,
     }));
     await this.prisma.$transaction([
       ...items.map((i) =>
-        this.prisma.purchaseRequestItem.update({ where: { id: i.id }, data: { estimatedUnitPrice: Number(i.price) } }),
+        this.prisma.purchaseRequestItem.update({ where: { id: i.id }, data: { estimatedUnitPrice: i.price } }),
       ),
       this.prisma.requestDocument.update({
         where: { id: requestId },
@@ -316,7 +316,7 @@ export class ProcurementService {
       action: 'PURCHASE_REQUEST_PRICED', module: 'PROCUREMENT', recordId: requestId,
       newValue: { docNumber: request.docNumber, estimatedTotal: total, items: lines.length },
     });
-    return this.byRequest(requestId, { ...actor, canReadAll: true });
+    return { success: true, total };
   }
 
   /** Creates a PR as a workflow document (DRAFT). The requester submits it via the standard POST /requests/:id/submit afterwards — same flow as car and meeting-room requests. */
@@ -937,8 +937,7 @@ export class ProcurementService {
       if (!description) throw new BadRequestException(`Item ${idx + 1}: description is required`);
       const quantity = Math.floor(Number(it.quantity));
       if (!Number.isFinite(quantity) || quantity < 1) throw new BadRequestException(`Item ${idx + 1}: quantity must be at least 1`);
-      const raw = it.estimatedUnitPrice;
-      const price = raw === undefined || raw === null || raw === ('' as never) ? null : Number(raw);
+      const price = it.estimatedUnitPrice == null ? null : Number(it.estimatedUnitPrice);
       if (price !== null && (!Number.isFinite(price) || price < 0)) {
         throw new BadRequestException(`Item ${idx + 1}: estimated unit price must be a positive number`);
       }

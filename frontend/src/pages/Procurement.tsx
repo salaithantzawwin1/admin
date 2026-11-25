@@ -66,8 +66,9 @@ interface DraftItem {
   quantity: number;
   unit: string;
   estimatedUnitPrice: string;
-  /** the price we filled from the catalog — safe to replace when the item changes */
+  /** values we filled from the catalog — safe to replace when the item changes */
   autoPrice?: string;
+  autoUnit?: string;
 }
 
 const emptyItem = (): DraftItem => ({ description: '', quantity: 1, unit: '', estimatedUnitPrice: '' });
@@ -245,7 +246,7 @@ function PricingModal({ row, onClose, onDone }: { row: PrRow; onClose: () => voi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [budgetBlock, setBudgetBlock] = useState<BudgetBlock | null>(null);
-  const allSet = missing.length === 0 || missing.every((i) => Number(values[i.id]) > 0);
+  const allSet = missing.every((i) => Number(values[i.id]) > 0);
   const total = items.reduce(
     (sum, i) => sum + (Number(i.estimatedUnitPrice ?? values[i.id]) || 0) * i.quantity,
     0,
@@ -384,13 +385,16 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
     setItems((prev) => prev.map((it, i) => {
       if (i !== idx) return it;
       const nextPrice = match.lastUnitPrice != null ? String(Number(match.lastUnitPrice)) : '';
-      // a price the user typed is theirs; a price we filled follows the item
-      const typed = it.estimatedUnitPrice !== '' && it.estimatedUnitPrice !== it.autoPrice;
+      const nextUnit = match.unit || '';
+      // what the user typed is theirs; what we filled follows the chosen item
+      const typedPrice = it.estimatedUnitPrice !== '' && it.estimatedUnitPrice !== it.autoPrice;
+      const typedUnit = it.unit !== '' && it.unit !== it.autoUnit;
       return {
         ...it,
-        unit: it.unit || match.unit || '',
-        estimatedUnitPrice: typed ? it.estimatedUnitPrice : nextPrice,
-        autoPrice: typed ? it.autoPrice : nextPrice,
+        unit: typedUnit ? it.unit : nextUnit,
+        autoUnit: typedUnit ? it.autoUnit : nextUnit,
+        estimatedUnitPrice: typedPrice ? it.estimatedUnitPrice : nextPrice,
+        autoPrice: typedPrice ? it.autoPrice : nextPrice,
       };
     }));
   };
