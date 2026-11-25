@@ -208,7 +208,11 @@ export class ProcurementService {
     return { items: rows, total, page: params.page, pageSize: params.pageSize };
   }
 
-  /** One PR with its items — owner or procurement.read. */
+  /**
+   * One PR with its items — owner, procurement.read, or one of its approvers: an
+   * approver must see the lines and prices the detail page shows, even without
+   * the procurement.read the module normally requires.
+   */
   async byRequest(requestId: string, actor: Actor & { canReadAll?: boolean }) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
@@ -218,7 +222,11 @@ export class ProcurementService {
       },
     });
     if (!request || request.docType !== 'PURCHASE_REQUEST') throw new NotFoundException('Purchase request not found');
-    if (request.requesterId !== actor.userId && !actor.canReadAll) {
+    if (
+      request.requesterId !== actor.userId &&
+      !actor.canReadAll &&
+      !(await this.workflow.canView(requestId, actor))
+    ) {
       throw new ForbiddenException('Not your request');
     }
     const pr = await this.prisma.purchaseRequest.findUnique({

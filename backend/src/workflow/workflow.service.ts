@@ -425,10 +425,20 @@ export class WorkflowService {
     }
   }
 
-  async detail(id: string, actor: Actor) {
+  /**
+   * Who may read one request: its requester, an approver of its workflow
+   * (delegate-aware, SYSTEM_ADMIN included) or a module-declared extra viewer.
+   * Shared with module endpoints so an approver sees the same document — prices
+   * included — that the detail page shows.
+   */
+  async canView(id: string, actor: Actor): Promise<boolean> {
     const request = await this.mustFind(id);
-    const isOwner = request.requesterId === actor.userId;
-    const wf = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
+    if (request.requesterId === actor.userId) return true;
+    return this.canViewAsNonOwner(request, actor);
+  }
+
+  private async canViewAsNonOwner(request: { id: string; docType: RequestDocType }, actor: Actor): Promise<boolean> {
+    const wf = await this.workflowFor(request.docType as string, await this.amountFor(request.id, request.docType as string));
     const stepRoles = (wf?.steps ?? []).map((s) => s.roleName as string);
     // Approver visibility must mirror approve(): a delegate whose principal holds
     // a step role (or SYSTEM_ADMIN) can act on this request from the inbox and
@@ -446,20 +456,25 @@ export class WorkflowService {
           ),
         ]
       : ownRoles;
-    const isApprover = effectiveRoles.includes('SYSTEM_ADMIN') || stepRoles.some((r) => effectiveRoles.includes(r));
+    if (effectiveRoles.includes('SYSTEM_ADMIN') || stepRoles.some((r) => effectiveRoles.includes(r))) return true;
 
     // module-declared extra viewers (CAR_REQUEST → the requester's dept manager)
-    let extraViewers: string[] = [];
     const viewerHook = this.viewerHooks.get(request.docType);
     if (viewerHook) {
       try {
-        extraViewers = await viewerHook(id);
+        return (await viewerHook(request.id)).includes(actor.userId);
       } catch {
         // a broken hook must neither widen access nor block the owner/approver
       }
     }
+    return false;
+  }
 
-    if (!isOwner && !isApprover && !extraViewers.includes(actor.userId)) throw new ForbiddenException('No access');
+  async detail(id: string, actor: Actor) {
+    const request = await this.mustFind(id);
+    const isOwner = request.requesterId === actor.userId;
+
+    if (!isOwner && !(await this.canViewAsNonOwner(request, actor))) throw new ForbiddenException('No access');
 
     const [actions, attachments] = await Promise.all([
       this.prisma.approvalAction.findMany({
