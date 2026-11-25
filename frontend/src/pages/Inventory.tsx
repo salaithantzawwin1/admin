@@ -1062,7 +1062,7 @@ export default function Inventory() {
                           style={{ width: `${stockPct(i)}%` }}
                         />
                       </div>
-                      <span className="text-xs whitespace-nowrap">{freeOf(i)} {i.unit}</span>
+                      <span className="text-xs whitespace-nowrap">{freeOf(i)}{i.reserved ? `/${i.balance}` : ''} {i.unit}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <button
