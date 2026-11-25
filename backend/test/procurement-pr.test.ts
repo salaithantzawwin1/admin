@@ -140,7 +140,7 @@ async function main() {
     const prisma = makePrisma();
     const svc = makeService(prisma);
     const doc = await svc.create(
-      { items: [GOOD_ITEM, { description: 'Stapler', quantity: 2 }] },
+      { items: [GOOD_ITEM, { description: 'Stapler', quantity: 2, estimatedUnitPrice: 5000 }] },
       ACTOR,
     );
     const reqData = prisma.__calls.requestCreate[0];
@@ -154,6 +154,7 @@ async function main() {
     assert.strictEqual(items[0].quantity, 10);
     assert.strictEqual(Number(items[0].estimatedUnitPrice), 8000);
     assert.strictEqual(items[1].unit, undefined);
+    assert.strictEqual(Number(items[1].estimatedUnitPrice), 5000);
     assert.ok(prisma.__calls.prCreate[0].items.create.every((i: any) => i.accountId === undefined));
     assert.ok(doc.purchaseRequest.items.length === 2);
   });
@@ -163,15 +164,20 @@ async function main() {
     await assert.rejects(() => svc.create({ items: [] }, ACTOR), /At least one item/i);
   });
 
-  await test('create rejects quantity < 1 and NaN price', async () => {
+  await test('create rejects quantity < 1, a negative price and a missing estimate', async () => {
     const svc = makeService(makePrisma());
     await assert.rejects(
-      () => svc.create({ items: [{ description: 'X', quantity: 0 }] }, ACTOR),
+      () => svc.create({ items: [{ description: 'X', quantity: 0, estimatedUnitPrice: 100 }] }, ACTOR),
       /quantity must be at least 1/i,
     );
     await assert.rejects(
       () => svc.create({ items: [{ description: 'X', quantity: 2, estimatedUnitPrice: -5 }] }, ACTOR),
-      /invalid estimated unit price/i,
+      /estimated unit price is required/i,
+    );
+    // no price = total 0 = cheapest approval band, so it cannot be saved at all
+    await assert.rejects(
+      () => svc.create({ items: [{ description: 'X', quantity: 2 }] }, ACTOR),
+      /estimated unit price is required/i,
     );
   });
 
@@ -195,7 +201,7 @@ async function main() {
         supplier: { name: 'ABC Technology' },
         lines: [
           { item: { code: 'ITM-0001', name: 'A4 Paper', unit: 'ream' }, quantity: 4, unitPrice: '150000' },
-          { item: { code: 'ITM-0002', name: 'Ball Pen', unit: 'pcs' }, quantity: 10, unitPrice: null },
+          { item: { code: 'ITM-0002', name: 'Ball Pen', unit: 'pcs' }, quantity: 10, unitPrice: '1200' },
         ],
         note: 'urgent restock',
       },
@@ -206,7 +212,7 @@ async function main() {
     assert.strictEqual(items[0].description, 'A4 Paper (ITM-0001)');
     assert.strictEqual(items[0].quantity, 4);
     assert.strictEqual(Number(items[0].estimatedUnitPrice), 150000);
-    assert.strictEqual(items[1].estimatedUnitPrice, undefined);
+    assert.strictEqual(Number(items[1].estimatedUnitPrice), 1200);
     const reqData = prisma.__calls.requestCreate[0];
     assert.ok(reqData.title.includes('ABC Technology'), `title: ${reqData.title}`);
     assert.ok((reqData.description as string).includes('Vendor PO draft'), `justification: ${reqData.description}`);

@@ -214,7 +214,11 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
 
   const total = items.reduce((sum, it) => sum + (Number(it.estimatedUnitPrice) || 0) * (Number(it.quantity) || 0), 0);
   const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
-  const valid = items.length > 0 && items.every((it) => it.description.trim() && Number(it.quantity) >= 1) && (!reasonNeeded || purchaseReason.trim());
+  const missingPrice = items.some((it) => !(Number(it.estimatedUnitPrice) > 0));
+  const valid =
+    items.length > 0 &&
+    items.every((it) => it.description.trim() && Number(it.quantity) >= 1 && Number(it.estimatedUnitPrice) > 0) &&
+    (!reasonNeeded || purchaseReason.trim());
 
   const submit = async (thenSubmitForApproval: boolean) => {
     setError('');
@@ -234,7 +238,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
             description: it.description.trim(),
             quantity: Number(it.quantity),
             unit: it.unit.trim() || undefined,
-            estimatedUnitPrice: it.estimatedUnitPrice === '' ? undefined : Number(it.estimatedUnitPrice),
+            estimatedUnitPrice: Number(it.estimatedUnitPrice),
           })),
         },
       });
@@ -283,7 +287,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
                 <Input placeholder="Unit" value={it.unit} onChange={(e) => setItem(idx, { unit: e.target.value })} />
               </div>
               <div className="col-span-4 md:col-span-4">
-                <Input type="number" min={0} placeholder="Unit price" title="Unit price in Kyat" value={it.estimatedUnitPrice} onChange={(e) => setItem(idx, { estimatedUnitPrice: e.target.value })} />
+                <Input type="number" min={0} required placeholder="Unit price *" title="Estimated unit price in Kyat — required: the approval chain is chosen from the estimated total" value={it.estimatedUnitPrice} onChange={(e) => setItem(idx, { estimatedUnitPrice: e.target.value })} />
               </div>
               <div className="col-span-12 md:col-span-1 flex justify-end">
                 <Button variant="danger" title={`Remove item ${idx + 1}`} onClick={() => setItems((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev))}>
@@ -300,6 +304,11 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
               Estimated total: <b>{fmtMoney(total)} Ks</b>
             </div>
           </div>
+          {missingPrice && (
+            <div className="text-xs text-amber-700">
+              Every line needs an estimated unit price — the approval chain is chosen from the estimated total.
+            </div>
+          )}
         </div>
 
         {/* PR fields */}

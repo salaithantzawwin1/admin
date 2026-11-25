@@ -273,7 +273,19 @@ export class PurchaseOrdersService {
   async createGrn(poId: string, data: CreateGrnInput, actor: Actor) {
     const po = await this.prisma.purchaseOrder.findUnique({
       where: { id: poId },
-      include: { items: true },
+      include: {
+        items: true,
+        // the PR this PO fills — read once here so the arrival notices below
+        // need no second round trip
+        purchaseRequest: {
+          select: {
+            request: { select: { id: true, docNumber: true, requesterId: true } },
+            sourceSupplyRequest: {
+              select: { requestId: true, request: { select: { id: true, docNumber: true, requesterId: true } } },
+            },
+          },
+        },
+      },
     });
     if (!po) throw new NotFoundException('Purchase order not found');
     // Control 2 (§35): PO-required receiving — status must be past APPROVED
@@ -428,40 +440,34 @@ export class PurchaseOrdersService {
     // Receiving is the moment the requester can act on: the PR requester was
     // never told anything after approval, and an office supply request that was
     // bought for needs its collection notice. Both come from the PO's PR.
-    if (po.purchaseRequestId) {
+    const pr = po.purchaseRequest;
+    if (pr) {
       // "collect them from the store" only makes sense for goods: a service
       // line is accepted but has nothing to pick up, so it must not inflate
       // the count the requester reads
       const collectable = lines.filter((l) => l.inventoryItemId || l.registerAsset).reduce((s, l) => s + l.acceptedQty, 0);
-      const pr = await this.prisma.purchaseRequest.findUnique({
-        where: { id: po.purchaseRequestId },
-        include: {
-          request: { select: { id: true, docNumber: true, requesterId: true } },
-          sourceSupplyRequest: {
-            select: { requestId: true, request: { select: { id: true, docNumber: true, requesterId: true } } },
-          },
-        },
+      await this.notifications.notify({
+        userId: pr.request.requesterId, type: 'SUPPLY_READY_FOR_PICKUP',
+        title: `Goods received — ${pr.request.docNumber}`,
+        // the requester only ever sees "approved", then silence — say plainly
+        // that what they asked for has physically arrived and where it is
+        body: collectable > 0
+          ? `Your order has arrived: ${grnNumber} accepted ${collectable} item(s) from ${po.poNumber}. Collect them from the Administration store.`
+          : `Your order has arrived: ${grnNumber} recorded the service bought on ${po.poNumber}. Nothing needs collecting — the Administration office will confirm it with you.`,
+        link: `/requests/${pr.request.id}`, requestId: pr.request.id,
       });
-      if (pr?.request) {
-        await this.notifications.notify({
-          userId: pr.request.requesterId, type: 'SUPPLY_READY_FOR_PICKUP' as never,
-          title: `Goods received — ${pr.request.docNumber}`,
-          // the requester only ever sees "approved", then silence — say plainly
-          // that what they asked for has physically arrived and where it is
-          body: collectable > 0
-            ? `Your order has arrived: ${grnNumber} accepted ${collectable} item(s) from ${po.poNumber}. Collect them from the Administration store.`
-            : `Your order has arrived: ${grnNumber} recorded the service bought on ${po.poNumber}. Nothing needs collecting — the Administration office will confirm it with you.`,
-          link: `/requests/${pr.request.id}`, requestId: pr.request.id,
-        });
-      }
-      const osr = pr?.sourceSupplyRequest;
-      if (osr?.request) {
-        await this.notifications.notify({
-          userId: osr.request.requesterId, type: 'SUPPLY_PURCHASING' as never,
-          title: `Your items arrived — ${osr.request.docNumber}`,
-          body: `The items you requested have arrived — ${grnNumber} (PO ${po.poNumber}) delivered them. Administration will hand them over next.`,
-          link: `/requests/${osr.request.id}`, requestId: osr.request.id,
-        });
+      const osr = pr.sourceSupplyRequest;
+      if (osr) {
+        // the PR is raised by whoever buys for the OSR; when that is the
+        // requester themselves, one notice says it all
+        if (osr.request.requesterId !== pr.request.requesterId) {
+          await this.notifications.notify({
+            userId: osr.request.requesterId, type: 'SUPPLY_PURCHASING',
+            title: `Your items arrived — ${osr.request.docNumber}`,
+            body: `The items you requested have arrived — ${grnNumber} (PO ${po.poNumber}) delivered them. Administration will hand them over next.`,
+            link: `/requests/${osr.request.id}`, requestId: osr.request.id,
+          });
+        }
         // the buying note the requester sees now carries the real source
         await this.prisma.officeSupplyRequest.update({
           where: { requestId: osr.requestId },

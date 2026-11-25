@@ -491,6 +491,15 @@ export class WorkflowService {
     if (request.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can submit');
     if (request.status !== 'DRAFT') throw new BadRequestException(`Cannot submit from status ${request.status}`);
 
+    const amount = await this.amountFor(id, request.docType as string);
+    // A PR's route comes from its estimated total: a draft saved before prices
+    // were mandatory would total 0 and quietly take the lowest band.
+    if (request.docType === 'PURCHASE_REQUEST' && amount === 0) {
+      throw new BadRequestException(
+        'Every purchase request line needs an estimated unit price — the approval chain is chosen from the estimated total',
+      );
+    }
+
     // §9 budget check: a PR's estimated totals per account are compared with
     // that account's remaining monthly budget (real spend from invoices).
     if (request.docType === 'PURCHASE_REQUEST' && this.budgetHook) {
@@ -511,7 +520,7 @@ export class WorkflowService {
       }
     }
 
-    const workflow = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
+    const workflow = await this.workflowFor(request.docType as string, amount);
     if (!workflow || !workflow.active || workflow.steps.length === 0) {
       throw new BadRequestException('No active workflow configured');
     }

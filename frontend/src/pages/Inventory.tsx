@@ -14,6 +14,10 @@ interface Item {
   category: string;
   unit: string;
   balance: number;
+  /** promised to approved requests that have not been handed over yet */
+  reserved?: number;
+  /** balance − reserved: what a new request can actually draw on */
+  available?: number;
   minStock: number;
   reorderLevel?: number | null;
   description?: string;
@@ -1896,7 +1900,15 @@ export default function Inventory() {
       {requestFor && (
         <ConfirmDialog
           title={`Request ${requestFor.name}?`}
-          description={<>Request <b>{requestQty} {requestFor.unit}</b> of {requestFor.code} — {requestFor.name}. In stock: {requestFor.balance}. The Administration Department approves and issues the items.</>}
+          description={<>
+            Request <b>{requestQty} {requestFor.unit}</b> of {requestFor.code} — {requestFor.name}. Available now:{' '}
+            <b>{requestFor.available ?? requestFor.balance}</b>
+            {requestFor.reserved ? ` (${requestFor.reserved} reserved for approved requests)` : ''}.{' '}
+            {requestQty > (requestFor.available ?? requestFor.balance) && (
+              <span className="text-amber-700">That is more than is available — Administration will buy the shortfall. </span>
+            )}
+            The Administration Department approves and issues the items.
+          </>}
           confirmLabel="Submit request"
           onClose={() => setRequestFor(null)}
           onConfirm={async () => { await submitSingle(); }}
@@ -1951,6 +1963,20 @@ export default function Inventory() {
           error={error}
           onClose={() => setShowCart(false)}
         >
+          {(() => {
+            // Emp2 must see what Emp1's approved request already holds back.
+            const short = cartLines
+              .map(([id, q]) => ({ item: items.find((i) => i.id === id), q }))
+              .filter((l) => l.item && l.q > (l.item.available ?? l.item.balance));
+            if (short.length === 0) return null;
+            return (
+              <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <b>Not enough free stock:</b>{' '}
+                {short.map((l) => `${l.item!.name} — asked ${l.q}, available ${l.item!.available ?? l.item!.balance}${l.item!.reserved ? ` (${l.item!.reserved} reserved for approved requests)` : ''}`).join(' · ')}
+                {' — '}Administration will buy the shortfall.
+              </div>
+            );
+          })()}
           <table className="w-full text-sm mb-3">
             <tbody className="divide-y divide-gray-100">
               {cartLines.map(([id, q]) => {
@@ -1959,7 +1985,10 @@ export default function Inventory() {
                   <tr key={id}>
                     <td className="py-2">
                       <div className="font-medium text-gray-700">{item?.name}</div>
-                      <div className="text-[11px] text-gray-400">{item?.code} · balance {item?.balance} {item?.unit}</div>
+                      <div className="text-[11px] text-gray-400">
+                        {item?.code} · {item?.available ?? item?.balance} available
+                        {item?.reserved ? ` · ${item.reserved} reserved` : ''} {item?.unit}
+                      </div>
                     </td>
                     <td className="py-2 text-right">
                       <NumberField min={1} integer className="!w-24" value={q}

@@ -45,11 +45,40 @@ export class InventoryService {
 
   // ---------- items master ----------
 
-  listItems(includeInactive = false) {
-    return this.prisma.inventoryItem.findMany({
-      where: includeInactive ? undefined : { isActive: true },
-      orderBy: { code: 'asc' },
+  /**
+   * Quantity already promised to approved supply requests that have not been
+   * handed over. It is still on the shelf, but it is not free to give out:
+   * the store has to keep it for that collection.
+   */
+  private async reservedByItem(): Promise<Map<string, number>> {
+    const rows = await this.prisma.supplyRequestLine.groupBy({
+      by: ['itemId'],
+      where: {
+        status: { in: ['PENDING', 'OUT_OF_STOCK'] },
+        supplyRequest: {
+          status: { in: ['PENDING', 'PURCHASING', 'READY_FOR_PICKUP', 'PARTIAL'] },
+          request: { status: { in: ['APPROVED', 'COMPLETED'] } },
+        },
+      },
+      _sum: { quantity: true },
     });
+    return new Map(rows.map((r) => [r.itemId, r._sum.quantity ?? 0]));
+  }
+
+  /** Items master + the reservation figure the request form warns on. */
+  listItems(includeInactive = false) {
+    return this.prisma.inventoryItem
+      .findMany({
+        where: includeInactive ? undefined : { isActive: true },
+        orderBy: { code: 'asc' },
+      })
+      .then(async (items) => {
+        const reserved = await this.reservedByItem();
+        return items.map((i) => {
+          const held = reserved.get(i.id) ?? 0;
+          return { ...i, reserved: held, available: Math.max(0, i.balance - held) };
+        });
+      });
   }
 
   /** Items + live low-stock computation for the management view. */

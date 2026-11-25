@@ -142,6 +142,13 @@ async function main() {
     assert.strictEqual(prisma.__calls.prLookups, 0, 'amountFor must short-circuit for non-amount doc types');
   });
 
+  await test('PR with no priced line is refused — a 0 total would take the cheapest band', async () => {
+    const prisma = makePrisma({ docType: 'PURCHASE_REQUEST', items: [{ estimatedUnitPrice: null, quantity: 3 }] });
+    const svc = makeService(prisma);
+    await assert.rejects(() => svc.submit('req-1', ACTOR), /estimated unit price/i);
+    assert.strictEqual(prisma.__calls.docUpdates.length, 0, 'no status change before the estimate exists');
+  });
+
   await test('PR without a purchaseRequest row falls back to the unbounded default workflow', async () => {
     const update = await submitAndGetUpdate({ docType: 'PURCHASE_REQUEST', workflows: [PR_DEFAULT_WORKFLOW, ...PR_BAND_WORKFLOWS], prRow: null });
     assert.strictEqual(update.totalLevels, 2, 'unbounded default workflow should win when no amount is known');

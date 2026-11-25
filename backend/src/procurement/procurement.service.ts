@@ -837,9 +837,13 @@ export class ProcurementService {
       if (!description) throw new BadRequestException(`Item ${idx + 1}: description is required`);
       const quantity = Math.floor(Number(it.quantity));
       if (!Number.isFinite(quantity) || quantity < 1) throw new BadRequestException(`Item ${idx + 1}: quantity must be at least 1`);
-      const price = it.estimatedUnitPrice === undefined || it.estimatedUnitPrice === null ? undefined : Number(it.estimatedUnitPrice);
-      if (price !== undefined && (!Number.isFinite(price) || price < 0)) {
-        throw new BadRequestException(`Item ${idx + 1}: invalid estimated unit price`);
+      // The estimated total decides the approval band, so a blank price is not
+      // a harmless default: it totals 0 and takes the cheapest chain.
+      const price = Number(it.estimatedUnitPrice);
+      if (!Number.isFinite(price) || price <= 0) {
+        throw new BadRequestException(
+          `Item ${idx + 1}: estimated unit price is required (greater than 0) — the approval chain is chosen from the estimated total`,
+        );
       }
       return {
         description,
