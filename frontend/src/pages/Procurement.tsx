@@ -375,7 +375,9 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
   /** Picking a catalog item fills its unit and last paid price (only blanks). */
   const fillFromCatalog = (idx: number, typed: string) => {
     const needle = typed.trim().toLowerCase();
-    const match = catalog.find((c) => c.name.toLowerCase() === needle || c.code.toLowerCase() === needle);
+    // duplicate names exist; a row with a last price is the useful one
+    const matches = catalog.filter((c) => c.name.toLowerCase() === needle || c.code.toLowerCase() === needle);
+    const match = matches.find((c) => c.lastUnitPrice != null) ?? matches[0];
     if (!match) return;
     setItems((prev) => prev.map((it, i) => (i === idx ? {
       ...it,
