@@ -66,6 +66,8 @@ interface DraftItem {
   quantity: number;
   unit: string;
   estimatedUnitPrice: string;
+  /** the price we filled from the catalog — safe to replace when the item changes */
+  autoPrice?: string;
 }
 
 const emptyItem = (): DraftItem => ({ description: '', quantity: 1, unit: '', estimatedUnitPrice: '' });
@@ -379,11 +381,18 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
     const matches = catalog.filter((c) => c.name.toLowerCase() === needle || c.code.toLowerCase() === needle);
     const match = matches.find((c) => c.lastUnitPrice != null) ?? matches[0];
     if (!match) return;
-    setItems((prev) => prev.map((it, i) => (i === idx ? {
-      ...it,
-      unit: it.unit || match.unit || '',
-      estimatedUnitPrice: it.estimatedUnitPrice || (match.lastUnitPrice != null ? String(Number(match.lastUnitPrice)) : ''),
-    } : it)));
+    setItems((prev) => prev.map((it, i) => {
+      if (i !== idx) return it;
+      const nextPrice = match.lastUnitPrice != null ? String(Number(match.lastUnitPrice)) : '';
+      // a price the user typed is theirs; a price we filled follows the item
+      const typed = it.estimatedUnitPrice !== '' && it.estimatedUnitPrice !== it.autoPrice;
+      return {
+        ...it,
+        unit: it.unit || match.unit || '',
+        estimatedUnitPrice: typed ? it.estimatedUnitPrice : nextPrice,
+        autoPrice: typed ? it.autoPrice : nextPrice,
+      };
+    }));
   };
 
   const total = items.reduce((sum, it) => sum + (Number(it.estimatedUnitPrice) || 0) * (Number(it.quantity) || 0), 0);
