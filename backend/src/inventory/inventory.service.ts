@@ -75,26 +75,26 @@ export class InventoryService {
     return new Map(rows.map((r) => [r.itemId, r._sum.quantity ?? 0]));
   }
 
-  /** Items master + the reservation figure the request form warns on. */
-  listItems(includeInactive = false) {
-    return this.prisma.inventoryItem
-      .findMany({
-        where: includeInactive ? undefined : { isActive: true },
-        orderBy: { code: 'asc' },
-      })
-      .then(async (items) => {
-        const reserved = await this.reservedByItem();
-        return items.map((i) => {
-          const held = reserved.get(i.id) ?? 0;
-          return { ...i, reserved: held, available: Math.max(0, i.balance - held) };
-        });
-      });
-  }
-
-  /** Items + live low-stock computation for the catalog and management view. */
+  /**
+   * Items master for the catalog and management view: shelf balance, the
+   * quantity already promised to approved requests, what is actually free, and
+   * the low/out flags the badges read.
+   */
   async itemsWithAlerts() {
-    const items = await this.listItems(true);
-    return items.map((i) => ({ ...i, low: i.balance <= i.minStock, out: i.balance <= 0 }));
+    const [items, reserved] = await Promise.all([
+      this.prisma.inventoryItem.findMany({ orderBy: { code: 'asc' } }),
+      this.reservedByItem(),
+    ]);
+    return items.map((i) => {
+      const held = reserved.get(i.id) ?? 0;
+      return {
+        ...i,
+        reserved: held,
+        available: Math.max(0, i.balance - held),
+        low: i.balance <= i.minStock,
+        out: i.balance <= 0,
+      };
+    });
   }
 
   private nextItemCode(): Promise<string> {

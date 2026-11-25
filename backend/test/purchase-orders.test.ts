@@ -305,6 +305,40 @@ async function main() {
     assert.ok(closed.closedAt instanceof Date, 'closedAt stamped');
   });
 
+  await test('estimate guard: a PO 12.5% above the PR estimate needs a second approval', async () => {
+    const prisma = makePrisma({
+      po: {
+        id: 'po-1', poNumber: 'PO-202610-0001', status: 'DRAFT', supplierId: 'sup-1',
+        purchaseRequest: { request: { status: 'APPROVED', docNumber: 'PR-202610-0001' }, items: [{ quantity: 10, estimatedUnitPrice: 8000 }] },
+      },
+      poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 10, unitPrice: 9000, inventoryItemId: 'itm-1' }],
+    });
+    const svc = makeService(prisma);
+    await assert.rejects(
+      () => svc.transition('po-1', 'approve', ACTOR),
+      (e: any) => {
+        const body = typeof e?.getResponse === 'function' ? e.getResponse() : e?.response;
+        return e?.getStatus?.() === 409 && body?.code === 'ESTIMATE_EXCEEDED' && body.percent === 12.5 && body.estimate === 80000 && body.total === 90000;
+      },
+    );
+    assert.strictEqual(prisma.__state.po.status, 'DRAFT', 'the PO must not be approved without the confirmation');
+    const approved = await svc.transition('po-1', 'approve', ACTOR, { confirmOverEstimate: true });
+    assert.strictEqual(approved.status, 'APPROVED');
+  });
+
+  await test('estimate guard: exactly 10% above the estimate is within tolerance', async () => {
+    const prisma = makePrisma({
+      po: {
+        id: 'po-1', poNumber: 'PO-202610-0001', status: 'DRAFT', supplierId: 'sup-1',
+        purchaseRequest: { request: { status: 'APPROVED', docNumber: 'PR-202610-0001' }, items: [{ quantity: 10, estimatedUnitPrice: 8000 }] },
+      },
+      poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 10, unitPrice: 8800, inventoryItemId: 'itm-1' }],
+    });
+    const svc = makeService(prisma);
+    const approved = await svc.transition('po-1', 'approve', ACTOR);
+    assert.strictEqual(approved.status, 'APPROVED');
+  });
+
   await test('§16 machine: DRAFT → APPROVED ok, then SENT_TO_VENDOR; illegal DRAFT → SENT_TO_VENDOR throws', async () => {
     const prisma = makePrisma({ po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'DRAFT', supplierId: 'sup-1' } });
     const svc = makeService(prisma);

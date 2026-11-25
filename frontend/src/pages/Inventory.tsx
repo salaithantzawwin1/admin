@@ -792,6 +792,11 @@ export default function Inventory() {
   };
 
   const cartLines = Object.entries(cart).filter(([, q]) => q > 0);
+  // lines asking for more than the shelf can free up — the warning shows what
+  // is reserved instead of the raw balance
+  const shortLines = cartLines
+    .map(([id, q]) => ({ item: items.find((i) => i.id === id), q }))
+    .filter((l) => l.item && l.q > (l.item.available ?? l.item.balance));
   const lowCount = items.filter((i) => i.low).length;
 
   // items-master search + pagination (Management → Items)
@@ -1970,20 +1975,13 @@ export default function Inventory() {
           error={error}
           onClose={() => setShowCart(false)}
         >
-          {(() => {
-            // Emp2 must see what Emp1's approved request already holds back.
-            const short = cartLines
-              .map(([id, q]) => ({ item: items.find((i) => i.id === id), q }))
-              .filter((l) => l.item && l.q > (l.item.available ?? l.item.balance));
-            if (short.length === 0) return null;
-            return (
-              <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                <b>Not enough free stock:</b>{' '}
-                {short.map((l) => `${l.item!.name} — asked ${l.q}, available ${l.item!.available ?? l.item!.balance}${l.item!.reserved ? ` (${l.item!.reserved} reserved for approved requests)` : ''}`).join(' · ')}
-                {' — '}Administration will buy the shortfall.
-              </div>
-            );
-          })()}
+          {shortLines.length > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <b>Not enough free stock:</b>{' '}
+              {shortLines.map((l) => `${l.item!.name} — asked ${l.q}, available ${l.item!.available ?? l.item!.balance}${l.item!.reserved ? ` (${l.item!.reserved} reserved for approved requests)` : ''}`).join(' · ')}
+              {' — '}Administration will buy the shortfall.
+            </div>
+          )}
           <table className="w-full text-sm mb-3">
             <tbody className="divide-y divide-gray-100">
               {cartLines.map(([id, q]) => {

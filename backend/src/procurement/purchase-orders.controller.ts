@@ -17,6 +17,11 @@ class PoItemDto {
   @IsString() @MinLength(1) accountId!: string; // §17/§39 — purchasing stage assigns the Account
 }
 
+class ApprovePoDto {
+  /** true = the approver has seen the PR-estimate overrun and accepts it. */
+  @IsOptional() @IsBoolean() confirmOverEstimate?: boolean;
+}
+
 class CreatePoDto {
   @IsOptional() @IsString() purchaseRequestId?: string;
   @IsString() supplierId!: string;
@@ -77,9 +82,11 @@ export class PurchaseOrdersController {
 
   @Post(':id/approve')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
-  approve(@Param('id') id: string, @Req() req: Request) {
+  approve(@Param('id') id: string, @Body() dto: ApprovePoDto, @Req() req: Request) {
     const user = req.user as { id: string; username: string };
-    return this.po.transition(id, 'approve', { userId: user.id, username: user.username });
+    return this.po.transition(id, 'approve', { userId: user.id, username: user.username }, {
+      confirmOverEstimate: dto?.confirmOverEstimate === true,
+    });
   }
 
   @Post(':id/send')

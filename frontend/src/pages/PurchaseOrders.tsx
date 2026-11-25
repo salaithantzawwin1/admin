@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, hasPermission } from '../api';
+import { api, ApiError, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -93,8 +93,45 @@ const PO_STATUS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | '
   CANCELLED: 'red',
 };
 
+/** Human labels for the badges and the status filter (raw enums read badly). */
+const PO_LABEL: Record<string, string> = {
+  DRAFT: 'Draft',
+  APPROVED: 'Approved',
+  SENT_TO_VENDOR: 'Sent to vendor',
+  PARTIALLY_RECEIVED: 'Partially received',
+  FULLY_RECEIVED: 'Fully received',
+  CLOSED: 'Closed',
+  CANCELLED: 'Cancelled',
+};
+const PO_STATUS_ORDER = ['DRAFT', 'APPROVED', 'SENT_TO_VENDOR', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CLOSED', 'CANCELLED'];
+
+/** Structured 409 payload when a PO costs more than the PR estimate allows. */
+export interface EstimateOverrun {
+  prNumber: string;
+  estimate: number;
+  total: number;
+  percent: number;
+  tolerancePercent: number;
+}
+
+function estimateOverrunFrom(e: unknown): EstimateOverrun | null {
+  if (!(e instanceof ApiError)) return null;
+  const d = e.details as (Partial<EstimateOverrun> & { code?: string }) | undefined;
+  if (d?.code !== 'ESTIMATE_EXCEEDED' || typeof d.estimate !== 'number' || typeof d.total !== 'number') return null;
+  return {
+    prNumber: d.prNumber ?? 'the linked PR',
+    estimate: d.estimate,
+    total: d.total,
+    percent: d.percent ?? 0,
+    tolerancePercent: d.tolerancePercent ?? 10,
+  };
+}
+
 const money = (v: string | number) =>
   `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 })} Ks`;
+
+const accepted = (it: PoItem) => (it.grnItems ?? []).reduce((s, g) => s + g.acceptedQty, 0);
+const poTotal = (items: PoItem[]) => items.reduce((s, i) => s + i.quantity * Number(i.unitPrice), 0);
 
 interface LineDraft {
   inventoryItemId: string;
@@ -112,7 +149,10 @@ export default function PurchaseOrders() {
   const [pos, setPos] = useState<PoRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  // approving a PO above the PR estimate asks once, then retries with the flag
+  const [estimateWarn, setEstimateWarn] = useState<{ po: PoDetail | PoRow; info: EstimateOverrun } | null>(null);
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [inventoryItems, setInventoryItems] = useState<InventoryItemOpt[]>([]);
@@ -161,7 +201,9 @@ export default function PurchaseOrders() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await api<{ items: PoRow[]; total: number }>(`/purchase-orders?page=${page}&pageSize=${PAGE_SIZE}`);
+      const r = await api<{ items: PoRow[]; total: number }>(
+        `/purchase-orders?page=${page}&pageSize=${PAGE_SIZE}${statusFilter ? `&status=${statusFilter}` : ''}`,
+      );
       setPos(r.items);
       setTotal(r.total);
     } catch (e) {
@@ -169,7 +211,7 @@ export default function PurchaseOrders() {
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -314,14 +356,23 @@ export default function PurchaseOrders() {
     }
   };
 
-  const transition = async (po: PoDetail | PoRow, action: 'approve' | 'send' | 'close' | 'cancel') => {
+  const transition = async (
+    po: PoDetail | PoRow,
+    action: 'approve' | 'send' | 'close' | 'cancel',
+    opts?: { confirmOverEstimate?: boolean },
+  ) => {
     setBusy(true);
     try {
-      await api(`/purchase-orders/${po.id}/${action}`, { method: 'POST' });
+      await api(`/purchase-orders/${po.id}/${action}`, { method: 'POST', body: opts });
       toast(`PO ${po.poNumber} ${action === 'send' ? 'sent to vendor' : action + 'd'}`);
       setDetail(null);
       load();
     } catch (e) {
+      const warn = estimateOverrunFrom(e);
+      if (warn) {
+        setEstimateWarn({ po, info: warn });
+        return;
+      }
       toast(e instanceof Error ? e.message : `Could not ${action}`, 'error');
     } finally {
       setBusy(false);
@@ -377,7 +428,7 @@ export default function PurchaseOrders() {
     }
   };
 
-  const receivedFor = (it: PoItem) => (it.grnItems ?? []).reduce((s, g) => s + g.acceptedQty, 0);
+  const receivedFor = accepted;
 
   const grnDefaults = (d: PoDetail) => {
     const state: Record<string, { received: string; accepted: string; rejected: string; condition: string; registerAsset: boolean }> = {};
@@ -455,12 +506,8 @@ export default function PurchaseOrders() {
     }
   };
 
-  const nextQuality = (po: PoRow) => {
-    const canReceive = canManage && ['SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(po.status);
-    if (canReceive) return '📥 Record GRN';
-    if (po.status === 'SENT_TO_VENDOR' || po.status === 'PARTIALLY_RECEIVED') return 'Receive';
-    return null;
-  };
+  const canRecordGrn = (po: PoRow) =>
+    canManage && ['SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(po.status);
 
   return (
     <div>
@@ -471,57 +518,82 @@ export default function PurchaseOrders() {
       />
 
       <Card>
+        <div className="flex flex-wrap items-center gap-2 px-4 pt-4">
+          <Select
+            className="!w-48"
+            aria-label="Filter purchase orders by status"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+          >
+            <option value="">All statuses</option>
+            {PO_STATUS_ORDER.map((s) => <option key={s} value={s}>{PO_LABEL[s]}</option>)}
+          </Select>
+          <span className="text-xs text-gray-400 ml-auto">
+            {total} order{total === 1 ? '' : 's'}
+          </span>
+        </div>
         {loading ? (
           <Empty label="Loading…" />
         ) : pos.length === 0 ? (
-          <Empty label="No purchase orders yet — create one from an approved PR" />
+          <Empty label={statusFilter ? `No ${PO_LABEL[statusFilter].toLowerCase()} purchase orders` : 'No purchase orders yet — create one from an approved PR'} />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-gray-500 border-b">
-                <th className="py-2 pr-2">PO</th>
-                <th className="py-2 pr-2">Supplier</th>
-                <th className="py-2 pr-2">From PR</th>
-                <th className="py-2 pr-2">Lines</th>
-                <th className="py-2 pr-2">Total</th>
-                <th className="py-2 pr-2 text-center">Status</th>
-                <th className="py-2 pr-2">Ordered</th>
-                <th className="py-2 pr-2 text-center"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {pos.map((po) => {
-                const tot = po.items.reduce((s, i) => s + i.quantity * Number(i.unitPrice), 0);
-                const quality = nextQuality(po);
-                return (
-                  <tr key={po.id} className="border-b last:border-0 hover:bg-gray-50 cursor-pointer" onClick={() => openDetail(po)}>
-                    <td className="py-2 pr-2 font-medium">{po.poNumber}</td>
-                    <td className="py-2 pr-2">{po.supplier.name}</td>
-                    <td className="py-2 pr-2">{po.purchaseRequest ? po.purchaseRequest.request.docNumber : '—'}</td>
-                    <td className="py-2 pr-2">{po.items.length}</td>
-                    <td className="py-2 pr-2">{money(tot)}</td>
-                    <td className="py-2 pr-2 text-center">
-                      <Badge color={PO_STATUS[po.status] ?? 'gray'}>{po.status.replace(/_/g, ' ')}</Badge>
-                      {po.purchaseType && po.purchaseType !== 'NORMAL' && (
-                        <div className="mt-1" title={po.purchaseReason ?? undefined}>
-                          <Badge color={po.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{po.purchaseType}</Badge>
-                        </div>
-                      )}
-                    </td>
-                    <td className="py-2 pr-2">{fmtDate(po.orderDate)}</td>
-                    <td className="py-2 pr-2 text-center" onClick={(e) => e.stopPropagation()}>
-                      {quality && canManage && (
-                        <Button variant="ghost" onClick={quality === '📥 Record GRN' ? () => openGrnFromRow(po) : undefined}>{quality}</Button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                  <th className="px-4 py-3 font-medium">PO</th>
+                  <th className="px-4 py-3 font-medium">Supplier</th>
+                  <th className="px-4 py-3 font-medium">From PR</th>
+                  <th className="px-4 py-3 font-medium text-right">Lines</th>
+                  <th className="px-4 py-3 font-medium text-right">Total</th>
+                  <th className="px-4 py-3 font-medium text-center">Status</th>
+                  <th className="px-4 py-3 font-medium">Ordered</th>
+                  <th className="px-4 py-3 font-medium text-right">Next step</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {pos.map((po) => {
+                  const tot = poTotal(po.items);
+                  return (
+                    <tr
+                      key={po.id}
+                      className="hover:bg-gray-50 cursor-pointer"
+                      onClick={() => openDetail(po)}
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter') openDetail(po); }}
+                    >
+                      <td className="px-4 py-3 font-medium whitespace-nowrap">{po.poNumber}</td>
+                      <td className="px-4 py-3">{po.supplier.name}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{po.purchaseRequest?.request.docNumber ?? '—'}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{po.items.length}</td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">{money(tot)}</td>
+                      <td className="px-4 py-3 text-center whitespace-nowrap">
+                        <Badge color={PO_STATUS[po.status] ?? 'gray'}>{PO_LABEL[po.status] ?? po.status}</Badge>
+                        {po.purchaseType && po.purchaseType !== 'NORMAL' && (
+                          <div className="mt-1" title={po.purchaseReason ?? undefined}>
+                            <Badge color={po.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{po.purchaseType}</Badge>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-600">{fmtDate(po.orderDate)}</td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                        {canRecordGrn(po) ? (
+                          <Button variant="ghost" title="Record the goods received note for this PO" onClick={() => void openGrnFromRow(po)}>
+                            📥 GRN
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-gray-300">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
         {total > PAGE_SIZE && (
-          <div className="flex gap-2 justify-center mt-3">
+          <div className="flex gap-2 justify-center px-4 py-3 border-t border-gray-100">
             <Button disabled={page <= 1} onClick={() => setPage(page - 1)}>‹ Prev</Button>
             <span className="text-sm text-gray-500 self-center">Page {page} / {Math.ceil(total / PAGE_SIZE)}</span>
             <Button disabled={page * PAGE_SIZE >= total} onClick={() => setPage(page + 1)}>Next ›</Button>
@@ -693,7 +765,7 @@ export default function PurchaseOrders() {
         <Modal onClose={() => setDetail(null)} title={`${detail.poNumber} — ${detail.supplier.name}`} wide>
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge color={PO_STATUS[detail.status] ?? 'gray'}>{detail.status.replace(/_/g, ' ')}</Badge>
+              <Badge color={PO_STATUS[detail.status] ?? 'gray'}>{PO_LABEL[detail.status] ?? detail.status}</Badge>
               {detail.purchaseType && detail.purchaseType !== 'NORMAL' && (
                 <Badge color={detail.purchaseType === 'EMERGENCY' ? 'red' : 'orange'}>{detail.purchaseType}</Badge>
               )}
@@ -706,6 +778,28 @@ export default function PurchaseOrders() {
               <span className="text-sm text-gray-500">Ordered {fmtDate(detail.orderDate)}</span>
             </div>
 
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 rounded-lg px-3 py-2 text-sm">
+              <div>
+                <div className="text-xs text-gray-400">Order total</div>
+                <div className="font-semibold tabular-nums">{money(poTotal(detail.items))}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">Received</div>
+                <div className="tabular-nums">
+                  {detail.items.reduce((s, i) => s + accepted(i), 0)} / {detail.items.reduce((s, i) => s + i.quantity, 0)} units
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">Expected delivery</div>
+                <div>{detail.expectedDelivery ? fmtDate(detail.expectedDelivery) : '—'}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-400">Sent to vendor</div>
+                <div>{detail.sentToVendorAt ? fmtDate(detail.sentToVendorAt) : '—'}</div>
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-500 border-b">
@@ -714,6 +808,7 @@ export default function PurchaseOrders() {
                   <th className="py-1 pr-2 text-right">Ordered</th>
                   <th className="py-1 pr-2 text-right">Received</th>
                   <th className="py-1 pr-2 text-right">Unit price</th>
+                  <th className="py-1 pr-2 text-right">Amount</th>
                   <th className="py-1 pr-2">Asset</th>
                 </tr>
               </thead>
@@ -726,7 +821,8 @@ export default function PurchaseOrders() {
                       <td className="py-1 pr-2">{it.inventoryItem ? '📦 stock' : '—'}</td>
                       <td className="py-1 pr-2 text-right">{it.quantity}{it.unit ? ` ${it.unit}` : ''}</td>
                       <td className={`py-1 pr-2 text-right ${rec >= it.quantity ? 'text-green-600' : rec > 0 ? 'text-orange-600' : ''}`}>{rec}</td>
-                      <td className="py-1 pr-2 text-right">{money(it.unitPrice)}</td>
+                      <td className="py-1 pr-2 text-right whitespace-nowrap">{money(it.unitPrice)}</td>
+                      <td className="py-1 pr-2 text-right whitespace-nowrap tabular-nums">{money(it.quantity * Number(it.unitPrice))}</td>
                       <td className="py-1 pr-2">
                         {it.asset ? (
                           <span className="text-green-700 font-medium" title={it.asset.name}>🏷 {it.asset.assetCode}</span>
@@ -741,6 +837,9 @@ export default function PurchaseOrders() {
                 })}
               </tbody>
             </table>
+            </div>
+
+            {detail.note && <div className="text-sm text-gray-600">Note: {detail.note}</div>}
 
             {(detail.goodsReceipts?.length ?? 0) > 0 && (
               <div className="text-sm text-gray-600 space-y-1">
@@ -854,6 +953,29 @@ export default function PurchaseOrders() {
       )}
 
       {budgetBlock && <BudgetBlockedModal block={budgetBlock} onClose={() => setBudgetBlock(null)} />}
+
+      {estimateWarn && (
+        <ConfirmDialog
+          title="PO is above the approved PR estimate"
+          description={<>
+            <p>
+              <b>{estimateWarn.info.prNumber}</b> was approved for <b>{money(estimateWarn.info.estimate)}</b>.
+              This PO totals <b>{money(estimateWarn.info.total)}</b> — <b>{estimateWarn.info.percent}% higher</b>{' '}
+              (tolerance {estimateWarn.info.tolerancePercent}%).
+            </p>
+            <p className="mt-2 text-xs text-gray-500">
+              Approving again confirms the overrun; it is written to the audit log.
+            </p>
+          </>}
+          confirmLabel="Approve with overrun"
+          onClose={() => setEstimateWarn(null)}
+          onConfirm={async () => {
+            const po = estimateWarn.po;
+            setEstimateWarn(null);
+            await transition(po, 'approve', { confirmOverEstimate: true });
+          }}
+        />
+      )}
 
       {confirmAssetLines && (
         <ConfirmDialog

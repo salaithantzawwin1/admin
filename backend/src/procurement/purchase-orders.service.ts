@@ -50,6 +50,12 @@ export interface CreateGrnInput {
   items: GrnItemInput[];
 }
 
+/**
+ * How far a PO may run above the PR estimate it fills before approval has to be
+ * confirmed again. Vendor prices move — but not without someone saying so.
+ */
+export const PO_ESTIMATE_TOLERANCE = 0.1;
+
 /** §16 status machine — which transitions are legal. */
 const PO_TRANSITIONS: Record<string, string[]> = {
   DRAFT: ['APPROVED', 'CANCELLED'],
@@ -212,8 +218,24 @@ export class PurchaseOrdersService {
   }
 
   /** §16 transition with guard checks (approve = Control 1 enforcement point for ad-hoc POs). */
-  async transition(id: string, action: 'approve' | 'send' | 'close' | 'cancel', actor: Actor) {
-    const po = await this.prisma.purchaseOrder.findUnique({ where: { id }, include: { purchaseRequest: { include: { request: { select: { status: true, docNumber: true } } } } } });
+  async transition(
+    id: string,
+    action: 'approve' | 'send' | 'close' | 'cancel',
+    actor: Actor,
+    opts: { confirmOverEstimate?: boolean } = {},
+  ) {
+    const po = await this.prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: {
+        items: true,
+        purchaseRequest: {
+          include: {
+            request: { select: { status: true, docNumber: true } },
+            items: { select: { quantity: true, estimatedUnitPrice: true } },
+          },
+        },
+      },
+    });
     if (!po) throw new NotFoundException('Purchase order not found');
 
     const next: Record<string, { to: string; stamp?: string } | undefined> = {
@@ -232,6 +254,30 @@ export class PurchaseOrdersService {
     // a PR-linked PO must show an APPROVED PR (defense in depth — create blocks it already)
     if (action === 'approve' && po.purchaseRequest && po.purchaseRequest.request.status !== 'APPROVED') {
       throw new ConflictException(`Linked PR is ${po.purchaseRequest.request.status} — no approval, no PO`);
+    }
+
+    // The PR's estimate is the amount that was approved; a PO that costs more
+    // than it (beyond the tolerance) needs the approver to say so explicitly.
+    let overEstimate: { prNumber: string; estimate: number; total: number; percent: number } | undefined;
+    if (action === 'approve' && po.purchaseRequest) {
+      const estimate = po.purchaseRequest.items.reduce((s, i) => s + Number(i.estimatedUnitPrice ?? 0) * i.quantity, 0);
+      const total = po.items.reduce((s, i) => s + Number(i.unitPrice) * i.quantity, 0);
+      if (estimate > 0 && total > estimate * (1 + PO_ESTIMATE_TOLERANCE)) {
+        overEstimate = {
+          prNumber: po.purchaseRequest.request.docNumber,
+          estimate,
+          total,
+          percent: Math.round((total / estimate - 1) * 1000) / 10,
+        };
+        if (!opts.confirmOverEstimate) {
+          throw new ConflictException({
+            message: `PO total ${total.toLocaleString()} is ${overEstimate.percent}% above the ${overEstimate.prNumber} estimate ${estimate.toLocaleString()} — approve again to confirm`,
+            code: 'ESTIMATE_EXCEEDED',
+            ...overEstimate,
+            tolerancePercent: PO_ESTIMATE_TOLERANCE * 100,
+          });
+        }
+      }
     }
 
     // only a fully-received PO may close
@@ -263,7 +309,8 @@ export class PurchaseOrdersService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: `PO_${action.toUpperCase()}`, module: 'PROCUREMENT', recordId: id,
-      oldValue: { status: po.status }, newValue: { status: target.to },
+      oldValue: { status: po.status },
+      newValue: { status: target.to, ...(overEstimate ? { overEstimate } : {}) },
     });
     return updated;
   }

@@ -889,12 +889,11 @@ export class ProcurementService {
   }
 
   /** PR summary for the workflow document description (readable in approvals). */
-  private describe(items: { description: string; quantity: number; unit?: string; estimatedUnitPrice?: number }[], justification?: string): string {
+  private describe(items: { description: string; quantity: number; unit?: string; estimatedUnitPrice: number }[], justification?: string): string {
     const lines = items.map(
-      (it) =>
-        `• ${it.description} ×${it.quantity}${it.unit ? ` ${it.unit}` : ''}${it.estimatedUnitPrice !== undefined ? ` @ ${it.estimatedUnitPrice}` : ''}`,
+      (it) => `• ${it.description} ×${it.quantity}${it.unit ? ` ${it.unit}` : ''} @ ${it.estimatedUnitPrice}`,
     );
-    const total = items.reduce((sum, it) => sum + (it.estimatedUnitPrice ?? 0) * it.quantity, 0);
+    const total = items.reduce((sum, it) => sum + it.estimatedUnitPrice * it.quantity, 0);
     const parts = [...lines, `Estimated total: ${total.toLocaleString()}`];
     if (justification?.trim()) parts.unshift(`Purpose: ${justification.trim()}`);
     return parts.join('\n');
