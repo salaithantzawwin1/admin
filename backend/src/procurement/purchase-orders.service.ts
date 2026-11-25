@@ -443,7 +443,9 @@ export class PurchaseOrdersService {
         await this.notifications.notify({
           userId: pr.request.requesterId, type: 'SUPPLY_READY_FOR_PICKUP' as never,
           title: `Goods received — ${pr.request.docNumber}`,
-          body: `${grnNumber} accepted ${acceptedTotal} item(s) from ${po.poNumber}. Collect them from the Administration store.`,
+          // the requester only ever sees "approved", then silence — say plainly
+          // that what they asked for has physically arrived and where it is
+          body: `Your order has arrived: ${grnNumber} accepted ${acceptedTotal} item(s) from ${po.poNumber}. Collect them from the Administration store.`,
           link: `/requests/${pr.request.id}`, requestId: pr.request.id,
         });
       }
@@ -452,7 +454,7 @@ export class PurchaseOrdersService {
         await this.notifications.notify({
           userId: osr.request.requesterId, type: 'SUPPLY_PURCHASING' as never,
           title: `Your items arrived — ${osr.request.docNumber}`,
-          body: `${grnNumber} (PO ${po.poNumber}) delivered the items being bought for you. Administration will hand them over next.`,
+          body: `The items you requested have arrived — ${grnNumber} (PO ${po.poNumber}) delivered them. Administration will hand them over next.`,
           link: `/requests/${osr.request.id}`, requestId: osr.request.id,
         });
         // the buying note the requester sees now carries the real source
