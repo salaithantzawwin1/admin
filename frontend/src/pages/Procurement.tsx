@@ -401,7 +401,7 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
 
   const total = items.reduce((sum, it) => sum + (Number(it.estimatedUnitPrice) || 0) * (Number(it.quantity) || 0), 0);
   const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
-  const missingPrice = items.some((it) => !(Number(it.estimatedUnitPrice) > 0));
+  const missingPrice = pricingPending(items);
   const valid =
     items.length > 0 &&
     items.every((it) => it.description.trim() && Number(it.quantity) >= 1 && (askForPricing || Number(it.estimatedUnitPrice) > 0)) &&
