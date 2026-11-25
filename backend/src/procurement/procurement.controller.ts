@@ -13,7 +13,8 @@ class PrItemDto {
   @IsString() @MinLength(1) @MaxLength(200) description!: string;
   @IsInt() @Min(1) quantity!: number;
   @IsOptional() @IsString() @MaxLength(32) unit?: string;
-  @IsOptional() estimatedUnitPrice?: number;
+  /** blank = "ask Administration to price" (only with askForPricing) */
+  @IsOptional() estimatedUnitPrice?: number | null;
   @IsOptional() @IsString() accountId?: string;
   @IsOptional() @IsString() assetId?: string;
 }
@@ -27,8 +28,20 @@ export class CreatePurchaseRequestDto {
   @IsOptional() @IsIn(['NORMAL', 'EMERGENCY', 'DIRECT', 'PETTY_CASH']) purchaseType?: string; // §W4
   @IsOptional() @IsString() @MaxLength(1000) purchaseReason?: string; // mandatory for EMERGENCY/DIRECT (service-validated)
   @IsOptional() @IsString() sourceSupplyRequestId?: string; // OSR this PR buys for
+  /** the requester does not know the prices — Administration fills them first */
+  @IsOptional() @IsBoolean() askForPricing?: boolean;
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => PrItemDto)
   items!: PrItemDto[];
+}
+
+class PriceItemDto {
+  @IsString() itemId!: string;
+  @IsNumber() @Min(0.01) estimatedUnitPrice!: number;
+}
+
+class PricePurchaseRequestDto {
+  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => PriceItemDto)
+  items!: PriceItemDto[];
 }
 
 export class UpdatePurchaseRequestDto extends CreatePurchaseRequestDto {}
@@ -203,6 +216,19 @@ export class ProcurementController {
   @Patch('requests/:requestId')
   update(@Req() req, @Param('requestId') requestId: string, @Body() body: UpdatePurchaseRequestDto) {
     return this.procurement.update(requestId, body as CreatePrInput, this.actor(req));
+  }
+
+  /** Requester: "I don't know the prices — please estimate them for me." */
+  @Post('requests/:requestId/request-pricing')
+  requestPricing(@Req() req, @Param('requestId') requestId: string) {
+    return this.procurement.requestPricing(requestId, this.actor(req));
+  }
+
+  /** Procurement: fill the missing estimates and send the PR into approval. */
+  @Patch('requests/:requestId/pricing')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  priceAndSubmit(@Req() req, @Param('requestId') requestId: string, @Body() body: PricePurchaseRequestDto) {
+    return this.procurement.priceAndSubmit(requestId, body.items, this.actor(req));
   }
 
   // ---------- RFQ (design §11): Request for Quotation ----------

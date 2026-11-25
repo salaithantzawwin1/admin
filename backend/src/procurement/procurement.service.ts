@@ -4,6 +4,9 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
 import { normalizePurchaseType } from './purchase-types';
+import { PermissionsService } from '../auth/permissions.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { WorkflowService } from '../workflow/workflow.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -11,7 +14,8 @@ export interface PrItemInput {
   description: string;
   quantity: number;
   unit?: string;
-  estimatedUnitPrice?: number;
+  /** null/undefined = the requester asked Administration to estimate it */
+  estimatedUnitPrice?: number | null;
   accountId?: string;
   assetId?: string;
 }
@@ -27,6 +31,8 @@ export interface CreatePrInput {
   purchaseReason?: string;
   /** Office supply request this PR is buying for (OSR → PR → PO → GRN chain). */
   sourceSupplyRequestId?: string;
+  /** the requester does not know the prices — lines may be blank for pricing */
+  askForPricing?: boolean;
   items: PrItemInput[];
 }
 
@@ -44,6 +50,9 @@ export class ProcurementService {
     private prisma: PrismaService,
     private audit: AuditService,
     private numbering: NumberingService,
+    private permissions: PermissionsService,
+    private notifications: NotificationsService,
+    private workflow: WorkflowService,
   ) {}
 
   // ---------- master lookups (form pickers) ----------
@@ -227,9 +236,92 @@ export class ProcurementService {
     return { ...request, purchaseRequest: pr };
   }
 
+  /** DRAFT PR + items for the pricing actions; 404/400 guards shared. */
+  private async prForPricing(requestId: string) {
+    const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId } });
+    if (!request || request.docType !== 'PURCHASE_REQUEST') throw new NotFoundException('Purchase request not found');
+    const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId }, include: { items: true } });
+    if (!pr) throw new NotFoundException('Purchase request not found');
+    if (request.status !== 'DRAFT') throw new BadRequestException('Prices can only be set on a draft');
+    return { request, pr };
+  }
+
+  /**
+   * Requester: "I don't know the prices — Administration, please estimate."
+   * The PR stays a DRAFT (it cannot be submitted without prices), so it shows
+   * up in the pricing queue and purchasers are notified.
+   */
+  async requestPricing(requestId: string, actor: Actor) {
+    const { request, pr } = await this.prForPricing(requestId);
+    if (request.requesterId !== actor.userId) throw new ForbiddenException('Not your request');
+    const open = pr.items.filter((i) => !(Number(i.estimatedUnitPrice) > 0));
+    if (open.length === 0) {
+      throw new BadRequestException('Every line already has an estimated price — submit it for approval instead');
+    }
+    const buyers = await this.permissions.usersWithPermissions(['procurement.manage']);
+    await this.notifications.notifyMany(buyers, {
+      type: 'SUBMITTED',
+      title: `Pricing needed — ${request.docNumber}`,
+      body: `${request.title}: ${open.map((i) => `${i.description} ×${i.quantity}`).join(', ')}. Set the estimates so the approval chain can be chosen.`,
+      link: '/procurement?pricing=1',
+      requestId,
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'PURCHASE_REQUEST_PRICING_REQUESTED', module: 'PROCUREMENT', recordId: requestId,
+      newValue: { docNumber: request.docNumber, lines: open.length, notified: buyers.length },
+    });
+    return { success: true, lines: open.length, notified: buyers.length };
+  }
+
+  /**
+   * Procurement: fill the missing estimates, then send the PR into approval on
+   * the requester's behalf — the approval band is computed from the new total,
+   * so the requester never has to guess a price.
+   */
+  async priceAndSubmit(requestId: string, prices: { itemId: string; estimatedUnitPrice: number }[], actor: Actor) {
+    const { request, pr } = await this.prForPricing(requestId);
+    const given = new Map(prices.map((p) => [p.itemId, Number(p.estimatedUnitPrice)]));
+    const items = pr.items.map((i) => ({
+      ...i,
+      price: given.has(i.id) ? given.get(i.id)! : i.estimatedUnitPrice === null ? null : Number(i.estimatedUnitPrice),
+    }));
+    const missing = items.filter((i) => !(Number(i.price) > 0));
+    if (missing.length > 0) {
+      throw new BadRequestException(`Set a price for every line: ${missing.map((i) => i.description).join(', ')}`);
+    }
+    const lines = items.map((i) => ({
+      description: i.description, quantity: i.quantity, unit: i.unit ?? undefined, estimatedUnitPrice: Number(i.price),
+    }));
+    await this.prisma.$transaction([
+      ...items.map((i) =>
+        this.prisma.purchaseRequestItem.update({ where: { id: i.id }, data: { estimatedUnitPrice: Number(i.price) } }),
+      ),
+      this.prisma.requestDocument.update({
+        where: { id: requestId },
+        data: { description: this.describe(lines, pr.justification ?? undefined) },
+      }),
+    ]);
+
+    await this.workflow.submit(requestId, actor, { onBehalf: true });
+    const total = lines.reduce((sum, i) => sum + i.estimatedUnitPrice * i.quantity, 0);
+    await this.notifications.notify({
+      userId: request.requesterId, type: 'SUBMITTED',
+      title: `Priced — ${request.docNumber}`,
+      body: `Administration set the estimates (${total.toLocaleString()} Ks) and sent the request into approval.`,
+      link: `/requests/${requestId}`, requestId,
+    });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'PURCHASE_REQUEST_PRICED', module: 'PROCUREMENT', recordId: requestId,
+      newValue: { docNumber: request.docNumber, estimatedTotal: total, items: lines.length },
+    });
+    return this.byRequest(requestId, { ...actor, canReadAll: true });
+  }
+
   /** Creates a PR as a workflow document (DRAFT). The requester submits it via the standard POST /requests/:id/submit afterwards — same flow as car and meeting-room requests. */
   async create(data: CreatePrInput, actor: Actor) {
-    const items = this.normalizeItems(data.items);
+    const items = this.normalizeItems(data.items, data.askForPricing !== true);
     // link back to the supply request this PR is buying for — a dangling id
     // would make the traceability chain lie, so refuse it here
     if (data.sourceSupplyRequestId) {
@@ -285,7 +377,11 @@ export class ProcurementService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'PURCHASE_REQUEST_CREATED', module: 'PROCUREMENT', recordId: request.id,
-      newValue: { docNumber: request.docNumber, items: items.length, estimatedTotal: total, priority, purchaseType: purchase.purchaseType, purchaseReason: purchase.purchaseReason ?? null },
+      newValue: {
+        docNumber: request.docNumber, items: items.length, estimatedTotal: total, priority,
+        purchaseType: purchase.purchaseType, purchaseReason: purchase.purchaseReason ?? null,
+        pricesPending: items.some((it) => !(Number(it.estimatedUnitPrice) > 0)),
+      },
     });
 
     return { ...request, purchaseRequest: pr };
@@ -298,7 +394,7 @@ export class ProcurementService {
     if (request.requesterId !== actor.userId) throw new ForbiddenException('Not your request');
     if (request.status !== 'DRAFT') throw new BadRequestException('Only DRAFT purchase requests can be edited');
 
-    const items = this.normalizeItems(data.items);
+    const items = this.normalizeItems(data.items, data.askForPricing !== true);
     const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId } });
     if (!pr) throw new NotFoundException('Purchase request not found');
 
@@ -829,20 +925,26 @@ export class ProcurementService {
     }
   }
 
-  /** Validates + normalizes PR line items (shared by create/update/bridge). */
-  private normalizeItems(items: PrItemInput[] | undefined) {
+  /**
+   * Validates + normalizes PR line items (shared by create/update/bridge).
+   * A blank price is allowed only on the "ask Administration to price" path:
+   * such a PR cannot be submitted, it waits in the pricing queue instead.
+   */
+  private normalizeItems(items: PrItemInput[] | undefined, requirePrice = true) {
     if (!items || items.length === 0) throw new BadRequestException('At least one item is required');
     return items.map((it, idx) => {
       const description = (it.description ?? '').trim();
       if (!description) throw new BadRequestException(`Item ${idx + 1}: description is required`);
       const quantity = Math.floor(Number(it.quantity));
       if (!Number.isFinite(quantity) || quantity < 1) throw new BadRequestException(`Item ${idx + 1}: quantity must be at least 1`);
-      // The estimated total decides the approval band, so a blank price is not
-      // a harmless default: it totals 0 and takes the cheapest chain.
-      const price = Number(it.estimatedUnitPrice);
-      if (!Number.isFinite(price) || price <= 0) {
+      const raw = it.estimatedUnitPrice;
+      const price = raw === undefined || raw === null || raw === ('' as never) ? null : Number(raw);
+      if (price !== null && (!Number.isFinite(price) || price < 0)) {
+        throw new BadRequestException(`Item ${idx + 1}: estimated unit price must be a positive number`);
+      }
+      if (requirePrice && !(price! > 0)) {
         throw new BadRequestException(
-          `Item ${idx + 1}: estimated unit price is required (greater than 0) — the approval chain is chosen from the estimated total`,
+          `Item ${idx + 1}: estimated unit price is required (greater than 0) — the approval chain is chosen from the estimated total, or ask Administration to price it`,
         );
       }
       return {
@@ -889,12 +991,13 @@ export class ProcurementService {
   }
 
   /** PR summary for the workflow document description (readable in approvals). */
-  private describe(items: { description: string; quantity: number; unit?: string; estimatedUnitPrice: number }[], justification?: string): string {
+  private describe(items: { description: string; quantity: number; unit?: string; estimatedUnitPrice: number | null }[], justification?: string): string {
+    const pending = items.some((it) => !(Number(it.estimatedUnitPrice) > 0));
     const lines = items.map(
-      (it) => `• ${it.description} ×${it.quantity}${it.unit ? ` ${it.unit}` : ''} @ ${it.estimatedUnitPrice}`,
+      (it) => `• ${it.description} ×${it.quantity}${it.unit ? ` ${it.unit}` : ''} @ ${it.estimatedUnitPrice ?? 'price pending'}`,
     );
-    const total = items.reduce((sum, it) => sum + it.estimatedUnitPrice * it.quantity, 0);
-    const parts = [...lines, `Estimated total: ${total.toLocaleString()}`];
+    const total = items.reduce((sum, it) => sum + Number(it.estimatedUnitPrice ?? 0) * it.quantity, 0);
+    const parts = [...lines, `Estimated total: ${total.toLocaleString()}${pending ? ' (some prices pending)' : ''}`];
     if (justification?.trim()) parts.unshift(`Purpose: ${justification.trim()}`);
     return parts.join('\n');
   }

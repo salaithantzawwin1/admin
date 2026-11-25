@@ -486,9 +486,10 @@ export class WorkflowService {
 
   // ---------- workflow transitions ----------
 
-  async submit(id: string, actor: Actor) {
+  /** `onBehalf` is internal (PR pricing): the caller verified the actor's permission. */
+  async submit(id: string, actor: Actor, opts: { onBehalf?: boolean } = {}) {
     const request = await this.mustFind(id);
-    if (request.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can submit');
+    if (request.requesterId !== actor.userId && !opts.onBehalf) throw new ForbiddenException('Only the requester can submit');
     if (request.status !== 'DRAFT') throw new BadRequestException(`Cannot submit from status ${request.status}`);
 
     const amount = await this.amountFor(id, request.docType as string);
@@ -553,7 +554,8 @@ export class WorkflowService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'REQUEST_SUBMITTED', module: 'WORKFLOW', recordId: id,
-      oldValue: { status: 'DRAFT' }, newValue: { status: 'PENDING_APPROVAL', level: firstLevel },
+      oldValue: { status: 'DRAFT' },
+      newValue: { status: 'PENDING_APPROVAL', level: firstLevel, ...(opts.onBehalf ? { onBehalfOf: request.requesterId } : {}) },
     });
 
     this.pushRequestUpdated(id);
