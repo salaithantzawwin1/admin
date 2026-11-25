@@ -55,6 +55,7 @@ class CreateRfqDto {
   @IsOptional() @IsString() @MaxLength(2000) specification?: string;
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
   @IsOptional() @IsISO8601() dueDate?: string; // quotation due date (design §11)
+  @IsOptional() @IsString() purchaseRequestId?: string; // source PR this RFQ asks vendors about
   @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => RfqVendorDto)
   vendors?: RfqVendorDto[];
 }
@@ -206,6 +207,13 @@ export class ProcurementController {
       ...this.actor(req),
       canReadAll: await this.canReadAll(req),
     });
+  }
+
+  /** Who quoted on the RFQ raised for this PR — the PO form's supplier default. */
+  @Get('requests/:requestId/quoted-suppliers')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)
+  quotedSuppliers(@Param('requestId') requestId: string) {
+    return this.procurement.quotedSuppliersForPr(requestId);
   }
 
   @Post('requests')

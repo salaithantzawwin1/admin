@@ -183,6 +183,8 @@ export default function PurchaseOrders() {
   const [supplierId, setSupplierId] = useState('');
   const [prId, setPrId] = useState('');
   const [prBusy, setPrBusy] = useState(false);
+  // "this supplier quoted on the RFQ raised for that PR" — shown, not enforced
+  const [supplierSource, setSupplierSource] = useState<{ name: string; rfq: string } | null>(null);
   const [expectedDelivery, setExpectedDelivery] = useState('');
   const [purchaseType, setPurchaseType] = useState('NORMAL');
   const [purchaseReason, setPurchaseReason] = useState('');
@@ -249,6 +251,7 @@ export default function PurchaseOrders() {
   const openCreate = () => {
     setSupplierId('');
     setPrId('');
+    setSupplierSource(null);
     setExpectedDelivery('');
     setPurchaseType('NORMAL');
     setPurchaseReason('');
@@ -349,6 +352,18 @@ export default function PurchaseOrders() {
           accountId: it.accountId ?? '',
         })),
       );
+      // the vendor decision already taken on the RFQ (§14) follows the PR into
+      // the PO: pre-fill it, keep it changeable
+      const quoted = await api<{
+        rfq: { docNumber: string } | null;
+        supplier: { id: string; name: string } | null;
+      }>(`/procurement/requests/${id}/quoted-suppliers`).catch(() => null);
+      if (quoted?.supplier && quoted.rfq) {
+        setSupplierId(quoted.supplier.id);
+        setSupplierSource({ name: quoted.supplier.name, rfq: quoted.rfq.docNumber });
+      } else {
+        setSupplierSource(null);
+      }
       const noPrice = items.filter((it) => !(Number(it.estimatedUnitPrice) > 0)).length;
       toast(
         `${items.length} line${items.length === 1 ? '' : 's'} copied from ${r.docNumber}`
@@ -674,10 +689,15 @@ export default function PurchaseOrders() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="sm:col-span-2">
                 <label htmlFor="po-supplier" className="text-xs text-gray-500 block mb-1">Supplier *</label>
-                <Select id="po-supplier" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                <Select id="po-supplier" value={supplierId} onChange={(e) => { setSupplierId(e.target.value); setSupplierSource(null); }}>
                   <option value="">— pick a supplier —</option>
                   {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </Select>
+                {supplierSource && (
+                  <div className="text-[11px] text-green-700 mt-1">
+                    ★ {supplierSource.name} quoted on {supplierSource.rfq} — you can still change the supplier.
+                  </div>
+                )}
               </div>
               <div>
                 <label htmlFor="po-expected" className="text-xs text-gray-500 block mb-1">Expected delivery</label>

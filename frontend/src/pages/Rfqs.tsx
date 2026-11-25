@@ -247,6 +247,7 @@ function NewRfqModal({ onClose, prefillRequestId }: { onClose: () => void; prefi
         method: 'POST',
         body: {
           title: title.trim(),
+          purchaseRequestId: sourcePr || undefined,
           specification: specification.trim() || undefined,
           notes: notes.trim() || undefined,
           dueDate: dueDate || undefined,
@@ -273,7 +274,7 @@ function NewRfqModal({ onClose, prefillRequestId }: { onClose: () => void; prefi
       <div className="space-y-4">
         <div>
           <label htmlFor="rfq-src-pr" className="text-xs text-gray-500 block mb-1">
-            Source PR (optional — pre-fills the requirement)
+            Source PR (optional — pre-fills the requirement and lets the PO default to a vendor that quoted)
           </label>
           <Select id="rfq-src-pr" value={sourcePr} onChange={(e) => pickPr(e.target.value)}>
             <option value="">Manual RFQ (no source PR)</option>

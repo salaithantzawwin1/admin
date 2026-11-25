@@ -567,14 +567,59 @@ export class ProcurementService {
     return { ...request, rfq: request.rfq };
   }
 
+  /** The RFQ's source PR, stored as purchase_requests.id (the FK's target). */
+  private async resolveSourcePr(requestId?: string): Promise<string | null> {
+    if (!requestId) return null;
+    const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId } });
+    if (!pr) throw new NotFoundException('Purchase request not found');
+    return pr.id;
+  }
+
+  /**
+   * Who quoted on the RFQ raised for this PR — the PO form defaults its supplier
+   * to them, so the §14 vendor decision is not re-decided by accident. The
+   * recommendation wins; with no recorded comparison, a lone quotation is still
+   * unambiguous. Buying elsewhere stays possible (the PO only pre-fills).
+   */
+  async quotedSuppliersForPr(requestId: string) {
+    const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId } });
+    if (!pr) throw new NotFoundException('Purchase request not found');
+    const rfq = await this.prisma.rfq.findFirst({
+      where: { purchaseRequestId: pr.id },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        request: { select: { docNumber: true, status: true } },
+        comparison: { include: { recommendedSupplier: { select: { id: true, name: true } } } },
+        quotations: {
+          orderBy: { createdAt: 'desc' },
+          select: { quoteNumber: true, supplier: { select: { id: true, name: true } } },
+        },
+      },
+    });
+    if (!rfq) return { rfq: null, supplier: null, quoting: [] };
+    const quoting = rfq.quotations.map((q) => ({
+      id: q.supplier.id, name: q.supplier.name, quoteNumber: q.quoteNumber,
+    }));
+    const supplier = rfq.comparison?.recommendedSupplier
+      ?? (quoting.length === 1 ? quoting[0] : null);
+    return {
+      rfq: { id: rfq.id, docNumber: rfq.request.docNumber, status: rfq.request.status, decided: !!rfq.comparison },
+      supplier: supplier ? { id: supplier.id, name: supplier.name } : null,
+      quoting,
+    };
+  }
+
   async createRfq(data: {
     title: string;
     specification?: string;
     notes?: string;
     dueDate?: string; // quotation due date (design §11)
+    purchaseRequestId?: string; // the approved PR this RFQ is asked for
     vendors?: { supplierId: string }[];
   }, actor: Actor) {
     if (!data.title?.trim()) throw new BadRequestException('RFQ title is required');
+    // optional source PR: the RFQ normally asks vendors about one request
+    const purchaseRequestId = await this.resolveSourcePr(data.purchaseRequestId);
     const supplierIds = [...new Set((data.vendors ?? []).map((v) => v.supplierId))];
     if (supplierIds.length) {
       const count = await this.prisma.supplier.count({ where: { id: { in: supplierIds }, isActive: true } });
@@ -597,6 +642,7 @@ export class ProcurementService {
     const rfq = await this.prisma.rfq.create({
       data: {
         requestId: request.id,
+        purchaseRequestId,
         dueDate,
         specification: data.specification?.trim() || undefined,
         notes: data.notes?.trim() || undefined,
@@ -611,7 +657,7 @@ export class ProcurementService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'RFQ_CREATED', module: 'PROCUREMENT', recordId: request.id,
-      newValue: { docNumber: request.docNumber, vendors: createdVendors.length },
+      newValue: { docNumber: request.docNumber, vendors: createdVendors.length, purchaseRequestId },
     });
 
     return { ...request, rfq: { ...rfq, rfqVendors: createdVendors } };
@@ -623,6 +669,7 @@ export class ProcurementService {
     specification?: string;
     notes?: string;
     dueDate?: string;
+    purchaseRequestId?: string;
     vendors?: { supplierId: string }[];
   }, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
@@ -632,6 +679,10 @@ export class ProcurementService {
 
     const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
     if (dueDate && Number.isNaN(dueDate.getTime())) throw new BadRequestException('Invalid dueDate');
+    // '' unlinks the RFQ from its source PR, undefined leaves the link alone
+    const prLink = data.purchaseRequestId === undefined
+      ? undefined
+      : await this.resolveSourcePr(data.purchaseRequestId || undefined);
 
     if (data.vendors) {
       const supplierIds = [...new Set(data.vendors.map((v) => v.supplierId))];
@@ -651,6 +702,7 @@ export class ProcurementService {
         where: { id: request.rfq!.id },
         data: {
           dueDate,
+          purchaseRequestId: prLink,
           specification: data.specification?.trim() || undefined,
           notes: data.notes?.trim() || undefined,
         },

@@ -365,6 +365,9 @@ enum RequestDocType {
 model Rfq {
   id            String    @id @default(uuid()) @db.Uuid
   requestId     String    @unique @db.Uuid // link to RequestDocument (workflow)
+  // the approved PR this RFQ asks vendors about — lets the PO default to a
+  // vendor that actually quoted (§14 decision travels to the purchase)
+  purchaseRequestId String? @db.Uuid
   requiredDate  DateTime?
   dueDate       DateTime? // quotation due date (design §11)
   specification String?
@@ -375,10 +378,12 @@ model Rfq {
 
   request    RequestDocument      @relation(fields: [requestId], references: [id], onDelete: Cascade)
   createdBy  User                 @relation("RfqCreatedBy", fields: [createdById], references: [id])
+  purchaseRequest PurchaseRequest?    @relation("RfqForPr", fields: [purchaseRequestId], references: [id], onDelete: SetNull)
   rfqVendors RfqVendor[]
   quotations Quotation[]
   comparison QuotationComparison?
 
+  @@index([purchaseRequestId])
   @@map("rfqs")
 }
 
@@ -1861,6 +1866,7 @@ model PurchaseRequest {
   sourceSupplyRequest OfficeSupplyRequest? @relation("PrFromSupply", fields: [sourceSupplyRequestId], references: [requestId], onDelete: SetNull)
   items          PurchaseRequestItem[]
   purchaseOrders PurchaseOrder[]
+  rfqs           Rfq[] @relation("RfqForPr")
 
   @@index([sourceSupplyRequestId])
 
