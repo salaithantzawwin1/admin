@@ -136,6 +136,8 @@ const orderedTotal = (items: PoItem[]) => items.reduce((s, i) => s + i.quantity,
 const poTotal = (items: PoItem[]) => items.reduce((s, i) => s + i.quantity * Number(i.unitPrice), 0);
 
 interface LineDraft {
+  /** Where this line's goods land on GRN: the store (stock) or the asset register. */
+  track: 'STOCK' | 'ASSET';
   inventoryItemId: string;
   description: string;
   quantity: string;
@@ -144,7 +146,7 @@ interface LineDraft {
   accountId: string; // §17 — required: which account the line is charged to
 }
 
-const emptyLine = (): LineDraft => ({ inventoryItemId: '', description: '', quantity: '1', unit: '', unitPrice: '', accountId: '' });
+const emptyLine = (): LineDraft => ({ track: 'ASSET', inventoryItemId: '', description: '', quantity: '1', unit: '', unitPrice: '', accountId: '' });
 
 export default function PurchaseOrders() {
   const canManage = hasPermission('procurement.manage');
@@ -269,6 +271,7 @@ export default function PurchaseOrders() {
       setLines((ls) => ls.map((l, i) => (i === idx
         ? {
             ...l,
+            track: 'STOCK',
             inventoryItemId: created.id,
             description: item ? `${item.name} (${item.code})` : l.description,
             unit: item?.unit ?? l.unit,
@@ -291,6 +294,7 @@ export default function PurchaseOrders() {
         i === idx
           ? {
               ...l,
+              track: itemId ? 'STOCK' : l.track,
               inventoryItemId: itemId,
               description: item ? `${item.name} (${item.code})` : l.description,
               unit: item?.unit ?? l.unit,
@@ -319,7 +323,9 @@ export default function PurchaseOrders() {
       .filter((l) => l.description.trim())
       .map((l) => ({
         description: l.description.trim(),
-        inventoryItemId: l.inventoryItemId || undefined,
+        // ASSET lines deliberately carry no stock item — that is what makes the
+        // GRN register them in the asset register instead of posting stock.
+        inventoryItemId: l.track === 'STOCK' ? l.inventoryItemId || undefined : undefined,
         quantity: Number(l.quantity) || 0,
         unit: l.unit.trim() || undefined,
         unitPrice: Number(l.unitPrice) || 0,
@@ -329,6 +335,10 @@ export default function PurchaseOrders() {
     if (items.some((i) => !Number.isInteger(i.quantity) || i.quantity < 1)) { toast('Quantity must be a whole number (1 or more)', 'error'); return; }
     if (items.some((i) => i.unitPrice < 0)) { toast('Check the unit prices', 'error'); return; }
     if (items.some((i) => !i.accountId)) { toast('Pick an account for every line — it drives the budget check', 'error'); return; }
+    if (lines.some((l) => l.description.trim() && l.track === 'STOCK' && !l.inventoryItemId)) {
+      toast('Pick the stock item for every 📦 Stock line — or switch that line to 🏷 Asset', 'error');
+      return;
+    }
     const reasonNeeded = purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT';
     if (reasonNeeded && !purchaseReason.trim()) { toast(`A reason is required for a ${purchaseType} purchase (§36)`, 'error'); return; }
     setBusy(true);
@@ -644,10 +654,10 @@ export default function PurchaseOrders() {
             <div className="border border-gray-200 rounded-lg p-3 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
-                <span className="text-xs text-gray-400">Only 📦 inventory lines post stock on GRN</span>
+                <span className="text-xs text-gray-400">Stock lines post stock on GRN · Asset lines create an AST record</span>
               </div>
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
-                <div className="col-span-3">Inventory item (optional)</div>
+                <div className="col-span-3">Receipt (Stock / Asset)</div>
                 <div className="col-span-3">Description *</div>
                 <div className="col-span-1">Qty *</div>
                 <div className="col-span-1">Unit</div>
@@ -656,11 +666,36 @@ export default function PurchaseOrders() {
               </div>
               {lines.map((l, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 items-start">
-                  <div className="col-span-12 md:col-span-3">
-                    <Select value={l.inventoryItemId} onChange={(e) => pickItem(idx, e.target.value)}>
-                      <option value="">— asset / service (no stock) —</option>
-                      {inventoryItems.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name} ({i.balance} {i.unit})</option>)}
-                    </Select>
+                  <div className="col-span-12 md:col-span-3 space-y-1">
+                    {/* One decision per line: the store (stock) or the asset register. */}
+                    <div className="flex rounded-lg border border-gray-200 p-0.5 bg-gray-50" role="group" aria-label={`Receipt type for line ${idx + 1}`}>
+                      <button
+                        type="button"
+                        aria-pressed={l.track === 'STOCK'}
+                        onClick={() => setLines((ls) => ls.map((x, i) => (i === idx ? { ...x, track: 'STOCK' } : x)))}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-medium ${l.track === 'STOCK' ? 'bg-white shadow text-green-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        title="Consumables / bulk goods — the GRN posts them into the inventory ledger"
+                      >
+                        📦 Stock
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={l.track === 'ASSET'}
+                        onClick={() => setLines((ls) => ls.map((x, i) => (i === idx ? { ...x, track: 'ASSET', inventoryItemId: '' } : x)))}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-medium ${l.track === 'ASSET' ? 'bg-white shadow text-orange-700' : 'text-gray-500 hover:text-gray-700'}`}
+                        title="Fixed asset — the GRN creates an asset record (AST-…) and posts no stock"
+                      >
+                        🏷️ Asset
+                      </button>
+                    </div>
+                    {l.track === 'STOCK' ? (
+                      <Select value={l.inventoryItemId} onChange={(e) => pickItem(idx, e.target.value)} aria-label={`Stock item for line ${idx + 1}`}>
+                        <option value="">— pick a stock item * —</option>
+                        {inventoryItems.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name} ({i.balance} {i.unit})</option>)}
+                      </Select>
+                    ) : (
+                      <div className="text-[11px] text-orange-700 leading-tight">No stock — GRN adds it to the asset register.</div>
+                    )}
                   </div>
                   <div className="col-span-6 md:col-span-3">
                     <Input placeholder={`Line ${idx + 1} description *`} value={l.description} onChange={(e) => setLines((ls) => ls.map((x, i) => i === idx ? { ...x, description: e.target.value } : x))} />
@@ -691,8 +726,12 @@ export default function PurchaseOrders() {
                   {!l.inventoryItemId && (
                     <div className="col-span-12 -mt-1">
                       <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className="text-orange-700">🏷️ No inventory item — the GRN will register it as a fixed asset, not stock.</span>
-                        {canCreateItems && (
+                        <span className={l.track === 'ASSET' ? 'text-orange-700' : 'text-gray-500'}>
+                          {l.track === 'ASSET'
+                            ? '🏷️ Asset line — the GRN registers it in the asset register; nothing enters stock.'
+                            : '📦 Stock line — pick the store item, or create one here.'}
+                        </span>
+                        {canCreateItems && l.track === 'STOCK' && (
                           <Button
                             variant="ghost"
                             onClick={() => {

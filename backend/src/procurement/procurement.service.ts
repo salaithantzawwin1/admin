@@ -270,26 +270,43 @@ export class ProcurementService {
       throw new BadRequestException('Every line already has an estimated price — submit it for approval instead');
     }
     // A second click (or a double submit) must not ping every buyer again.
+    const { notified } = await this.notifyPricingNeeded(request, pr.items);
+    if (notified === 0) return { success: true, lines: open.length, notified: 0, alreadyRequested: true };
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'PURCHASE_REQUEST_PRICING_REQUESTED', module: 'PROCUREMENT', recordId: requestId,
+      newValue: { docNumber: request.docNumber, lines: open.length, notified },
+    });
+    return { success: true, lines: open.length, notified };
+  }
+
+  /**
+   * Procurement gets ONE alert per request (24h dedupe) whenever a PR lands in
+   * the pricing queue — whether the requester explicitly asked for pricing or
+   * simply saved a draft with blank estimates. Without this the queue filled up
+   * silently and the request sat in DRAFT with nobody looking at it.
+   */
+  private async notifyPricingNeeded(
+    request: { id: string; docNumber: string; title: string },
+    items: { description: string; quantity: number; estimatedUnitPrice?: unknown }[],
+  ) {
+    const open = items.filter((i) => !(Number(i.estimatedUnitPrice) > 0));
+    if (open.length === 0) return { lines: 0, notified: 0 };
     const title = `Pricing needed — ${request.docNumber}`;
     const already = await this.prisma.notification.findFirst({
       where: { type: 'SUBMITTED', title, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
       select: { id: true },
     });
-    if (already) return { success: true, lines: open.length, notified: 0, alreadyRequested: true };
+    if (already) return { lines: open.length, notified: 0 };
     const buyers = await this.permissions.usersWithPermissions(['procurement.manage']);
     await this.notifications.notifyMany(buyers, {
       type: 'SUBMITTED',
       title,
       body: `${request.title}: ${open.map((i) => `${i.description} ×${i.quantity}`).join(', ')}. Set the estimates so the approval chain can be chosen.`,
       link: '/procurement?pricing=1',
-      requestId,
+      requestId: request.id,
     });
-    await this.audit.log({
-      userId: actor.userId, username: actor.username,
-      action: 'PURCHASE_REQUEST_PRICING_REQUESTED', module: 'PROCUREMENT', recordId: requestId,
-      newValue: { docNumber: request.docNumber, lines: open.length, notified: buyers.length },
-    });
-    return { success: true, lines: open.length, notified: buyers.length };
+    return { lines: open.length, notified: buyers.length };
   }
 
   /**
@@ -402,6 +419,9 @@ export class ProcurementService {
       },
     });
 
+    // blank estimates = the PR sits in procurement's pricing queue — tell them
+    await this.notifyPricingNeeded(request, items);
+
     return { ...request, purchaseRequest: pr };
   }
 
@@ -459,6 +479,8 @@ export class ProcurementService {
       oldValue: { items: await this.prisma.purchaseRequestItem.count({ where: { purchaseRequestId: pr.id } }) },
       newValue: { items: items.length },
     });
+
+    await this.notifyPricingNeeded(request, items);
 
     return this.byRequest(requestId, { ...actor, canReadAll: true });
   }

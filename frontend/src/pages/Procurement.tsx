@@ -115,6 +115,18 @@ export default function Procurement() {
 
   const pricingQueue = canManage ? rows.filter(awaitsPricing) : [];
 
+  // A "Pricing needed" notification lands on /procurement?pricing=1 — open the
+  // first waiting PR straight away so the alert leads to the action.
+  useEffect(() => {
+    if (!canManage || searchParams.get('pricing') !== '1') return;
+    const first = pricingQueue[0];
+    if (!first) return;
+    setPricingFor(first);
+    const next = { ...Object.fromEntries(searchParams) };
+    delete next.pricing;
+    setSearchParams(next, { replace: true });
+  }, [canManage, searchParams, pricingQueue, setSearchParams]);
+
   return (
     <div>
       <PageHeader
@@ -137,7 +149,18 @@ export default function Procurement() {
               {pricingQueue.map((r) => (
                 <li key={r.id} className="py-2 flex flex-wrap items-center justify-between gap-2 text-sm">
                   <div className="min-w-0">
-                    <Link to={`/requests/${r.id}`} className="text-blue-600 hover:underline font-medium">{r.docNumber}</Link>
+                    {canManage ? (
+                      <button
+                        type="button"
+                        onClick={() => setPricingFor(r)}
+                        className="text-blue-600 hover:underline font-medium"
+                        title="Set the estimated prices for this request"
+                      >
+                        {r.docNumber}
+                      </button>
+                    ) : (
+                      <Link to={`/requests/${r.id}`} className="text-blue-600 hover:underline font-medium">{r.docNumber}</Link>
+                    )}
                     <span className="text-gray-600"> — {r.title}</span>
                     <div className="text-xs text-gray-400">
                       {r.requester?.fullName ?? '—'} · {(r.purchaseRequest?.items ?? []).filter((i) => !(Number(i.estimatedUnitPrice) > 0)).length} line(s) without a price
@@ -177,9 +200,22 @@ export default function Procurement() {
               return (
                 <tr key={r.id} className="hover:bg-gray-50 align-top">
                   <td className="px-4 py-3 font-medium whitespace-nowrap">
-                    <Link to={`/requests/${r.id}`} className="text-blue-600 hover:underline">
-                      {r.docNumber}
-                    </Link>
+                    {canManage && awaitsPricing(r) ? (
+                      // Awaiting price: the useful action is pricing, not the
+                      // requester-facing detail page (which shows a dead end).
+                      <button
+                        type="button"
+                        onClick={() => setPricingFor(r)}
+                        className="text-blue-600 hover:underline"
+                        title="Set the estimated prices for this request"
+                      >
+                        {r.docNumber}
+                      </button>
+                    ) : (
+                      <Link to={`/requests/${r.id}`} className="text-blue-600 hover:underline">
+                        {r.docNumber}
+                      </Link>
+                    )}
                   </td>
                   <td className="px-4 py-3">{r.title}</td>
                   <td className="px-4 py-3 text-gray-500">{items.length}</td>
