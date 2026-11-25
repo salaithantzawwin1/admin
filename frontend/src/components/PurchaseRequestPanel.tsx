@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Card, Empty } from './ui';
+import { pricingPending } from '../util/pricing';
 
 // Purchase Request detail (procurement §5): required date, priority, budget
 // code + line items with optional Account/Asset references. Mirrors
@@ -28,11 +29,12 @@ const fmtMoney = (n: number) => n.toLocaleString(undefined, { maximumFractionDig
 
 export function PurchaseRequestPanel({ requestId }: { requestId: string }) {
   const [pr, setPr] = useState<PrDetail | null>(null);
+  const [status, setStatus] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    api<{ purchaseRequest: PrDetail | null }>(`/procurement/requests/${requestId}`)
-      .then((r) => setPr(r.purchaseRequest))
+    api<{ status: string; purchaseRequest: PrDetail | null }>(`/procurement/requests/${requestId}`)
+      .then((r) => { setStatus(r.status); setPr(r.purchaseRequest); })
       .catch((e) => setError(e.message));
   }, [requestId]);
 
@@ -40,6 +42,7 @@ export function PurchaseRequestPanel({ requestId }: { requestId: string }) {
 
   const items = pr?.items ?? [];
   const total = items.reduce((sum, it) => sum + (Number(it.estimatedUnitPrice) || 0) * (Number(it.quantity) || 0), 0);
+  const pendingPricing = status === 'DRAFT' && pricingPending(items);
 
   return (
     <Card className="p-5 mb-5">
@@ -49,6 +52,12 @@ export function PurchaseRequestPanel({ requestId }: { requestId: string }) {
         <Empty label="Loading…" />
       ) : (
         <>
+          {pendingPricing && (
+            <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <span className="font-semibold">Awaiting Administration pricing.</span> Administration fills the estimates, then this
+              request enters approval automatically — no further action is needed from you.
+            </div>
+          )}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm mb-4">
             <div>
               <div className="text-gray-400 text-xs uppercase">Priority</div>
@@ -64,7 +73,7 @@ export function PurchaseRequestPanel({ requestId }: { requestId: string }) {
             </div>
             <div>
               <div className="text-gray-400 text-xs uppercase">Estimated total</div>
-              <div className="mt-1 font-medium">{items.length ? fmtMoney(total) : '—'}</div>
+              <div className="mt-1 font-medium">{pendingPricing ? 'Prices pending' : items.length ? fmtMoney(total) : '—'}</div>
             </div>
           </div>
 
@@ -91,7 +100,9 @@ export function PurchaseRequestPanel({ requestId }: { requestId: string }) {
                       {it.unit && <span className="text-gray-400"> · {it.unit}</span>}
                     </td>
                     <td className="py-2 text-right">{it.quantity}</td>
-                    <td className="py-2 text-right">{it.estimatedUnitPrice != null ? fmtMoney(price) : '—'}</td>
+                    <td className="py-2 text-right">
+                      {it.estimatedUnitPrice != null ? fmtMoney(price) : <span className="text-amber-700">pending</span>}
+                    </td>
                     <td className="py-2 text-right font-medium">{price ? fmtMoney(price * it.quantity) : '—'}</td>
                     <td className="py-2 text-gray-500">
                       {it.account ? (it.account.code ? `${it.account.code} — ${it.account.name}` : it.account.name) : '—'}

@@ -261,10 +261,17 @@ export class ProcurementService {
     if (open.length === 0) {
       throw new BadRequestException('Every line already has an estimated price — submit it for approval instead');
     }
+    // A second click (or a double submit) must not ping every buyer again.
+    const title = `Pricing needed — ${request.docNumber}`;
+    const already = await this.prisma.notification.findFirst({
+      where: { type: 'SUBMITTED', title, createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      select: { id: true },
+    });
+    if (already) return { success: true, lines: open.length, notified: 0, alreadyRequested: true };
     const buyers = await this.permissions.usersWithPermissions(['procurement.manage']);
     await this.notifications.notifyMany(buyers, {
       type: 'SUBMITTED',
-      title: `Pricing needed — ${request.docNumber}`,
+      title,
       body: `${request.title}: ${open.map((i) => `${i.description} ×${i.quantity}`).join(', ')}. Set the estimates so the approval chain can be chosen.`,
       link: '/procurement?pricing=1',
       requestId,

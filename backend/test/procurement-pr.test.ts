@@ -101,7 +101,9 @@ function makeService(prisma: any) {
     prisma,
     { log: noop } as any, // audit
     { next: async (p: string) => `${p}-202610-0001` } as any, // numbering
-    {} as any, // workflow (unused on create path)
+    {} as any, // permissions (unused on create/update)
+    {} as any, // notifications (unused on create/update)
+    {} as any, // workflow (unused on create/update)
   );
 }
 
@@ -172,7 +174,7 @@ async function main() {
     );
     await assert.rejects(
       () => svc.create({ items: [{ description: 'X', quantity: 2, estimatedUnitPrice: -5 }] }, ACTOR),
-      /estimated unit price is required/i,
+      /must be a positive number/i,
     );
     // no price = total 0 = cheapest approval band, so it cannot be saved at all
     await assert.rejects(

@@ -6,6 +6,7 @@ import { Modal } from '../components/Modal';
 import { BudgetBlockedModal, budgetBlockFrom, type BudgetBlock } from '../components/BudgetBlockedModal';
 import { fmtDate } from '../util/yangonTime';
 import { toast } from '../components/Toast';
+import { pricingPending } from '../util/pricing';
 
 // ---------------------------------------------------------------------------
 // Procurement — Purchase Requests (Design §5–7, phase P1).
@@ -76,8 +77,7 @@ const emptyItem = (): DraftItem => ({ description: '', quantity: 1, unit: '', es
 const fmtMoney = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 /** A draft with a blank estimate sits in the pricing queue, not in approval. */
-const awaitsPricing = (r: PrRow) =>
-  r.status === 'DRAFT' && (r.purchaseRequest?.items ?? []).some((i) => !(Number(i.estimatedUnitPrice) > 0));
+const awaitsPricing = (r: PrRow) => r.status === 'DRAFT' && pricingPending(r.purchaseRequest?.items);
 
 interface CatalogItem {
   id: string;
@@ -430,14 +430,14 @@ function NewPurchaseRequestModal({ onClose }: { onClose: () => void }) {
           })),
         },
       });
-      if (thenSubmitForApproval && askForPricing && missingPrice) {
+      if (!thenSubmitForApproval) {
+        toast(`PR ${created.docNumber} saved as draft`);
+      } else if (askForPricing && missingPrice) {
         await api(`/procurement/requests/${created.id}/request-pricing`, { method: 'POST' });
         toast(`PR ${created.docNumber} sent to Administration for pricing`);
-      } else if (thenSubmitForApproval) {
+      } else {
         await api(`/requests/${created.id}/submit`, { method: 'POST' });
         toast(`PR ${created.docNumber} submitted for approval`);
-      } else {
-        toast(`PR ${created.docNumber} saved as draft`);
       }
       onClose();
     } catch (e) {

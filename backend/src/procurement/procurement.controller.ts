@@ -9,7 +9,7 @@ import { PermissionsService } from '../auth/permissions.service';
 import { ProcurementService, CreatePrInput } from './procurement.service';
 import { Actor } from '../org/org.service';
 
-class PrItemDto {
+export class PrItemDto {
   @IsString() @MinLength(1) @MaxLength(200) description!: string;
   @IsInt() @Min(1) quantity!: number;
   @IsOptional() @IsString() @MaxLength(32) unit?: string;
