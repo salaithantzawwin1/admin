@@ -124,13 +124,22 @@ export function Layout() {
   // DRAFT purchase requests waiting for Administration's estimates → badge on
   // the Procurement nav item, so the pricing queue is visible from every page
   const [pricingQueue, setPricingQueue] = useState(0);
+  // requests waiting for my approval → badge on Pending Approvals
+  const [approvalsQueue, setApprovalsQueue] = useState(0);
   const canSeeSettings = hasPermission('users.manage');
   const canPrice = hasPermission('procurement.manage');
+  const canApprove = hasPermission('approvals.act');
   const location = useLocation();
   const activePath = location.pathname;
   /** Count badge for a nav item — 0 hides it. */
   const navCount = (to: string) =>
-    to === '/procurement' ? pricingQueue : to === '/settings' ? pendingJoins : 0;
+    to === '/procurement'
+      ? pricingQueue
+      : to === '/approvals'
+        ? approvalsQueue
+        : to === '/settings'
+          ? pendingJoins
+          : 0;
 
   const toggleGroup = (title: string) => {
     setCollapsedGroups((prev) =>
@@ -173,6 +182,25 @@ export function Layout() {
       clearInterval(t);
     };
   }, [canPrice, activePath]);
+
+  // Approvals badge: same 15s poll, paused while the tab is hidden.
+  useEffect(() => {
+    if (!canApprove) return;
+    let alive = true;
+    const poll = () => {
+      api<{ count: number }>('/requests/inbox/count')
+        .then((r) => alive && setApprovalsQueue(Number(r?.count) || 0))
+        .catch(() => {});
+    };
+    poll();
+    const t = setInterval(() => {
+      if (!document.hidden) poll();
+    }, 15_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [canApprove, activePath]);
 
   // close the user menu when clicking outside
   useEffect(() => {
@@ -421,7 +449,9 @@ export function Layout() {
                           title={
                             item.to === '/procurement'
                               ? `${navCount(item.to)} purchase request(s) awaiting price`
-                              : `${navCount(item.to)} pending Telegram join request(s)`
+                              : item.to === '/approvals'
+                                ? `${navCount(item.to)} request(s) awaiting your approval`
+                                : `${navCount(item.to)} pending Telegram join request(s)`
                           }
                         >
                           {navCount(item.to)}

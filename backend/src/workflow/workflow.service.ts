@@ -832,6 +832,33 @@ export class WorkflowService {
 
   /** Approvals inbox: pending requests I can actually act on — my roles (per docType) match the resolved workflow step, plus the SYSTEM_ADMIN superuser bypass and active delegations. Own requests are excluded (approve() rejects them). */
   async inbox(actor: Actor, page = 1, pageSize = 20) {
+    const where = await this.inboxWhere(actor);
+    const [items, total] = await this.prisma.$transaction([
+      this.prisma.requestDocument.findMany({
+        where,
+        orderBy: { submittedAt: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { requester: { select: { username: true, fullName: true } }, department: { select: { name: true } } },
+      }),
+      this.prisma.requestDocument.count({ where }),
+    ]);
+    return { items, total, page, pageSize };
+  }
+
+  /**
+   * Sidebar badge for the same inbox — COUNT only, so a 15s poll never pulls
+   * document rows or joins.
+   */
+  async inboxCount(actor: Actor) {
+    return this.prisma.requestDocument.count({ where: await this.inboxWhere(actor) });
+  }
+
+  /**
+   * The inbox filter, shared by inbox() and inboxCount() so the badge can never
+   * disagree with the list it opens.
+   */
+  private async inboxWhere(actor: Actor): Promise<Prisma.RequestDocumentWhereInput> {
     const roles = await this.userRoleNames(actor.userId);
     const now = new Date();
 
@@ -888,21 +915,9 @@ export class WorkflowService {
       }
     }
 
-    const where: Prisma.RequestDocumentWhereInput = or.length > 0
+    return or.length > 0
       ? { status: 'PENDING_APPROVAL', requesterId: { not: actor.userId }, OR: or }
       : { status: 'PENDING_APPROVAL', requesterId: { not: actor.userId }, id: { in: [] } };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.requestDocument.findMany({
-        where,
-        orderBy: { submittedAt: 'asc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: { requester: { select: { username: true, fullName: true } }, department: { select: { name: true } } },
-      }),
-      this.prisma.requestDocument.count({ where }),
-    ]);
-    return { items, total, page, pageSize };
   }
 
   /**

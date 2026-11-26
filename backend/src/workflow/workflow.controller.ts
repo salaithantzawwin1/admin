@@ -120,6 +120,12 @@ export class WorkflowController {
     return this.workflow.inbox(this.actor(req), Math.max(1, Number(page || 1)), Math.min(100, Number(pageSize || 20)));
   }
 
+  /** Sidebar badge: the inbox size as a COUNT (no document rows). */
+  @Get('requests/inbox/count')
+  async inboxCount(@Req() req) {
+    return { count: await this.workflow.inboxCount(this.actor(req)) };
+  }
+
   @Get('requests/:id')
   detail(@Req() req, @Param('id') id: string) {
     return this.workflow.detail(id, this.actor(req));
