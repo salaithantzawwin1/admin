@@ -118,6 +118,13 @@ export class AssetsController {
     return this.assets.list({ q, categoryId, locationId, status, specs });
   }
 
+  /** Assets still missing a category or custodian — the review worklist. */
+  @Get('incomplete')
+  @RequirePermissions(PERMISSIONS.ASSETS_MANAGE)
+  incomplete() {
+    return this.assets.incomplete();
+  }
+
   /** §41 asset register export. */
   @Get('csv')
   @RequirePermissions(PERMISSIONS.ASSETS_READ)

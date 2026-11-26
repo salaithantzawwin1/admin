@@ -135,6 +135,40 @@ export class AssetsService {
   }
 
   /**
+   * The review worklist: assets whose category or custodian is still blank.
+   * GRN auto-registration creates assets from the PO line alone, so this is
+   * where the office assigns the code prefix/specs (category) and the person
+   * answerable for the item (custodian) without opening each asset.
+   */
+  async incomplete() {
+    const rows = await this.prisma.asset.findMany({
+      where: {
+        OR: [{ categoryId: null }, { custodian: null }, { custodian: '' }],
+      },
+      orderBy: { assetCode: 'asc' },
+      include: {
+        category: true,
+        location: true,
+        poItems: {
+          select: {
+            id: true,
+            description: true,
+            purchaseOrder: { select: { poNumber: true } },
+          },
+        },
+      },
+    });
+    return rows.map((r) => ({
+      ...r,
+      missing: [
+        ...(r.categoryId ? [] : ['category']),
+        ...(r.custodian && r.custodian.trim() ? [] : ['custodian']),
+      ],
+      receivedOn: r.poItems[0]?.purchaseOrder?.poNumber ?? null,
+    }));
+  }
+
+  /**
    * One asset with its full movement history + procurement provenance (§39).
    * `maskSupplier` hides the vendor behind the PO provenance and the cost
    * ledger — GLG requires FINANCE to read asset costs without learning which

@@ -6,6 +6,7 @@ import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { AssetSetupTab } from '../components/AssetSetupTab';
 import { categorySegment } from '../util/assetCode';
+import { toast } from '../components/Toast';
 
 interface AssetRow {
   id: string;
@@ -25,6 +26,17 @@ interface AssetRow {
   location?: { id: string; name: string } | null;
   /** the asset's own picture — the backend never exposes the stored file name */
   photo?: { mimeType?: string | null; size?: number | null; updatedAt?: string | null } | null;
+}
+
+/**
+ * A register row that came from a goods receipt without the details the office
+ * still has to supply: the category (code prefix, spec questions, filters) and
+ * the custodian (who is answerable). Shown on the "Needs details" review tab.
+ */
+interface IncompleteAssetRow extends AssetRow {
+  missing: ('category' | 'custodian')[];
+  /** PO the asset was registered from, when it came in on a goods receipt */
+  receivedOn?: string | null;
 }
 
 /**
@@ -309,8 +321,10 @@ export default function Assets() {
   // tabs (URL-driven, same pattern as Inventory / Meeting Rooms); the setup tab
   // is admin-only, so a stale ?tab=setup URL falls back to the register
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = searchParams.get('tab') === 'setup' && canManage ? 'setup' : 'register';
-  const setTab = (t: 'register' | 'setup') => setSearchParams(t === 'register' ? {} : { tab: t }, { replace: false });
+  const tabParam = searchParams.get('tab');
+  const tab = tabParam === 'setup' && canManage ? 'setup' : tabParam === 'review' && canManage ? 'review' : 'register';
+  const setTab = (t: 'register' | 'setup' | 'review') =>
+    setSearchParams(t === 'register' ? {} : { tab: t }, { replace: false });
   const [q, setQ] = useState('');
   const [categoryId, setCategoryId] = useState('');
   // one value per specification field of the filtered category (sf_<key>=…)
@@ -344,6 +358,13 @@ export default function Assets() {
   const [partsPage, setPartsPage] = useState(0);
   const [costPage, setCostPage] = useState(0);
   const [movePage, setMovePage] = useState(0);
+
+  // "Needs details" review: assets created by a goods receipt without a
+  // category or custodian, and the values typed for each of them here
+  const [reviewRows, setReviewRows] = useState<IncompleteAssetRow[]>([]);
+  const [reviewDrafts, setReviewDrafts] = useState<Record<string, { categoryId: string; custodian: string }>>({});
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState<Record<string, boolean>>({});
 
   /** Open one asset by id — shared by the list, the QR deep link and the part links. */
   const openAsset = async (id: string) => {
@@ -516,6 +537,54 @@ export default function Assets() {
 
   useEffect(() => { void loadPickers(); }, [loadPickers]);
 
+  const loadReview = useCallback(async () => {
+    setReviewLoading(true);
+    try {
+      const data = await api<IncompleteAssetRow[]>('/assets/incomplete');
+      setReviewRows(data);
+      setReviewDrafts(
+        Object.fromEntries(data.map((r) => [r.id, { categoryId: r.category?.id ?? '', custodian: r.custodian ?? '' }])),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load the review list');
+    } finally {
+      setReviewLoading(false);
+    }
+  }, []);
+
+  // the tab label carries the backlog count, so it is loaded as soon as the
+  // page opens (and again after each save)
+  useEffect(() => { if (canManage) void loadReview(); }, [canManage, loadReview]);
+
+  /** Fill the category/custodian chosen for one row; blanks leave a field alone. */
+  const saveReviewRow = async (row: IncompleteAssetRow) => {
+    const draft = reviewDrafts[row.id];
+    if (!draft) return;
+    const categoryId = draft.categoryId || undefined;
+    const custodian = draft.custodian.trim() || undefined;
+    if (!categoryId && !custodian) {
+      setError(`${row.assetCode}: pick a category or type a custodian first`);
+      return;
+    }
+    setError(null);
+    setReviewSaving((s) => ({ ...s, [row.id]: true }));
+    try {
+      await api(`/assets/${row.id}`, {
+        method: 'PATCH',
+        // only the filled fields are sent: undefined leaves the stored value
+        // alone, so the row's other detail (location, serial …) is untouched
+        body: { ...(categoryId ? { categoryId } : {}), ...(custodian ? { custodian } : {}) },
+      });
+      toast(`${row.assetCode} updated`);
+      await loadReview();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : `Could not update ${row.assetCode}`);
+    } finally {
+      setReviewSaving((s) => ({ ...s, [row.id]: false }));
+    }
+  };
+
   const openDetail = async (id: string) => {
     try {
       setDetail(await api<AssetDetail>(`/assets/${id}`));
@@ -663,8 +732,12 @@ export default function Assets() {
         { key: 'movement', label: 'Movement history', count: detailMovements.length },
       ]
     : [];
-  const tabDefs: { key: 'register' | 'setup'; label: string }[] = canManage
-    ? [{ key: 'register', label: 'Asset Register' }, { key: 'setup', label: 'Asset Setup (New)' }]
+  const tabDefs: { key: 'register' | 'setup' | 'review'; label: string }[] = canManage
+    ? [
+        { key: 'register', label: 'Asset Register' },
+        { key: 'review', label: `Needs details${reviewRows.length ? ` (${reviewRows.length})` : ''}` },
+        { key: 'setup', label: 'Asset Setup (New)' },
+      ]
     : [{ key: 'register', label: 'Asset Register' }];
   // auto-code segment the backend derives from the chosen category
   // ("IT Equipment" → AST-ITE-…), mirrored here so the dialog can preview it
@@ -851,6 +924,88 @@ export default function Assets() {
       {/* ============ Tab: Asset Setup (New) — CATEGORY / LOCATION / CUSTODIAN CRUD ============ */}
       {tab === 'setup' && canManage && (
         <AssetSetupTab onChanged={() => void loadPickers()} />
+      )}
+
+      {/* ============ Tab: Needs details — GRN-created assets missing category/custodian ============ */}
+      {tab === 'review' && canManage && (
+        <div className="space-y-4">
+          <Card className="p-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <div className="text-sm font-medium text-gray-800">Assets still missing their details</div>
+                <div className="text-xs text-gray-500 max-w-3xl">
+                  A fixed asset is created automatically when a goods receipt accepts a non-stock PO line,
+                  and it starts without a category or custodian. Fill them here: the category sets the code
+                  prefix, the specification questions and the register filters; the custodian says who is
+                  answerable for the item.
+                </div>
+              </div>
+              <Button variant="ghost" disabled={reviewLoading} onClick={() => void loadReview()}>
+                ↻ Refresh
+              </Button>
+            </div>
+          </Card>
+
+          {reviewLoading && reviewRows.length === 0 ? (
+            <Card><Empty label="Loading…" /></Card>
+          ) : reviewRows.length === 0 ? (
+            <Card><Empty label="Every asset has a category and a custodian" /></Card>
+          ) : (
+            <Table head={['Asset code', 'Name', 'Received on', 'Category', 'Custodian', '']}>
+              {reviewRows.map((r) => {
+                const d = reviewDrafts[r.id] ?? { categoryId: r.category?.id ?? '', custodian: r.custodian ?? '' };
+                const filled = !!(d.categoryId || d.custodian.trim());
+                return (
+                  <tr key={r.id} className="align-top hover:bg-gray-50">
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <button className="text-blue-600 hover:underline font-medium" onClick={() => void openDetail(r.id)}>
+                        {r.assetCode}
+                      </button>
+                      <div className="text-xs text-gray-400 mt-1">
+                        {r.missing.map((m) => (m === 'category' ? 'no category' : 'no custodian')).join(' · ')}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      {r.name}
+                      {r.serialNumber ? <div className="text-xs text-gray-400">SN {r.serialNumber}</div> : null}
+                    </td>
+                    <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{r.receivedOn ?? '—'}</td>
+                    <td className="px-4 py-3 min-w-[180px]">
+                      <Select
+                        value={d.categoryId}
+                        onChange={(e) => setReviewDrafts((s) => ({ ...s, [r.id]: { ...d, categoryId: e.target.value } }))}
+                      >
+                        <option value="">— none —</option>
+                        {categories.map((c) => (
+                          <option key={c.id} value={c.id}>{c.name}</option>
+                        ))}
+                      </Select>
+                    </td>
+                    <td className="px-4 py-3 min-w-[200px]">
+                      <Input
+                        list={`custodians-${r.id}`}
+                        placeholder="Person / department"
+                        value={d.custodian}
+                        onChange={(e) => setReviewDrafts((s) => ({ ...s, [r.id]: { ...d, custodian: e.target.value } }))}
+                      />
+                      <datalist id={`custodians-${r.id}`}>
+                        {custodians.map((c) => <option key={c.id} value={c.name} />)}
+                      </datalist>
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <Button
+                        disabled={!filled || !!reviewSaving[r.id]}
+                        onClick={() => void saveReviewRow(r)}
+                      >
+                        {reviewSaving[r.id] ? 'Saving…' : 'Save'}
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </Table>
+          )}
+        </div>
       )}
 
       {/* create / edit */}
