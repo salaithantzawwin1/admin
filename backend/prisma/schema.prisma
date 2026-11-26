@@ -649,6 +649,8 @@ model Attachment {
   id             String   @id @default(uuid()) @db.Uuid
   requestId      String?  @db.Uuid
   announcementId String?  @db.Uuid // generalized owner (Plan §18 announcement attachments)
+  invoiceId      String?  @db.Uuid // vendor bill photo/PDF (procurement §22)
+
   filename       String
   storedName     String   @unique
   mimeType       String
@@ -658,6 +660,7 @@ model Attachment {
 
   request      RequestDocument? @relation(fields: [requestId], references: [id], onDelete: Cascade)
   announcement Announcement?    @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  invoice      Invoice?         @relation("InvoiceAttachments", fields: [invoiceId], references: [id], onDelete: Cascade)
   uploadedBy   User             @relation("Attachments", fields: [uploadedById], references: [id])
   /// VMS §6.2 — a document record points at its file; the FK lives on
   /// vehicle_documents, so request/announcement attachments are unaffected.
@@ -665,6 +668,7 @@ model Attachment {
 
   @@index([requestId])
   @@index([announcementId])
+  @@index([invoiceId])
   @@map("attachments")
 }
 
@@ -2047,6 +2051,8 @@ model Invoice {
   goodsReceipt  GoodsReceipt?  @relation("InvoiceGoodsReceipt", fields: [goodsReceiptId], references: [id])
   createdBy     User           @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
   items         InvoiceItem[]
+  /// bill photo / PDF and supporting papers (delivery note, vendor statement)
+  attachments   Attachment[]  @relation("InvoiceAttachments")
 
   // Control 5 (§35): duplicate invoice check — same vendor + paper invoice number
   @@unique([supplierId, supplierInvoiceNumber])

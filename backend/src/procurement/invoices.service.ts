@@ -101,6 +101,12 @@ export class InvoicesService {
         goodsReceipt: { select: { id: true, grnNumber: true, receivedAt: true } },
         createdBy: { select: { fullName: true } },
         items: { orderBy: { id: 'asc' } },
+        // bill photo / PDF and supporting papers (no stored file name or path —
+        // the bytes are only served by the guarded download route)
+        attachments: {
+          select: { id: true, filename: true, mimeType: true, size: true, createdAt: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');

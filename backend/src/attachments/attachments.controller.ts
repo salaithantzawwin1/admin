@@ -24,9 +24,18 @@ export class AttachmentsController {
     @Req() req,
     @Query('requestId') requestId?: string,
     @Query('announcementId') announcementId?: string,
+    @Query('invoiceId') invoiceId?: string,
   ) {
     if (!file) throw new BadRequestException('No file provided');
-    return this.attachments.upload(file, requestId || undefined, req.user.id, req.user.username, announcementId || undefined);
+    return this.attachments.upload(
+      file, requestId || undefined, req.user.id, req.user.username, announcementId || undefined, invoiceId || undefined,
+    );
+  }
+
+  /** Metadata list for an invoice's bill photo / PDF. */
+  @Get('invoice/:invoiceId')
+  async listByInvoice(@Param('invoiceId') invoiceId: string, @Req() req) {
+    return this.attachments.listByInvoice(invoiceId, req.user.id);
   }
 
   /** Metadata list for an announcement (caller is announcements-manage guarded or a reader). */

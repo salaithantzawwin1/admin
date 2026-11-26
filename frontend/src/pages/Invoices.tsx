@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError, hasPermission } from '../api';
+import { api, ApiError, getToken, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -361,6 +361,15 @@ export default function Invoices() {
               </tfoot>
             </table>
 
+            <InvoiceAttachments
+              invoiceId={detail.id}
+              status={detail.status}
+              canManage={canManage}
+              onChanged={async () => {
+                setDetail(await api<Invoice>(`/invoices/${detail.id}`));
+              }}
+            />
+
             {detail.matchDetail?.lines && detail.matchDetail.lines.length > 0 && (
               <div className="border border-gray-200 rounded-lg p-3">
                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Three-way match (§23)</div>
@@ -597,5 +606,170 @@ function NewInvoiceModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bill papers: the vendor's bill photo/PDF and supporting documents, stored by
+// the shared attachments module (type/size/magic-byte checked, 0600 on disk,
+// served only through the guarded download route). POSTED invoices are frozen:
+// the paper is part of the audit trail, so upload/remove disappear then.
+// ---------------------------------------------------------------------------
+
+interface InvoiceAttachment {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+}
+
+function InvoiceAttachments({
+  invoiceId, status, canManage, onChanged,
+}: {
+  invoiceId: string;
+  status: string;
+  canManage: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [items, setItems] = useState<InvoiceAttachment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [toDelete, setToDelete] = useState<InvoiceAttachment | null>(null);
+  const posted = status === 'POSTED';
+
+  const refresh = useCallback(async () => {
+    setItems(await api<InvoiceAttachment[]>(`/attachments/invoice/${invoiceId}`));
+  }, [invoiceId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    refresh()
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Could not load attachments'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [refresh]);
+
+  const upload = async (file: File) => {
+    setError('');
+    if (file.size > 10 * 1024 * 1024) {
+      setError('File too large (max 10 MB)');
+      return;
+    }
+    setBusy(true);
+    try {
+      const body = new FormData();
+      body.append('file', file);
+      const res = await fetch(`/api/attachments/upload?invoiceId=${invoiceId}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${getToken()}` },
+        body,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const msg = Array.isArray(data?.message) ? data.message.join(', ') : data?.message;
+        throw new Error(typeof msg === 'string' ? msg : `Upload failed (${res.status})`);
+      }
+      toast('Attachment uploaded');
+      await refresh();
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not upload the file');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /** The download route needs the bearer token, so the file is fetched as a blob. */
+  const download = async (a: InvoiceAttachment) => {
+    setError('');
+    try {
+      const res = await fetch(`/api/attachments/${a.id}/download`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error(`Download failed (${res.status})`);
+      const url = URL.createObjectURL(await res.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = a.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not download the file');
+    }
+  };
+
+  return (
+    <div className="border border-gray-200 rounded-lg p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Bill attachments ({items.length})</div>
+        {canManage && !posted && (
+          <label className={`text-sm px-3 py-1.5 rounded-lg cursor-pointer border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+            {busy ? 'Uploading…' : '+ Attach photo / PDF'}
+            <input
+              type="file"
+              className="hidden"
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              disabled={busy}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.currentTarget.value = '';
+                if (f) void upload(f);
+              }}
+            />
+          </label>
+        )}
+      </div>
+      {posted && (
+        <p className="text-xs text-gray-400 mb-2">This bill is POSTED — its papers are part of the audit trail and can no longer be changed.</p>
+      )}
+      {error && <div className="text-sm text-red-600 bg-red-50 rounded px-3 py-2 mb-2">{error}</div>}
+      {loading ? (
+        <Empty label="Loading…" />
+      ) : items.length === 0 ? (
+        <p className="text-sm text-gray-400 py-2">No bill attached yet — add the vendor's bill photo or PDF.</p>
+      ) : (
+        <ul className="divide-y divide-gray-100">
+          {items.map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
+              <span className="text-gray-800 break-all">{a.filename}</span>
+              <span className="text-xs text-gray-400">{(a.size / 1024).toFixed(0)} KB · {fmtDate(a.createdAt)}</span>
+              <span className="ml-auto flex gap-2">
+                <Button variant="ghost" onClick={() => void download(a)}>Download</Button>
+                {canManage && !posted && (
+                  <Button variant="danger" onClick={() => setToDelete(a)}>Remove</Button>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {toDelete && (
+        <ConfirmDialog
+          title={`Remove ${toDelete.filename}?`}
+          description="The file is deleted from the invoice and from storage. Attach it again if this was a mistake."
+          confirmLabel="Remove file"
+          variant="danger"
+          onClose={() => setToDelete(null)}
+          onConfirm={async () => {
+            try {
+              await api(`/attachments/${toDelete.id}`, { method: 'DELETE' });
+              toast('Attachment removed');
+              setToDelete(null);
+              await refresh();
+              await onChanged();
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Could not remove the file');
+              setToDelete(null);
+            }
+          }}
+        />
+      )}
+    </div>
   );
 }

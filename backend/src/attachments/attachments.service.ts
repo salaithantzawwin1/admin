@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -47,10 +47,11 @@ export class AttachmentsService {
   }
 
   /**
-   * Generalized upload (Plan §18): an attachment belongs to a request OR an
-   * announcement. Exactly one owner id should be provided.
+   * Generalized upload (Plan §18): an attachment belongs to a request, an
+   * announcement or an invoice (vendor bill photo/PDF). Exactly one owner id
+   * should be provided.
    */
-  async upload(file: Express.Multer.File, requestId: string | undefined, userId: string, username: string, announcementId?: string) {
+  async upload(file: Express.Multer.File, requestId: string | undefined, userId: string, username: string, announcementId?: string, invoiceId?: string) {
     if (!file) throw new BadRequestException('No file provided');
     if (!ALLOWED_MIME.includes(file.mimetype)) throw new BadRequestException(`File type not allowed: ${file.mimetype}`);
     if (file.size > MAX_SIZE) throw new BadRequestException('File too large (max 10 MB)');
@@ -59,7 +60,10 @@ export class AttachmentsService {
     if (!declaredTypeMatchesBytes(file.mimetype, file.buffer)) {
       throw new BadRequestException(`The file content does not match ${file.mimetype}`);
     }
-    if (requestId && announcementId) throw new BadRequestException('Attachment can belong to a request or an announcement, not both');
+    const owners = [requestId, announcementId, invoiceId].filter(Boolean);
+    if (owners.length > 1) {
+      throw new BadRequestException('An attachment belongs to one owner only — a request, an announcement or an invoice');
+    }
 
     if (requestId) {
       const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId } });
@@ -85,6 +89,15 @@ export class AttachmentsService {
       }
     }
 
+    if (invoiceId) {
+      const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId }, select: { id: true } });
+      if (!invoice) throw new NotFoundException('Invoice not found');
+      // the bill and its papers are AP records — only invoice managers add them
+      if (!(await this.permissions.userHas(userId, 'procurement.manage'))) {
+        throw new ForbiddenException('Not allowed to attach files to this invoice');
+      }
+    }
+
     this.ensureDir();
     const ext = EXT_BY_MIME[file.mimetype] ?? '.bin';
     const storedName = `${crypto.randomUUID()}${ext}`;
@@ -94,6 +107,7 @@ export class AttachmentsService {
       data: {
         requestId,
         announcementId,
+        invoiceId,
         filename: file.originalname || storedName,
         storedName,
         mimeType: file.mimetype,
@@ -107,7 +121,7 @@ export class AttachmentsService {
       action: 'ATTACHMENT_UPLOADED',
       module: 'ATTACHMENTS',
       recordId: attachment.id,
-      newValue: { filename: attachment.filename, requestId, announcementId },
+      newValue: { filename: attachment.filename, requestId, announcementId, invoiceId },
     });
 
     return attachment;
@@ -132,6 +146,13 @@ export class AttachmentsService {
         const privileged = await this.permissions.userHas(userId, 'requests.read.all');
         if (!privileged) throw new ForbiddenException('No access to this attachment');
       }
+    } else if (attachment.invoiceId) {
+      // vendor bill papers are read with the invoice (procurement or read-only AP)
+      const canRead =
+        (await this.permissions.userHas(userId, 'procurement.read')) ||
+        (await this.permissions.userHas(userId, 'procurement.manage')) ||
+        (await this.permissions.userHas(userId, 'invoices.read'));
+      if (!canRead) throw new ForbiddenException('No access to this attachment');
     } else if (attachment.vehicleDocuments.length > 0) {
       // document-register file: readable by anyone who may read the fleet module
       const canRead = await this.permissions.userHas(userId, 'fleet.read');
@@ -166,9 +187,26 @@ export class AttachmentsService {
     const attachment = await this.prisma.attachment.findUnique({ where: { id } });
     if (!attachment) throw new NotFoundException('Attachment not found');
 
+    // invoice papers: POSTED bills are frozen, and invoice managers (not only
+    // the uploader) may correct a draft bill's files
+    let invoiceManager = false;
+    if (attachment.invoiceId) {
+      const invoice = await this.prisma.invoice.findUnique({
+        where: { id: attachment.invoiceId },
+        select: { invoiceNumber: true, status: true },
+      });
+      if (invoice?.status === 'POSTED') {
+        throw new ConflictException(
+          `Invoice ${invoice.invoiceNumber} is POSTED — its attachment is part of the audit trail and cannot be removed`,
+        );
+      }
+      invoiceManager = await this.permissions.userHas(userId, 'procurement.manage');
+      if (!invoiceManager) throw new ForbiddenException('Not allowed to remove this invoice attachment');
+    }
+
     // owner, users.manage holder (admin override), or SYSTEM_ADMIN superuser
     const admin = await this.permissions.userHas(userId, 'users.manage');
-    if (attachment.uploadedById !== userId && !admin) throw new ForbiddenException('Not your attachment');
+    if (!invoiceManager && attachment.uploadedById !== userId && !admin) throw new ForbiddenException('Not your attachment');
 
     const filePath = path.join(this.uploadRoot, attachment.storedName);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
@@ -179,9 +217,21 @@ export class AttachmentsService {
       action: 'ATTACHMENT_DELETED',
       module: 'ATTACHMENTS',
       recordId: id,
-      oldValue: { filename: attachment.filename },
+      oldValue: { filename: attachment.filename, invoiceId: attachment.invoiceId },
       severity: 'WARNING',
     });
     return { success: true };
+  }
+
+  /** Metadata list for an invoice's bill/supporting papers. */
+  async listByInvoice(invoiceId: string, userId: string) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId }, select: { id: true } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    const canRead =
+      (await this.permissions.userHas(userId, 'procurement.read')) ||
+      (await this.permissions.userHas(userId, 'procurement.manage')) ||
+      (await this.permissions.userHas(userId, 'invoices.read'));
+    if (!canRead) throw new ForbiddenException('No access to this invoice');
+    return this.prisma.attachment.findMany({ where: { invoiceId }, orderBy: { createdAt: 'desc' } });
   }
 }
