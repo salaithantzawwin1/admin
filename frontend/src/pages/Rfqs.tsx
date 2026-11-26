@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api, hasPermission } from '../api';
 import { Badge, Button, Card, Empty, Input, PageHeader, Select, Textarea } from '../components/ui';
 import { Modal } from '../components/Modal';
@@ -92,6 +92,21 @@ interface RfqRow {
   } | null;
 }
 
+/** An RFQ raised before the quotation_requests table existed: it is still a
+ *  workflow document row, archived out of the active lists. Read-only here. */
+interface ArchivedRfqRow {
+  id: string;
+  docNumber: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  archivedAt?: string | null;
+  requester?: { fullName: string } | null;
+  department?: { name: string } | null;
+}
+
+type RfqFilter = 'all' | 'open' | 'closed' | 'archived';
+
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
   OPEN: 'green',
   CLOSED: 'gray',
@@ -112,6 +127,9 @@ export default function Rfqs() {
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(searchParams.get('new') === '1');
   const [detail, setDetail] = useState<string | null>(null); // rfqId
+  const [filter, setFilter] = useState<RfqFilter>('all');
+  const [archived, setArchived] = useState<ArchivedRfqRow[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -123,11 +141,34 @@ export default function Rfqs() {
 
   useEffect(load, [load]);
 
+  // Old RFQs (pre quotation_requests) live on as archived workflow documents;
+  // the archive view reads them from the documents API so their history stays
+  // reachable instead of only through a hand-made link.
+  useEffect(() => {
+    if (filter !== 'archived') return;
+    setArchivedLoading(true);
+    api<{ items: ArchivedRfqRow[] }>('/requests?docType=RFQ&archived=only&pageSize=100')
+      .then((r) => setArchived(r.items))
+      .catch((e) => setError(e.message))
+      .finally(() => setArchivedLoading(false));
+  }, [filter]);
+
   const closeForm = () => {
     setShowForm(false);
     if (searchParams.get('new')) setSearchParams({}, { replace: false });
     load();
   };
+
+  const visible = rows.filter((r) =>
+    filter === 'all' ? true : filter === 'open' ? r.status === 'OPEN' : filter === 'closed' ? r.status === 'CLOSED' : false,
+  );
+
+  const filters: { key: RfqFilter; label: string }[] = [
+    { key: 'all', label: `All (${rows.length})` },
+    { key: 'open', label: `Open (${rows.filter((r) => r.status === 'OPEN').length})` },
+    { key: 'closed', label: `Closed (${rows.filter((r) => r.status === 'CLOSED').length})` },
+    { key: 'archived', label: 'Archived' },
+  ];
 
   return (
     <div>
@@ -142,7 +183,55 @@ export default function Rfqs() {
       />
       {error && <div className="mb-4 text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
 
+      <div className="flex flex-wrap gap-2 mb-3">
+        {filters.map((f) => (
+          <Button key={f.key} variant={filter === f.key ? 'primary' : 'ghost'} onClick={() => setFilter(f.key)}>
+            {f.label}
+          </Button>
+        ))}
+      </div>
+
       <Card>
+        {filter === 'archived' ? (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
+                <th className="px-4 py-3 font-medium">Doc No.</th>
+                <th className="px-4 py-3 font-medium">Title</th>
+                <th className="px-4 py-3 font-medium">Requester</th>
+                <th className="px-4 py-3 font-medium">Department</th>
+                <th className="px-4 py-3 font-medium text-center">Status</th>
+                <th className="px-4 py-3 font-medium">Created</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {archived.length === 0 && (
+                <tr>
+                  <td colSpan={6}>
+                    <Empty label={archivedLoading ? 'Loading…' : 'No archived RFQs'} />
+                  </td>
+                </tr>
+              )}
+              {archived.map((a) => (
+                <tr key={a.id} className="hover:bg-gray-50 align-top">
+                  <td className="px-4 py-3 font-medium whitespace-nowrap">
+                    <Link className="text-blue-600 hover:underline" to={`/requests/${a.id}`}>
+                      {a.docNumber}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-3">{a.title}</td>
+                  <td className="px-4 py-3 text-gray-500">{a.requester?.fullName ?? '—'}</td>
+                  <td className="px-4 py-3 text-gray-500">{a.department?.name ?? '—'}</td>
+                  <td className="px-4 py-3 text-center">
+                    <Badge color="gray">Archived</Badge>
+                    <div className="text-xs text-gray-400 mt-1">{statusLabel(a.status)}</div>
+                  </td>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtDate(a.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
@@ -156,14 +245,24 @@ export default function Rfqs() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {rows.length === 0 && (
+            {visible.length === 0 && (
               <tr>
                 <td colSpan={7}>
-                  <Empty label={loading ? 'Loading…' : 'No RFQs yet — create one from an approved request'} />
+                  <Empty
+                    label={
+                      loading
+                        ? 'Loading…'
+                        : filter === 'open'
+                          ? 'No open RFQs'
+                          : filter === 'closed'
+                            ? 'No closed RFQs'
+                            : 'No RFQs yet — create one from an approved request'
+                    }
+                  />
                 </td>
               </tr>
             )}
-            {rows.map((r) => {
+            {visible.map((r) => {
               const vendors = r.rfq?.rfqVendors ?? [];
               const quotes = r.rfq?.quotations ?? [];
               return (
@@ -194,6 +293,7 @@ export default function Rfqs() {
             })}
           </tbody>
         </table>
+        )}
       </Card>
 
       {showForm && <NewRfqModal onClose={closeForm} prefillRequestId={searchParams.get('pr') ?? undefined} />}
