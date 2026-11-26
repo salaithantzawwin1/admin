@@ -825,7 +825,7 @@ export default function PurchaseOrders() {
                         {inventoryItems.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name} ({i.balance} {i.unit})</option>)}
                       </Select>
                     ) : (
-                      <div className="text-[11px] text-orange-700 leading-tight">Asset — no stock item; the GRN registers it as an AST-… record.</div>
+                      <div className="text-[11px] text-orange-700 leading-tight">Registered on GRN as an AST-… asset.</div>
                     )}
                   </div>
                   <div className="col-span-6 md:col-span-3">
