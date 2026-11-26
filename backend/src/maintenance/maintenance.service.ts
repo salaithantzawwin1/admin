@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.service';
 import { NumberingService } from '../numbering/numbering.service';
 import { Actor } from '../org/org.service';
+import { maskSupplierName } from '../procurement/ap-visibility';
 
 /** §14 — what kind of work the record describes. */
 export const MAINTENANCE_TYPES = [
@@ -49,8 +50,12 @@ export class MaintenanceService {
 
   // ---------- service records (§13/§14) ----------
 
-  /** Records list, newest first; `assetId` scopes it to one unit's history. */
-  async list(filters: { assetId?: string; type?: string; from?: string; to?: string }) {
+  /**
+   * Records list, newest first; `assetId` scopes it to one unit's history.
+   * `maskSupplier` hides the service vendor — GLG requires FINANCE to read the
+   * history without learning which supplier did the work (ap-visibility.ts).
+   */
+  async list(filters: { assetId?: string; type?: string; from?: string; to?: string }, maskSupplier = false) {
     const where: any = {};
     if (filters.assetId) where.assetId = filters.assetId;
     if (filters.type) {
@@ -67,7 +72,7 @@ export class MaintenanceService {
         ...(lt ? { lt: new Date((lt as Date).getTime() + 24 * 3600 * 1000) } : {}),
       };
     }
-    return this.prisma.maintenanceRecord.findMany({
+    const rows = await this.prisma.maintenanceRecord.findMany({
       where,
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
       include: {
@@ -76,9 +81,11 @@ export class MaintenanceService {
         createdBy: { select: { username: true } },
       },
     });
+    if (maskSupplier) rows.forEach((row) => row.vendor && maskSupplierName({ supplier: row.vendor }));
+    return rows;
   }
 
-  async detail(id: string) {
+  async detail(id: string, maskSupplier = false) {
     const row = await this.prisma.maintenanceRecord.findUnique({
       where: { id },
       include: {
@@ -88,6 +95,7 @@ export class MaintenanceService {
       },
     });
     if (!row) throw new NotFoundException('Maintenance record not found');
+    if (maskSupplier && row.vendor) maskSupplierName({ supplier: row.vendor });
     return { ...row, costTotal: this.totalOf(row) };
   }
 

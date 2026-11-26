@@ -5,7 +5,9 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { MAINTENANCE_STATUSES, MAINTENANCE_TYPES, MaintenanceService } from './maintenance.service';
+import type { Request } from 'express';
 import { Actor } from '../org/org.service';
+import { hidesSupplier } from '../procurement/ap-visibility';
 
 // ---------- §13/§14 maintenance record (service history) ----------
 
@@ -87,12 +89,13 @@ export class MaintenanceController {
   @Get('records')
   @RequirePermissions(PERMISSIONS.MAINTENANCE_READ)
   list(
+    @Req() req: Request,
     @Query('assetId') assetId?: string,
     @Query('type') type?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    return this.maintenance.list({ assetId, type, from, to });
+    return this.maintenance.list({ assetId, type, from, to }, hidesSupplier(req));
   }
 
   /** Overdue / due-soon counts for the page header tile. */
@@ -104,8 +107,8 @@ export class MaintenanceController {
 
   @Get('records/:id')
   @RequirePermissions(PERMISSIONS.MAINTENANCE_READ)
-  detail(@Param('id') id: string) {
-    return this.maintenance.detail(id);
+  detail(@Param('id') id: string, @Req() req: Request) {
+    return this.maintenance.detail(id, hidesSupplier(req));
   }
 
   @Post('records')
