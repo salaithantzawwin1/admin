@@ -34,3 +34,9 @@ export function maskSupplierName(row: { supplier: { name: string } }): void {
 export function maskBillNumber(row: { supplierInvoiceNumber: string }): void {
   row.supplierInvoiceNumber = MASKED_BILL_NUMBER;
 }
+
+/** Both identity fields a bill/payment row carries: vendor name + vendor bill no. */
+export function maskVendorFields(row: { supplier: { name: string }; supplierInvoiceNumber: string }): void {
+  maskSupplierName(row);
+  maskBillNumber(row);
+}

@@ -4,7 +4,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
 import { csvCell } from '../util/csv';
-import { maskBillNumber, maskSupplierName } from './ap-visibility';
+import { maskSupplierName, maskVendorFields } from './ap-visibility';
 
 export const PAYMENT_METHODS = ['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'] as const;
 
@@ -138,12 +138,7 @@ export class PaymentsService {
         if (ad !== bd) return ad - bd;
         return a.invoiceDate.getTime() - b.invoiceDate.getTime();
       });
-    if (maskVendor) {
-      for (const item of outstanding) {
-        maskSupplierName(item);
-        maskBillNumber(item);
-      }
-    }
+    if (maskVendor) outstanding.forEach(maskVendorFields);
     const totals = outstanding.reduce(
       (s, r) => ({ total: s.total + r.total, paid: s.paid + r.paid, balance: s.balance + r.balance }),
       { total: 0, paid: 0, balance: 0 },

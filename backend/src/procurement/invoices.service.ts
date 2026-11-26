@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
-import { maskSupplierName } from './ap-visibility';
+import { maskVendorFields } from './ap-visibility';
 
 export interface InvoiceItemInput {
   description: string;
@@ -63,7 +63,7 @@ export class InvoicesService {
     private audit: AuditService,
   ) {}
 
-  async list(params: { page: number; pageSize: number; status?: string }, maskSupplier = false) {
+  async list(params: { page: number; pageSize: number; status?: string }, maskVendor = false) {
     const where = params.status ? { status: params.status } : undefined;
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.invoice.count({ where }),
@@ -79,11 +79,11 @@ export class InvoicesService {
         },
       }),
     ]);
-    if (maskSupplier) rows.forEach(maskSupplierName);
+    if (maskVendor) rows.forEach(maskVendorFields);
     return { items: rows, total, page: params.page, pageSize: params.pageSize };
   }
 
-  async byId(id: string, maskSupplier = false) {
+  async byId(id: string, maskVendor = false) {
     const inv = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
@@ -104,7 +104,7 @@ export class InvoicesService {
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
-    if (maskSupplier) maskSupplierName(inv);
+    if (maskVendor) maskVendorFields(inv);
     return inv;
   }
 
