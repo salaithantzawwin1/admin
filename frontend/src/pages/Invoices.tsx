@@ -737,7 +737,7 @@ function InvoiceAttachments({
           {items.map((a) => (
             <li key={a.id} className="flex flex-wrap items-center gap-2 py-2 text-sm">
               <span className="text-gray-800 break-all">{a.filename}</span>
-              <span className="text-xs text-gray-400">{(a.size / 1024).toFixed(0)} KB · {fmtDate(a.createdAt)}</span>
+              <span className="text-xs text-gray-400">{a.size < 1024 ? '<1 KB' : `${(a.size / 1024).toFixed(0)} KB`} · {fmtDate(a.createdAt)}</span>
               <span className="ml-auto flex gap-2">
                 <Button variant="ghost" onClick={() => void download(a)}>Download</Button>
                 {canManage && !posted && (
