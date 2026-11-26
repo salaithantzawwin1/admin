@@ -971,14 +971,25 @@ export class WorkflowService {
       const workflow = await this.workflowFor(request.docType as string, await this.amountFor(id, request.docType as string));
       const step = workflow?.steps.find((s) => s.level === request.currentLevel) ?? null;
       if (step) {
-        const holders = await this.prisma.userRole.findMany({
-          where: { role: { name: step.roleName }, user: { status: 'ACTIVE' } },
-          select: { userId: true },
-        });
-        for (const h of holders) {
-          if (h.userId === actor.userId) continue;
+        // Department Head steps belong to the requester's own department: only
+        // that head and the Administration office (which signs on their behalf)
+        // are told — other departments' heads never had this request anyway.
+        const holderIds: string[] = step.roleName === 'DEPARTMENT_HEAD'
+          ? [
+              ...(request.departmentId ? await this.departmentHeadUserIds(request.departmentId) : []),
+              ...(await this.prisma.userRole.findMany({
+                where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE' } },
+                select: { userId: true },
+              })).map((h) => h.userId),
+            ]
+          : (await this.prisma.userRole.findMany({
+              where: { role: { name: step.roleName }, user: { status: 'ACTIVE' } },
+              select: { userId: true },
+            })).map((h) => h.userId);
+        for (const userId of [...new Set(holderIds)]) {
+          if (userId === actor.userId) continue;
           await this.notifications.notify({
-            userId: h.userId, type: 'CANCELLED',
+            userId, type: 'CANCELLED',
             title: `Request ${request.docNumber} withdrawn by requester`,
             body: `${request.title} was cancelled while awaiting approval.`,
             link: `/requests/${id}`, requestId: id,
