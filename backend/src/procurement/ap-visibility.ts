@@ -5,8 +5,9 @@ import { PERMISSIONS } from '../auth/permissions';
 /**
  * GLG rule: FINANCE must not learn which supplier a purchase or a bill belongs
  * to. Masking happens in these API projections — the invoice register
- * (invoices.read) and the payment register / payables (payments.read) — so the
- * real identity never leaves the server.
+ * (invoices.read), the payment register / payables (payments.read) and an
+ * asset's PO provenance + cost ledger (assets.read) — so the real identity
+ * never leaves the server.
  *
  * procurement.read | procurement.manage is the full-supplier view; everyone
  * else keeps the amounts, statuses and match verdicts but not the supplier.

@@ -2,13 +2,14 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, Res, Upl
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiBearerAuth, ApiConsumes, ApiTags } from '@nestjs/swagger';
 import { IsArray, IsDateString, IsIn, IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import * as fs from 'fs';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { AssetsService } from './assets.service';
 import { Actor } from '../org/org.service';
+import { hidesSupplier } from '../procurement/ap-visibility';
 
 // ---------- VMS/AMS asset register DTOs (§15–16, §39–40) ----------
 
@@ -212,8 +213,8 @@ export class AssetsController {
 
   @Get(':id')
   @RequirePermissions(PERMISSIONS.ASSETS_READ)
-  detail(@Param('id') id: string) {
-    return this.assets.detail(id);
+  detail(@Param('id') id: string, @Req() req: Request) {
+    return this.assets.detail(id, hidesSupplier(req));
   }
 
   @Post()

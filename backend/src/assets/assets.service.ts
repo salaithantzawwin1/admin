@@ -11,6 +11,7 @@ import { Actor } from '../org/org.service';
 import { stripPhotoMetadata } from './photo-metadata';
 import { csvCell } from '../util/csv';
 import { sniffImageType as sniffImageTypeImpl } from '../util/image-sniff';
+import { maskSupplierName } from '../procurement/ap-visibility';
 
 const ASSET_STATUSES = ['ACTIVE', 'IN_STORAGE', 'MAINTENANCE', 'DISPOSED'] as const;
 
@@ -133,8 +134,13 @@ export class AssetsService {
     return rows.map((r) => this.withPhoto(r));
   }
 
-  /** One asset with its full movement history + procurement provenance (§39). */
-  async detail(id: string) {
+  /**
+   * One asset with its full movement history + procurement provenance (§39).
+   * `maskSupplier` hides the vendor behind the PO provenance and the cost
+   * ledger — GLG requires FINANCE to read asset costs without learning which
+   * supplier they were paid to (see procurement/ap-visibility.ts).
+   */
+  async detail(id: string, maskSupplier = false) {
     const asset = await this.prisma.asset.findUnique({
       where: { id },
       include: {
@@ -174,6 +180,14 @@ export class AssetsService {
       },
     });
     if (!asset) throw new NotFoundException('Asset not found');
+    if (maskSupplier) {
+      // the row shapes differ (a cost's supplier can be null, a PO's supplier
+      // selects the name only), so hand the helper the one field it swaps
+      for (const cost of asset.costs) if (cost.supplier) maskSupplierName({ supplier: cost.supplier });
+      for (const poItem of asset.poItems) {
+        if (poItem.purchaseOrder?.supplier) maskSupplierName({ supplier: poItem.purchaseOrder.supplier });
+      }
+    }
     // Total cost of ownership = what we paid for it + everything spent since.
     // Computed on read (never stored on the asset row) so a ledger correction
     // can never leave a stale total behind.
