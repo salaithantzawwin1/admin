@@ -7,7 +7,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { PAYMENT_METHODS, PaymentsService } from './payments.service';
-import { hidesVendor } from './ap-visibility';
+import { hidesSupplier } from './ap-visibility';
 
 class RecordPaymentDto {
   @IsString() invoiceId!: string;
@@ -38,7 +38,7 @@ export class PaymentsController {
     return this.payments.list({
       page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100),
       from, to, supplierId, status,
-    }, hidesVendor(req));
+    }, hidesSupplier(req));
   }
 
   /** Outstanding invoices (balance > 0, overdue first) — also the record-payment picker. */
@@ -50,7 +50,7 @@ export class PaymentsController {
     @Query('to') to?: string,
     @Query('supplierId') supplierId?: string,
   ) {
-    return this.payments.payables({ from, to, supplierId }, hidesVendor(req));
+    return this.payments.payables({ from, to, supplierId }, hidesSupplier(req));
   }
 
   /** CSV export of the register (§41-style) — must be declared BEFORE ':id'. */
@@ -62,7 +62,7 @@ export class PaymentsController {
     @Query('to') to?: string,
     @Res() res: Response = undefined as never,
   ) {
-    const body = await this.payments.csv({ from, to }, hidesVendor(req));
+    const body = await this.payments.csv({ from, to }, hidesSupplier(req));
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="payments-${new Date().toISOString().slice(0, 10)}.csv"`);
     res.send(body);
@@ -71,7 +71,7 @@ export class PaymentsController {
   @Get(':id')
   @RequirePermissions(PERMISSIONS.PAYMENTS_READ)
   byId(@Param('id') id: string, @Req() req: Request) {
-    return this.payments.byId(id, hidesVendor(req));
+    return this.payments.byId(id, hidesSupplier(req));
   }
 
   /** Finance records a payment against an APPROVED/POSTED invoice. */

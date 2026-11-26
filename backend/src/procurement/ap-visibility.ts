@@ -4,39 +4,30 @@ import { PERMISSIONS } from '../auth/permissions';
 
 /**
  * GLG rule: FINANCE must not learn which supplier a purchase or a bill belongs
- * to. Enforcement therefore lives in the API projection of every AP surface —
- * the invoice register (invoices.read) and the payment register / payables
- * (payments.read) — so the masked values are what leaves the server; the UI is
- * free to render them as they are.
+ * to. Masking happens in these API projections — the invoice register
+ * (invoices.read) and the payment register / payables (payments.read) — so the
+ * real identity never leaves the server.
  *
- * A caller holding procurement.read or procurement.manage has the full vendor
- * view. Everyone else (FINANCE, and MANAGEMENT today) gets the placeholder:
- * bill numbers, amounts, statuses and match verdicts stay, the vendor's
- * identity does not.
+ * procurement.read | procurement.manage is the full-supplier view; everyone
+ * else keeps the amounts, statuses and match verdicts but not the supplier.
  */
-const FULL_VENDOR_VIEW: string[] = [PERMISSIONS.PROCUREMENT_READ, PERMISSIONS.PROCUREMENT_MANAGE];
-
-export const MASKED_SUPPLIER_NAME = 'Supplier (hidden)';
-export const MASKED_BILL_NUMBER = 'Hidden';
+const FULL_SUPPLIER_VIEW = [PERMISSIONS.PROCUREMENT_READ, PERMISSIONS.PROCUREMENT_MANAGE];
+const MASKED_SUPPLIER = 'Supplier (hidden)';
+const MASKED_BILL_NUMBER = 'Hidden';
 
 /** True when this request must not receive supplier identity. */
-export function hidesVendor(req: Request): boolean {
+export function hidesSupplier(req: Request): boolean {
   const granted = grantedPermissions(req);
-  return !FULL_VENDOR_VIEW.some((code) => granted.includes(code));
+  return !FULL_SUPPLIER_VIEW.some((code) => granted.includes(code));
 }
 
-/** Swaps a row's supplier name for the placeholder (row keeps the supplier id). */
+/** Swaps a row's supplier name for the placeholder (the row keeps the supplier id). */
 export function maskSupplierName(row: { supplier: { name: string } }): void {
-  row.supplier.name = MASKED_SUPPLIER_NAME;
+  row.supplier.name = MASKED_SUPPLIER;
 }
 
-/** Swaps the vendor's own bill number for the placeholder. */
-export function maskBillNumber(row: { supplierInvoiceNumber: string }): void {
-  row.supplierInvoiceNumber = MASKED_BILL_NUMBER;
-}
-
-/** Both identity fields a bill/payment row carries: vendor name + vendor bill no. */
-export function maskVendorFields(row: { supplier: { name: string }; supplierInvoiceNumber: string }): void {
+/** Both identity fields a bill row carries: supplier name + the vendor's own bill no. */
+export function maskSupplierIdentity(row: { supplier: { name: string }; supplierInvoiceNumber: string }): void {
   maskSupplierName(row);
-  maskBillNumber(row);
+  row.supplierInvoiceNumber = MASKED_BILL_NUMBER;
 }

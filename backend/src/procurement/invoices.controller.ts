@@ -7,7 +7,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions, AnyPermission } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { InvoicesService } from './invoices.service';
-import { hidesVendor } from './ap-visibility';
+import { hidesSupplier } from './ap-visibility';
 
 class InvoiceItemDto {
   @IsString() @MinLength(1) @MaxLength(200) description!: string;
@@ -54,7 +54,7 @@ export class InvoicesController {
   ) {
     return this.invoices.list(
       { page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status },
-      hidesVendor(req),
+      hidesSupplier(req),
     );
   }
 
@@ -67,7 +67,7 @@ export class InvoicesController {
   @Get(':id')
   @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE], [PERMISSIONS.INVOICES_READ])
   detail(@Param('id') id: string, @Req() req: Request) {
-    return this.invoices.byId(id, hidesVendor(req));
+    return this.invoices.byId(id, hidesSupplier(req));
   }
 
   @Post()

@@ -4,7 +4,7 @@ import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
 import { csvCell } from '../util/csv';
-import { maskSupplierName, maskVendorFields } from './ap-visibility';
+import { maskSupplierIdentity, maskSupplierName } from './ap-visibility';
 
 export const PAYMENT_METHODS = ['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'] as const;
 
@@ -38,12 +38,12 @@ export class PaymentsService {
 
   /**
    * Payment register — filterable by range/supplier/invoice paymentStatus.
-   * `maskVendor` hides the supplier identity (see ap-visibility.ts).
+   * `maskSupplier` hides the supplier identity (see ap-visibility.ts).
    */
   async list(params: {
     page: number; pageSize: number;
     from?: string; to?: string; supplierId?: string; status?: string;
-  }, maskVendor = false) {
+  }, maskSupplier = false) {
     const where: any = {};
     if (params.supplierId) where.invoice = { supplierId: params.supplierId };
     if (params.status) {
@@ -79,11 +79,11 @@ export class PaymentsService {
         },
       }),
     ]);
-    if (maskVendor) rows.forEach((row) => maskSupplierName(row.invoice));
+    if (maskSupplier) rows.forEach((row) => maskSupplierName(row.invoice));
     return { items: rows, total, page: params.page, pageSize: params.pageSize };
   }
 
-  async byId(id: string, maskVendor = false) {
+  async byId(id: string, maskSupplier = false) {
     const row = await this.prisma.payment.findUnique({
       where: { id },
       include: {
@@ -92,13 +92,13 @@ export class PaymentsService {
       },
     });
     if (!row) throw new NotFoundException('Payment not found');
-    if (maskVendor) maskSupplierName(row.invoice);
+    if (maskSupplier) maskSupplierName(row.invoice);
     return row;
   }
 
   /** Invoices the UI can offer for "record payment": APPROVED/POSTED with a
    *  remaining balance — the payables shortlist itself. */
-  async payables(params: { from?: string; to?: string; supplierId?: string }, maskVendor = false) {
+  async payables(params: { from?: string; to?: string; supplierId?: string }, maskSupplier = false) {
     const where: any = { status: { in: PAYABLE_STATUSES } };
     if (params.supplierId) where.supplierId = params.supplierId;
     // `from`/`to` filter the payment register only. Outstanding money is not a
@@ -138,7 +138,7 @@ export class PaymentsService {
         if (ad !== bd) return ad - bd;
         return a.invoiceDate.getTime() - b.invoiceDate.getTime();
       });
-    if (maskVendor) outstanding.forEach(maskVendorFields);
+    if (maskSupplier) outstanding.forEach(maskSupplierIdentity);
     const totals = outstanding.reduce(
       (s, r) => ({ total: s.total + r.total, paid: s.paid + r.paid, balance: s.balance + r.balance }),
       { total: 0, paid: 0, balance: 0 },
@@ -236,10 +236,10 @@ export class PaymentsService {
   }
 
   /** §41-style CSV export of the register (respects from/to filters). */
-  async csv(filters: { from?: string; to?: string }, maskVendor = false) {
+  async csv(filters: { from?: string; to?: string }, maskSupplier = false) {
     const { items } = await this.list(
       { page: 1, pageSize: 100000, from: filters.from, to: filters.to },
-      maskVendor,
+      maskSupplier,
     );
     const esc = (v: unknown) => {
       return csvCell(v);
