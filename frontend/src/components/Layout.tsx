@@ -121,9 +121,16 @@ export function Layout() {
   });
   // pending Telegram join requests → badge on the Settings nav item
   const [pendingJoins, setPendingJoins] = useState(0);
+  // DRAFT purchase requests waiting for Administration's estimates → badge on
+  // the Procurement nav item, so the pricing queue is visible from every page
+  const [pricingQueue, setPricingQueue] = useState(0);
   const canSeeSettings = hasPermission('users.manage');
+  const canPrice = hasPermission('procurement.manage');
   const location = useLocation();
   const activePath = location.pathname;
+  /** Count badge for a nav item — 0 hides it. */
+  const navCount = (to: string) =>
+    to === '/procurement' ? pricingQueue : to === '/settings' ? pendingJoins : 0;
 
   const toggleGroup = (title: string) => {
     setCollapsedGroups((prev) =>
@@ -146,6 +153,26 @@ export function Layout() {
       clearInterval(t);
     };
   }, [canSeeSettings]);
+
+  // Pricing-queue badge: initial + 15s polling, paused when the tab is hidden;
+  // refetched on navigation so pricing a request clears the badge quickly.
+  useEffect(() => {
+    if (!canPrice) return;
+    let alive = true;
+    const poll = () => {
+      api<{ count: number }>('/procurement/pricing/count')
+        .then((r) => alive && setPricingQueue(Number(r?.count) || 0))
+        .catch(() => {});
+    };
+    poll();
+    const t = setInterval(() => {
+      if (!document.hidden) poll();
+    }, 15_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [canPrice, activePath]);
 
   // close the user menu when clicking outside
   useEffect(() => {
@@ -302,9 +329,9 @@ export function Layout() {
                       >
                         <span className="leading-none text-center text-base w-5">{item.icon}</span>
                         <span>{item.label}</span>
-                        {item.to === '/settings' && pendingJoins > 0 && (
+                        {navCount(item.to) > 0 && (
                           <span className="ml-auto inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-[18px] px-1">
-                            {pendingJoins}
+                            {navCount(item.to)}
                           </span>
                         )}
                       </NavLink>
@@ -388,12 +415,16 @@ export function Layout() {
                       {/* collapsed rail: the icon is the only identifier — make it larger */}
                       <span className={`leading-none text-center ${collapsed ? 'text-xl w-6' : 'text-base w-5'}`}>{item.icon}</span>
                       {!collapsed && <span>{item.label}</span>}
-                      {item.to === '/settings' && pendingJoins > 0 && (
+                      {navCount(item.to) > 0 && (
                         <span
                           className={`ml-auto inline-flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold ${collapsed ? 'absolute translate-x-3 -translate-y-3' : 'min-w-[18px] h-[18px] px-1'}`}
-                          title={`${pendingJoins} pending Telegram join request(s)`}
+                          title={
+                            item.to === '/procurement'
+                              ? `${navCount(item.to)} purchase request(s) awaiting price`
+                              : `${navCount(item.to)} pending Telegram join request(s)`
+                          }
                         >
-                          {pendingJoins}
+                          {navCount(item.to)}
                         </span>
                       )}
                     </NavLink>

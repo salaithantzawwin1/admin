@@ -209,6 +209,22 @@ export class ProcurementService {
   }
 
   /**
+   * How many PRs wait for Administration's estimates (DRAFT with a blank line).
+   * The sidebar badge polls this — a single COUNT, no document payload.
+   */
+  pricingQueueCount() {
+    return this.prisma.requestDocument.count({
+      where: {
+        docType: 'PURCHASE_REQUEST',
+        status: 'DRAFT',
+        purchaseRequest: {
+          items: { some: { OR: [{ estimatedUnitPrice: null }, { estimatedUnitPrice: { lte: 0 } }] } },
+        },
+      },
+    });
+  }
+
+  /**
    * One PR with its items — owner, procurement.read, or one of its approvers: an
    * approver must see the lines and prices the detail page shows, even without
    * the procurement.read the module normally requires.

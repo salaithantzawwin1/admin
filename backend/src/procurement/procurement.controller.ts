@@ -205,6 +205,13 @@ export class ProcurementController {
     });
   }
 
+  /** Sidebar badge: DRAFT PRs whose lines still have no estimate. */
+  @Get('pricing/count')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  async pricingCount() {
+    return { count: await this.procurement.pricingQueueCount() };
+  }
+
   @Get('requests/:requestId')
   async byRequest(@Req() req, @Param('requestId') requestId: string) {
     return this.procurement.byRequest(requestId, {
