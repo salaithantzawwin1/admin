@@ -535,7 +535,7 @@ export class ProcurementService {
           rfq: {
             include: {
               rfqVendors: { include: { supplier: { select: { id: true, name: true } } } },
-              quotations: { select: { id: true, supplier: { select: { name: true } } } },
+              quotations: { select: { id: true, quoteNumber: true, supplier: { select: { name: true } } } },
               comparison: { include: { recommendedSupplier: { select: { id: true, name: true } } } },
             },
           },

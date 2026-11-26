@@ -638,10 +638,12 @@ function SourcePrEditor({
           {busy ? 'Saving…' : 'Save link'}
         </Button>
       </div>
-      <p className={`text-xs mt-1 ${current ? 'text-gray-400' : 'text-orange-700'}`}>
-        {current
-          ? `Linked to ${current.request.docNumber} — the PO for it defaults to a vendor that quoted here.`
-          : 'Not linked: the PO for this request cannot default its supplier or prices from a quotation.'}
+      <p className={`text-xs mt-1 ${current || picked ? 'text-gray-400' : 'text-orange-700'}`}>
+        {picked !== (current?.requestId ?? '')
+          ? 'Save to change the linked PR.'
+          : current
+            ? `Linked to ${current.request.docNumber} — the PO for it defaults to a vendor that quoted here.`
+            : 'Not linked: the PO for this request cannot default its supplier or prices from a quotation.'}
       </p>
       {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
     </div>

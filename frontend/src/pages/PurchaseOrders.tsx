@@ -786,7 +786,8 @@ export default function PurchaseOrders() {
                 </div>
               )}
               <div className="p-3 space-y-2">
-              <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
+              {/* 13 tracks on md+: the 12 labelled columns plus the remove button */}
+              <div className="hidden md:grid md:grid-cols-[repeat(13,minmax(0,1fr))] gap-2 text-xs text-gray-500 px-1">
                 <div className="col-span-3">Receipt (Stock / Asset)</div>
                 <div className="col-span-3">Description *</div>
                 <div className="col-span-1">Qty *</div>
@@ -795,7 +796,7 @@ export default function PurchaseOrders() {
                 <div className="col-span-2">Account *</div>
               </div>
               {lines.map((l, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-start">
+                <div key={idx} className="grid grid-cols-12 md:grid-cols-[repeat(13,minmax(0,1fr))] gap-2 items-start">
                   <div className="col-span-12 md:col-span-3 space-y-1">
                     {/* One decision per line: the store (stock) or the asset register. */}
                     <div className="flex rounded-lg border border-gray-200 p-0.5 bg-gray-50" role="group" aria-label={`Receipt type for line ${idx + 1}`}>
