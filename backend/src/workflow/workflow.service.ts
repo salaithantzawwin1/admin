@@ -562,9 +562,14 @@ export class WorkflowService {
     // module status mirror (e.g. CarRequest.status follows the document)
     await this.mirrorStatus(request.docType as RequestDocType, id, 'PENDING_APPROVAL');
 
-    await this.notifyApprovers(id, firstLevel, 'SUBMITTED', `New request ${request.docNumber}`, `${request.title} awaits approval`);
-    // Telegram surface: bound Administration users get [Approve]/[Reject] buttons (optional hook)
-    await this.onSubmittedTelegram?.(id).catch(() => undefined);
+    // Administration's own paperwork carries no separate Administration sign-off
+    // — the document may already be APPROVED when this returns.
+    const signed = await this.autoSignAdministration(id);
+    if (signed.status === 'PENDING_APPROVAL') {
+      await this.notifyApprovers(id, signed.currentLevel, 'SUBMITTED', `New request ${request.docNumber}`, `${request.title} awaits approval`);
+      // Telegram surface: bound Administration users get [Approve]/[Reject] buttons (optional hook)
+      await this.onSubmittedTelegram?.(id).catch(() => undefined);
+    }
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -574,7 +579,89 @@ export class WorkflowService {
     });
 
     this.pushRequestUpdated(id);
-    return updated;
+    return signed;
+  }
+
+  /**
+   * Administration-department paperwork does not wait for Administration's own
+   * signature: when the requester holds the ADMINISTRATION role, each
+   * ADMINISTRATION step on their document is signed on their behalf (recorded
+   * as a normal APPROVE action with an explanatory comment), so the chain moves
+   * to the next independent role. An RFQ — whose only step is Administration —
+   * is therefore APPROVED the moment it is submitted, and an Administration
+   * officer's PR still needs Department Head / Finance / Management as before.
+   * Requesters without the ADMINISTRATION role are untouched, and the requester
+   * can still never sign a step they do not hold.
+   */
+  private async autoSignAdministration(requestId: string) {
+    for (;;) {
+      const doc = await this.prisma.requestDocument.findUnique({ where: { id: requestId } });
+      if (!doc) throw new NotFoundException('Request not found');
+      if (doc.status !== 'PENDING_APPROVAL') return doc;
+      const requesterId = doc.requesterId;
+      const requesterRoles = await this.userRoleNames(requesterId);
+      if (!requesterRoles.includes('ADMINISTRATION')) return doc;
+
+      const workflow = await this.workflowFor(doc.docType as string, await this.amountFor(requestId, doc.docType as string));
+      const step = workflow?.steps.find((s) => s.level === doc.currentLevel);
+      if (!step || step.roleName !== 'ADMINISTRATION') return doc;
+
+      const isLastLevel = doc.currentLevel >= doc.totalLevels;
+      const newStatus: WorkflowStatus = isLastLevel ? 'APPROVED' : 'PENDING_APPROVAL';
+      const nextLevel = isLastLevel ? doc.currentLevel : doc.currentLevel + 1;
+      const requester = await this.prisma.user.findUnique({ where: { id: requesterId }, select: { username: true } });
+      const actor: Actor = { userId: requesterId, username: requester?.username ?? 'requester' };
+      const signedLevel = doc.currentLevel;
+      const previousStatus = doc.status;
+
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const r = await tx.requestDocument.update({
+          where: { id: requestId },
+          data: { status: newStatus, currentLevel: nextLevel },
+        });
+        await tx.approvalAction.create({
+          data: {
+            requestId, level: signedLevel, approverId: requesterId,
+            action: isLastLevel ? 'FINAL_APPROVE' : 'APPROVE',
+            comment: 'Auto-approved — Administration department request needs no separate Administration sign-off',
+            previousStatus, newStatus,
+          },
+        });
+        await this.mirrorStatus(doc.docType as RequestDocType, requestId, newStatus, tx);
+        return r;
+      });
+
+      await this.audit.log({
+        userId: requesterId, username: actor.username,
+        action: isLastLevel ? 'REQUEST_FINAL_APPROVED' : 'REQUEST_APPROVED',
+        module: 'WORKFLOW', recordId: requestId,
+        oldValue: { status: previousStatus, level: signedLevel },
+        newValue: { status: newStatus, level: nextLevel, autoApproved: true },
+      });
+
+      if (isLastLevel) {
+        await this.notifications.notify({
+          userId: requesterId, type: 'FINAL_APPROVED',
+          title: `Request ${doc.docNumber} approved`,
+          body: 'Approved — Administration department requests need no separate Administration sign-off.',
+          link: `/requests/${requestId}`, requestId,
+        });
+        const hook = this.finalApproveHooks.get(doc.docType as RequestDocType);
+        if (hook) {
+          try {
+            await hook(requestId, actor);
+          } catch (e) {
+            this.logger.warn(`post-approval hook failed for ${doc.docNumber}: ${e instanceof Error ? e.message : e}`);
+          }
+        }
+        this.pushRequestUpdated(requestId);
+        return updated;
+      }
+
+      this.pushRequestUpdated(requestId);
+      // not the last step — read the document again and sign the next step if it is
+      // another Administration signature
+    }
   }
 
   async approve(id: string, comment: string | undefined, actor: Actor) {
@@ -654,7 +741,14 @@ export class WorkflowService {
         }
       }
     } else {
-      await this.notifyApprovers(id, nextLevel, 'SUBMITTED', `Request ${request.docNumber} needs approval (L${nextLevel})`, request.title);
+      // The next step may be Administration's own signature on Administration's
+      // own document — sign it and move on instead of notifying anyone.
+      const signed = await this.autoSignAdministration(id);
+      if (signed.status === 'PENDING_APPROVAL') {
+        await this.notifyApprovers(id, signed.currentLevel, 'SUBMITTED', `Request ${request.docNumber} needs approval (L${signed.currentLevel})`, request.title);
+      }
+      this.pushRequestUpdated(id);
+      return signed;
     }
 
     this.pushRequestUpdated(id); // approval flips the badge/status in every open tab
