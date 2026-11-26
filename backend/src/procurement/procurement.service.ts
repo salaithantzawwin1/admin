@@ -675,6 +675,11 @@ export class ProcurementService {
     const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
     if (dueDate && Number.isNaN(dueDate.getTime())) throw new BadRequestException('Invalid dueDate');
 
+    // An RFQ records that vendors were asked — it is not a document that waits
+    // for a signature. It is created APPROVED so it never enters an approval
+    // inbox, the badge count or the Approvals page; the approval trail keeps one
+    // SUBMIT entry so the record still says who raised it and when.
+    const now = new Date();
     const request = await this.prisma.requestDocument.create({
       data: {
         docNumber: await this.numbering.next('RFQ'),
@@ -683,6 +688,19 @@ export class ProcurementService {
         description: data.specification?.trim() || data.notes?.trim() || undefined,
         requesterId: actor.userId,
         departmentId: (await this.prisma.employee.findFirst({ where: { userId: actor.userId } }))?.departmentId,
+        status: 'APPROVED',
+        currentLevel: 1,
+        totalLevels: 1,
+        submittedAt: now,
+      },
+    });
+
+    await this.prisma.approvalAction.create({
+      data: {
+        requestId: request.id, level: 0, approverId: actor.userId,
+        action: 'SUBMIT',
+        comment: 'Recorded — an RFQ asks vendors for prices and needs no approval',
+        previousStatus: 'DRAFT', newStatus: 'APPROVED',
       },
     });
 
@@ -710,7 +728,7 @@ export class ProcurementService {
     return { ...request, rfq: { ...rfq, rfqVendors: createdVendors } };
   }
 
-  /** Edit an RFQ draft — only while the workflow document is still DRAFT. */
+  /** Edit an RFQ while the quotation round is open (not closed/cancelled/rejected). */
   async updateRfq(rfqId: string, data: {
     title?: string;
     specification?: string;
@@ -722,7 +740,9 @@ export class ProcurementService {
     const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
     if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
     if (request.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can edit the RFQ');
-    if (request.status !== 'DRAFT') throw new BadRequestException('Only DRAFT RFQs can be edited');
+    if (['CLOSED', 'CANCELLED', 'REJECTED'].includes(request.status)) {
+      throw new BadRequestException(`RFQ ${request.docNumber} is ${request.status.toLowerCase()} — it can no longer be edited`);
+    }
 
     const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
     if (dueDate && Number.isNaN(dueDate.getTime())) throw new BadRequestException('Invalid dueDate');
@@ -831,10 +851,10 @@ export class ProcurementService {
   }
 
   /**
-   * Remove a DRAFT RFQ together with its vendors, quotations, comparison and the
-   * workflow document that carries it. A document that entered the approval flow
-   * is a record, not a draft — close it instead — so an RFQ raised by mistake can
-   * be cleaned up without leaving a phantom row in every list.
+   * Remove an RFQ that has no quotations yet, together with its vendors and the
+   * workflow document that carries it. Once a vendor has answered, the RFQ is a
+   * record of that answer — close it instead — so an RFQ raised by mistake can
+   * still be cleaned up without leaving a phantom row in every list.
    */
   async deleteRfq(rfqId: string, actor: Actor) {
     const request = await this.prisma.requestDocument.findUnique({
@@ -851,10 +871,13 @@ export class ProcurementService {
       },
     });
     if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
-    if (request.status !== 'DRAFT') {
-      throw new ConflictException(`RFQ ${request.docNumber} is ${request.status} — only a DRAFT can be deleted (close the document instead)`);
-    }
     const rfq = request.rfq;
+    if (rfq.quotations.length || rfq.comparison) {
+      throw new ConflictException(`RFQ ${request.docNumber} has quotations recorded — close it instead of deleting it`);
+    }
+    if (['CLOSED', 'CANCELLED'].includes(request.status)) {
+      throw new ConflictException(`RFQ ${request.docNumber} is ${request.status.toLowerCase()} — it can no longer be deleted`);
+    }
     // children first: the decision row restricts its quotation, so it has to go
     // before the quotations the rest of the tree cascades from
     await this.prisma.$transaction([

@@ -300,7 +300,7 @@ export class ProcurementController {
     return this.procurement.closeRfq(rfqId, this.actor(req));
   }
 
-  /** Delete a DRAFT RFQ (audited). A submitted/approved RFQ is closed, never deleted. */
+  /** Delete an RFQ that has no quotations yet (audited). Once a vendor quoted, close it. */
   @Delete('rfqs/:rfqId')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
   deleteRfq(@Req() req, @Param('rfqId') rfqId: string) {

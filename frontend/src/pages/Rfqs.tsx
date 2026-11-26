@@ -9,9 +9,10 @@ import { toast } from '../components/Toast';
 
 // ---------------------------------------------------------------------------
 // RFQ / Quotation / Comparison (Procurement Design §11–14, phase P3/P4).
-// An RFQ is a workflow document (RFQ-…): it is created here as DRAFT, submitted
-// via the standard request engine, and carries the vendors asked (§11), their
-// quotations (§12) and the recorded comparison decision (§13–14).
+// An RFQ (RFQ-…) records that vendors were asked: it needs no approval, so it is
+// created already approved and carries the vendors asked (§11), their quotations
+// (§12) and the recorded comparison decision (§13–14). "Approved" reads as
+// "Recorded" here — there is no approver to wait for.
 // ---------------------------------------------------------------------------
 
 interface SupplierRef {
@@ -101,6 +102,8 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   CANCELLED: 'gray',
 };
 
+const statusLabel = (s: string) => (s === 'APPROVED' ? 'Recorded' : s);
+
 const fmtMoney = (n: number) => (n === undefined || n === null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
 const num = (v: string | number | null | undefined, fallback = 0) => (v === null || v === undefined || v === '' ? fallback : Number(v));
 
@@ -186,7 +189,7 @@ export default function Rfqs() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{r.status}</Badge>
+                    <Badge color={STATUS_COLORS[r.status] ?? 'gray'}>{statusLabel(r.status)}</Badge>
                   </td>
                   <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{fmtDate(r.createdAt)}</td>
                 </tr>
@@ -395,7 +398,7 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
     <Modal title={`${doc.docNumber} — RFQ`} onClose={onClose} error={error} xl>
       <div className="space-y-5">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge color={STATUS_COLORS[status] ?? 'gray'}>{status}</Badge>
+          <Badge color={STATUS_COLORS[status] ?? 'gray'}>{statusLabel(status)}</Badge>
           <span className="text-sm text-gray-600">{doc.title}</span>
           {(rfq?.dueDate) && <span className="text-xs text-gray-400">Quotation due: {fmtDate(rfq.dueDate)}</span>}
         </div>
@@ -409,21 +412,16 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
           <div className="text-sm whitespace-pre-wrap bg-gray-50 border border-gray-100 rounded-lg p-3">{rfq.specification}</div>
         )}
 
-        {/* workflow actions — the document lives on the request engine; approval itself happens on the Approvals page */}
+        {/* no approval step — the RFQ is recorded on creation; close it when the round ends */}
         <div className="flex flex-wrap gap-2">
-          {canManage && status === 'DRAFT' && (
-            <Button disabled={busy} onClick={() => act(() => api(`/requests/${doc.id}/submit`, { method: 'POST' }), 'RFQ submitted for approval')}>
-              Submit for Approval
-            </Button>
-          )}
           {canManage && status === 'APPROVED' && (
             <Button variant="ghost" disabled={busy} onClick={() => act(() => api(`/procurement/rfqs/${doc.id}/close`, { method: 'PATCH' }), 'RFQ closed')}>
               Close RFQ
             </Button>
           )}
-          {canManage && status === 'DRAFT' && (
+          {canManage && quotes.length === 0 && !['CLOSED', 'CANCELLED'].includes(status) && (
             <Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>
-              Delete draft
+              Delete RFQ
             </Button>
           )}
         </div>
@@ -431,8 +429,8 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
         {confirmDelete && (
           <ConfirmDialog
             title={`Delete ${doc.docNumber}?`}
-            description={`Removes the RFQ with its ${vendors.length} invited vendor(s) and ${quotes.length} quotation(s). Only a DRAFT can be deleted — an RFQ that entered approval is closed instead. This cannot be undone.`}
-            confirmLabel="Delete draft"
+            description={`Removes the RFQ with its ${vendors.length} invited vendor(s). Only an RFQ with no quotations recorded can be deleted — once a vendor has quoted, close it instead. This cannot be undone.`}
+            confirmLabel="Delete RFQ"
             variant="danger"
             onClose={() => setConfirmDelete(false)}
             onConfirm={async () => {

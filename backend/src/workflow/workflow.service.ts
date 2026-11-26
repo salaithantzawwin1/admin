@@ -631,11 +631,11 @@ export class WorkflowService {
    * signature: when the requester holds the ADMINISTRATION role, each
    * ADMINISTRATION step on their document is signed on their behalf (recorded
    * as a normal APPROVE action with an explanatory comment), so the chain moves
-   * to the next independent role. An RFQ — whose only step is Administration —
-   * is therefore APPROVED the moment it is submitted, and an Administration
-   * officer's PR still needs Department Head / Finance / Management as before.
-   * Requesters without the ADMINISTRATION role are untouched, and the requester
-   * can still never sign a step they do not hold.
+   * to the next independent role (an Administration officer's PR still needs
+   * Department Head / Finance / Management as before). RFQs are created
+   * APPROVED by procurement and never reach this path. Requesters without the
+   * ADMINISTRATION role are untouched, and the requester can still never sign a
+   * step they do not hold.
    */
   private async autoSignAdministration(requestId: string) {
     for (;;) {
