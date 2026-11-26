@@ -553,6 +553,7 @@ export class ProcurementService {
         department: { select: { id: true, name: true } },
         rfq: {
           include: {
+            purchaseRequest: { select: { requestId: true, request: { select: { docNumber: true } } } },
             rfqVendors: { include: { supplier: true }, orderBy: { priority: 'asc' } },
             quotations: { include: { supplier: true, items: { orderBy: { id: 'asc' } } }, orderBy: { quoteDate: 'desc' } },
             comparison: { include: { recommendedSupplier: true, recommendedQuote: { include: { items: true } } } },
@@ -576,10 +577,10 @@ export class ProcurementService {
   }
 
   /**
-   * Who quoted on the RFQ raised for this PR — the PO form defaults its supplier
-   * to them, so the §14 vendor decision is not re-decided by accident. The
-   * recommendation wins; with no recorded comparison, a lone quotation is still
-   * unambiguous. Buying elsewhere stays possible (the PO only pre-fills).
+   * The quotation the PO should start from — the §14 recommendation, or the only
+   * quotation on the RFQ. Its vendor becomes the default supplier and its lines
+   * the default unit prices, so what was quoted is what gets ordered. Both stay
+   * editable on the PO: buying elsewhere is still allowed.
    */
   async quotedSuppliersForPr(requestId: string) {
     const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId } });
@@ -588,25 +589,55 @@ export class ProcurementService {
       where: { purchaseRequestId: pr.id },
       orderBy: { createdAt: 'desc' },
       include: {
-        request: { select: { docNumber: true, status: true } },
-        comparison: { include: { recommendedSupplier: { select: { id: true, name: true } } } },
+        request: { select: { docNumber: true } },
+        comparison: {
+          include: { recommendedQuote: { include: { supplier: true, items: { orderBy: { id: 'asc' } } } } },
+        },
         quotations: {
           orderBy: { createdAt: 'desc' },
-          select: { quoteNumber: true, supplier: { select: { id: true, name: true } } },
+          include: { supplier: true, items: { orderBy: { id: 'asc' } } },
         },
       },
     });
-    if (!rfq) return { rfq: null, supplier: null, quoting: [] };
-    const quoting = rfq.quotations.map((q) => ({
-      id: q.supplier.id, name: q.supplier.name, quoteNumber: q.quoteNumber,
-    }));
-    const supplier = rfq.comparison?.recommendedSupplier
-      ?? (quoting.length === 1 ? quoting[0] : null);
+    if (!rfq) return { rfq: null, quote: null };
+    const quote = rfq.comparison?.recommendedQuote
+      ?? (rfq.quotations.length === 1 ? rfq.quotations[0] : null);
     return {
-      rfq: { id: rfq.id, docNumber: rfq.request.docNumber, status: rfq.request.status, decided: !!rfq.comparison },
-      supplier: supplier ? { id: supplier.id, name: supplier.name } : null,
-      quoting,
+      rfq: { docNumber: rfq.request.docNumber },
+      quote: quote
+        ? {
+            quoteNumber: quote.quoteNumber,
+            supplier: { id: quote.supplier.id, name: quote.supplier.name },
+            items: quote.items.map((i) => ({
+              description: i.description,
+              quantity: i.quantity,
+              unit: i.unit ?? null,
+              unitPrice: Number(i.unitPrice),
+            })),
+          }
+        : null,
     };
+  }
+
+  /**
+   * Point an existing RFQ at the PR it was raised for. Allowed after creation and
+   * submission because RFQs made before the link existed still need it, and it
+   * only feeds the PO form's defaults. '' unlinks.
+   */
+  async linkRfqSourcePr(rfqId: string, purchaseRequestId: string | undefined, actor: Actor) {
+    const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
+    if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
+    if (['CLOSED', 'CANCELLED', 'REJECTED'].includes(request.status)) {
+      throw new BadRequestException(`${request.docNumber} is ${request.status.toLowerCase()} — its source PR can no longer change`);
+    }
+    const prLink = await this.resolveSourcePr(purchaseRequestId || undefined);
+    await this.prisma.rfq.update({ where: { id: request.rfq.id }, data: { purchaseRequestId: prLink } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'RFQ_SOURCE_PR_LINKED', module: 'PROCUREMENT', recordId: rfqId,
+      newValue: { purchaseRequestId: prLink },
+    });
+    return this.byRfq(rfqId, { ...actor, canReadAll: true });
   }
 
   async createRfq(data: {

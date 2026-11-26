@@ -83,6 +83,8 @@ interface RfqRow {
     dueDate?: string | null;
     specification?: string | null;
     notes?: string | null;
+    /** the approved PR this RFQ asks vendors about (drives the PO defaults) */
+    purchaseRequest?: { requestId: string; request: { docNumber: string } } | null;
     rfqVendors?: RfqVendor[];
     quotations?: Quotation[];
     comparison?: RfqDecision | null;
@@ -255,13 +257,6 @@ function NewRfqModal({ onClose, prefillRequestId }: { onClose: () => void; prefi
         },
       });
       toast(`RFQ ${created.docNumber} created${vendorIds.length ? ` — ${vendorIds.length} vendor(s) invited` : ''}`);
-      // PR→RFQ traceability: note the source PR into the workflow description comment trail
-      if (sourcePr) {
-        await api(`/requests/${created.id}/comment`, {
-          method: 'POST',
-          body: { comment: `RFQ raised from approved PR (reference: ${sourcePr})` },
-        }).catch(() => undefined);
-      }
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -404,6 +399,12 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
           <span className="text-sm text-gray-600">{doc.title}</span>
           {(rfq?.dueDate) && <span className="text-xs text-gray-400">Quotation due: {fmtDate(rfq.dueDate)}</span>}
         </div>
+        <SourcePrEditor
+          rfqId={doc.id}
+          current={rfq?.purchaseRequest ?? null}
+          canEdit={canManage && !['CLOSED', 'CANCELLED', 'REJECTED'].includes(status)}
+          onDone={load}
+        />
         {rfq?.specification && (
           <div className="text-sm whitespace-pre-wrap bg-gray-50 border border-gray-100 rounded-lg p-3">{rfq.specification}</div>
         )}
@@ -564,6 +565,86 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
         </section>
       </div>
     </Modal>
+  );
+}
+
+/**
+ * The approved PR an RFQ was raised for. Editable while the RFQ is still open —
+ * RFQs created before the link existed can be pointed at their PR here, and the
+ * PO form then defaults to a vendor that quoted instead of asking again.
+ */
+function SourcePrEditor({
+  rfqId, current, canEdit, onDone,
+}: {
+  rfqId: string;
+  current: { requestId: string; request: { docNumber: string } } | null;
+  canEdit: boolean;
+  onDone: () => void;
+}) {
+  const [prs, setPrs] = useState<{ id: string; docNumber: string; title: string }[]>([]);
+  const [picked, setPicked] = useState(current?.requestId ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api<{ items: { id: string; docNumber: string; title: string }[] }>('/procurement/requests?status=APPROVED&pageSize=100')
+      .then((r) => setPrs(r.items))
+      .catch(() => setPrs([]));
+  }, []);
+
+  useEffect(() => { setPicked(current?.requestId ?? ''); }, [current?.requestId]);
+
+  if (!canEdit) {
+    if (!current) return null;
+    return (
+      <div className="text-sm text-gray-600">
+        Source PR: <span className="font-medium">{current.request.docNumber}</span>
+      </div>
+    );
+  }
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/procurement/rfqs/${rfqId}/source-pr`, {
+        method: 'PATCH',
+        body: { purchaseRequestId: picked },
+      });
+      toast(picked ? 'RFQ linked to its source PR' : 'Source PR link cleared');
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the link');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border border-gray-200 rounded-lg px-3 py-2">
+      <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+        <div className="flex-1 min-w-0">
+          <label htmlFor="rfq-source-pr" className="text-xs text-gray-500 block mb-1">
+            Source PR — the approved request this RFQ asks vendors about
+          </label>
+          <Select id="rfq-source-pr" value={picked} onChange={(e) => setPicked(e.target.value)}>
+            <option value="">Not linked</option>
+            {prs.map((p) => (
+              <option key={p.id} value={p.id}>{p.docNumber} — {p.title}</option>
+            ))}
+          </Select>
+        </div>
+        <Button disabled={busy || picked === (current?.requestId ?? '')} onClick={() => void save()}>
+          {busy ? 'Saving…' : 'Save link'}
+        </Button>
+      </div>
+      <p className={`text-xs mt-1 ${current ? 'text-gray-400' : 'text-orange-700'}`}>
+        {current
+          ? `Linked to ${current.request.docNumber} — the PO for it defaults to a vendor that quoted here.`
+          : 'Not linked: the PO for this request cannot default its supplier or prices from a quotation.'}
+      </p>
+      {error && <p className="text-xs text-red-600 mt-1">{error}</p>}
+    </div>
   );
 }
 

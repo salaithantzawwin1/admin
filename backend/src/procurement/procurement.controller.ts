@@ -62,6 +62,10 @@ class CreateRfqDto {
 
 class UpdateRfqDto extends CreateRfqDto {}
 
+class LinkRfqSourceDto {
+  @IsOptional() @IsString() purchaseRequestId?: string; // '' clears the link
+}
+
 /** Chart-of-accounts master data (Settings → Accounts). Code optional + unique; '' clears it. */
 class CreateAccountDto {
   @IsOptional() @IsString() @MaxLength(32) code?: string;
@@ -268,6 +272,13 @@ export class ProcurementController {
   @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
   updateRfq(@Req() req, @Param('rfqId') rfqId: string, @Body() body: UpdateRfqDto) {
     return this.procurement.updateRfq(rfqId, body, this.actor(req));
+  }
+
+  /** Link an RFQ that predates the PR link; '' unlinks it. */
+  @Patch('rfqs/:rfqId/source-pr')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  linkSourcePr(@Req() req, @Param('rfqId') rfqId: string, @Body() body: LinkRfqSourceDto) {
+    return this.procurement.linkRfqSourcePr(rfqId, body.purchaseRequestId, this.actor(req));
   }
 
   @Patch('rfqs/:rfqId/status')

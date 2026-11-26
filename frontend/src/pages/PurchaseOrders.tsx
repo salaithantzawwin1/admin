@@ -97,6 +97,30 @@ interface AccountOpt {
   name: string;
 }
 
+/** The quotation behind a PR: its vendor becomes the default supplier, its lines the default prices. */
+interface QuotedQuote {
+  quoteNumber: string;
+  supplier: { id: string; name: string };
+  items: { description: string; quantity: number; unit?: string | null; unitPrice: number }[];
+}
+
+interface QuotedForPr {
+  rfq: { docNumber: string } | null;
+  quote: QuotedQuote | null;
+}
+
+/**
+ * The price a PR line should start at: the vendor's quote when one covers the
+ * line (same description, else the same position in an equal-length quote),
+ * otherwise the estimate procurement set on the PR.
+ */
+function quotedUnitPrice(quote: QuotedQuote | null, line: PrLineDetail, index: number, lineCount: number) {
+  const key = (s: string) => s.trim().toLowerCase();
+  const match = quote?.items.find((q) => key(q.description) === key(line.description))
+    ?? (quote && quote.items.length === lineCount ? quote.items[index] : undefined);
+  return match && match.unitPrice > 0 ? match.unitPrice : null;
+}
+
 const PO_STATUS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
   DRAFT: 'gray',
   APPROVED: 'blue',
@@ -183,8 +207,10 @@ export default function PurchaseOrders() {
   const [supplierId, setSupplierId] = useState('');
   const [prId, setPrId] = useState('');
   const [prBusy, setPrBusy] = useState(false);
-  // "this supplier quoted on the RFQ raised for that PR" — shown, not enforced
-  const [supplierSource, setSupplierSource] = useState<{ name: string; rfq: string } | null>(null);
+  // the quotation behind the picked PR — shown, and changeable like everything else
+  const [quoteSource, setQuoteSource] = useState<{
+    rfq: string; quoteNumber: string; supplierId: string; supplierName: string;
+  } | null>(null);
   const [expectedDelivery, setExpectedDelivery] = useState('');
   const [purchaseType, setPurchaseType] = useState('NORMAL');
   const [purchaseReason, setPurchaseReason] = useState('');
@@ -251,7 +277,7 @@ export default function PurchaseOrders() {
   const openCreate = () => {
     setSupplierId('');
     setPrId('');
-    setSupplierSource(null);
+    setQuoteSource(null);
     setExpectedDelivery('');
     setPurchaseType('NORMAL');
     setPurchaseReason('');
@@ -324,23 +350,33 @@ export default function PurchaseOrders() {
 
   /**
    * Picking an approved PR copies its lines — description, quantity, unit and the
-   * price procurement set — so the PO starts from what was approved and the price
-   * is visible instead of being retyped. The account stays open: §17
-   * classification and the §9 budget check happen on the PO.
+   * agreed price — so the PO starts from what was approved and the price is
+   * visible instead of being retyped. The vendor's quotation wins over the PR
+   * estimate, because that is the price actually offered; the account stays open
+   * because §17 classification and the §9 budget check happen on the PO.
    */
   const pickPr = async (id: string) => {
     setPrId(id);
     if (!id) return;
     setPrBusy(true);
     try {
-      const r = await api<PrDetail>(`/procurement/requests/${id}`);
+      const [r, quoted] = await Promise.all([
+        api<PrDetail>(`/procurement/requests/${id}`),
+        api<QuotedForPr>(`/procurement/requests/${id}/quoted-suppliers`).catch(() => null),
+      ]);
       const items = r.purchaseRequest?.items ?? [];
       if (items.length === 0) {
         toast(`${r.docNumber} has no lines to copy`, 'error');
         return;
       }
-      setLines(
-        items.map((it) => ({
+      const quote = quoted?.quote ?? null;
+      let fromQuote = 0;
+      const picked: LineDraft[] = items.map((it, idx) => {
+        const quotedPrice = quotedUnitPrice(quote, it, idx, items.length);
+        if (quotedPrice !== null) fromQuote += 1;
+        const estimate = Number(it.estimatedUnitPrice);
+        const price = quotedPrice ?? (estimate > 0 ? estimate : null);
+        return {
           // a purchased item is a fixed asset until the buyer says otherwise; a
           // consumable line is flipped to 📦 Stock and pointed at a store item
           track: 'ASSET' as const,
@@ -348,26 +384,29 @@ export default function PurchaseOrders() {
           description: it.description,
           quantity: String(it.quantity),
           unit: it.unit ?? '',
-          unitPrice: Number(it.estimatedUnitPrice) > 0 ? String(Number(it.estimatedUnitPrice)) : '',
+          unitPrice: price === null ? '' : String(price),
           accountId: it.accountId ?? '',
-        })),
-      );
+        };
+      });
+      setLines(picked);
       // the vendor decision already taken on the RFQ (§14) follows the PR into
-      // the PO: pre-fill it, keep it changeable
-      const quoted = await api<{
-        rfq: { docNumber: string } | null;
-        supplier: { id: string; name: string } | null;
-      }>(`/procurement/requests/${id}/quoted-suppliers`).catch(() => null);
-      if (quoted?.supplier && quoted.rfq) {
-        setSupplierId(quoted.supplier.id);
-        setSupplierSource({ name: quoted.supplier.name, rfq: quoted.rfq.docNumber });
+      // the PO: pre-fill the supplier too, keep it changeable
+      if (quote && quoted?.rfq) {
+        setSupplierId(quote.supplier.id);
+        setQuoteSource({
+          rfq: quoted.rfq.docNumber,
+          quoteNumber: quote.quoteNumber,
+          supplierId: quote.supplier.id,
+          supplierName: quote.supplier.name,
+        });
       } else {
-        setSupplierSource(null);
+        setQuoteSource(null);
       }
-      const noPrice = items.filter((it) => !(Number(it.estimatedUnitPrice) > 0)).length;
+      const noPrice = picked.filter((l) => !l.unitPrice).length;
       toast(
         `${items.length} line${items.length === 1 ? '' : 's'} copied from ${r.docNumber}`
-          + (noPrice ? ` — ${noPrice} still need${noPrice === 1 ? 's' : ''} a price` : ''),
+          + (fromQuote ? ` — ${fromQuote} priced from ${quote!.supplier.name}'s quote` : '')
+          + (noPrice > 0 ? ` — ${noPrice} still need${noPrice === 1 ? 's' : ''} a price` : ''),
       );
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not load the PR lines', 'error');
@@ -685,54 +724,68 @@ export default function PurchaseOrders() {
       {/* ---------------- create PO ---------------- */}
       {createOpen && (
         <Modal onClose={() => setCreateOpen(false)} title="New purchase order" wide xl>
-          <div className="space-y-3">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="sm:col-span-2">
-                <label htmlFor="po-supplier" className="text-xs text-gray-500 block mb-1">Supplier *</label>
-                <Select id="po-supplier" value={supplierId} onChange={(e) => { setSupplierId(e.target.value); setSupplierSource(null); }}>
-                  <option value="">— pick a supplier —</option>
-                  {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </Select>
-                {supplierSource && (
-                  <div className="text-[11px] text-green-700 mt-1">
-                    ★ {supplierSource.name} quoted on {supplierSource.rfq} — you can still change the supplier.
-                  </div>
-                )}
-              </div>
-              <div>
-                <label htmlFor="po-expected" className="text-xs text-gray-500 block mb-1">Expected delivery</label>
-                <Input id="po-expected" type="date" value={expectedDelivery} onChange={(e) => setExpectedDelivery(e.target.value)} />
-              </div>
-              <div className="sm:col-span-3">
-                <label htmlFor="po-pr" className="text-xs text-gray-500 block mb-1">From approved PR (optional — copies its lines, quantities and prices)</label>
-                <Select id="po-pr" value={prId} onChange={(e) => void pickPr(e.target.value)} disabled={prBusy}>
-                  <option value="">— ad-hoc / direct purchase —</option>
-                  {approvedPrs.map((p) => <option key={p.id} value={p.id}>{p.docNumber}{p.title ? ` — ${p.title}` : ''}</option>)}
-                </Select>
-              </div>
-              <div>
-                <label htmlFor="po-type" className="text-xs text-gray-500 block mb-1">Purchase type (§36)</label>
-                <Select id="po-type" value={purchaseType} onChange={(e) => setPurchaseType(e.target.value)}>
-                  <option value="NORMAL">Normal</option>
-                  <option value="EMERGENCY">Emergency — reason required</option>
-                  <option value="DIRECT">Direct — reason required</option>
-                  <option value="PETTY_CASH">Petty cash</option>
-                </Select>
+          <div className="space-y-4">
+            <section className="rounded-xl border border-gray-200 p-3 space-y-3">
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Order details</div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label htmlFor="po-supplier" className="text-xs text-gray-500 block mb-1">Supplier *</label>
+                  <Select id="po-supplier" value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
+                    <option value="">— pick a supplier —</option>
+                    {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </Select>
+                  {quoteSource && quoteSource.supplierId === supplierId && (
+                    <div className="text-[11px] text-green-700 mt-1">
+                      ★ {quoteSource.supplierName} quoted on {quoteSource.rfq} — change it if this order goes elsewhere.
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <label htmlFor="po-expected" className="text-xs text-gray-500 block mb-1">Expected delivery</label>
+                  <Input id="po-expected" type="date" value={expectedDelivery} onChange={(e) => setExpectedDelivery(e.target.value)} />
+                </div>
+                <div className="sm:col-span-2">
+                  <label htmlFor="po-pr" className="text-xs text-gray-500 block mb-1">From approved PR — copies its lines, quantities and prices</label>
+                  <Select id="po-pr" value={prId} onChange={(e) => void pickPr(e.target.value)} disabled={prBusy}>
+                    <option value="">— ad-hoc / direct purchase —</option>
+                    {approvedPrs.map((p) => <option key={p.id} value={p.id}>{p.docNumber}{p.title ? ` — ${p.title}` : ''}</option>)}
+                  </Select>
+                  <p className="text-[11px] text-gray-400 mt-1">
+                    {prBusy
+                      ? 'Loading the PR and its quotations…'
+                      : 'Quotations recorded on the RFQ raised for that PR supply the supplier and the unit prices.'}
+                  </p>
+                </div>
+                <div>
+                  <label htmlFor="po-type" className="text-xs text-gray-500 block mb-1">Purchase type (§36)</label>
+                  <Select id="po-type" value={purchaseType} onChange={(e) => setPurchaseType(e.target.value)}>
+                    <option value="NORMAL">Normal</option>
+                    <option value="EMERGENCY">Emergency — reason required</option>
+                    <option value="DIRECT">Direct — reason required</option>
+                    <option value="PETTY_CASH">Petty cash</option>
+                  </Select>
+                </div>
               </div>
               {(purchaseType === 'EMERGENCY' || purchaseType === 'DIRECT') && (
-                <div className="sm:col-span-2">
+                <div>
                   <label htmlFor="po-type-reason" className="text-xs text-gray-500 block mb-1">Reason for {purchaseType} purchase * (audited exception path)</label>
                   <Textarea id="po-type-reason" rows={2} placeholder="Why is the normal approval chain bypassed?" value={purchaseReason} onChange={(e) => setPurchaseReason(e.target.value)} />
                 </div>
               )}
-            </div>
+            </section>
 
-        {/* line items — pick an inventory item only for stock (consumable) goods */}
-            <div className="border border-gray-200 rounded-lg p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Items</div>
-                <span className="text-xs text-gray-400">Stock lines post stock on GRN · Asset lines create an AST record</span>
+            {/* line items — pick an inventory item only for stock (consumable) goods */}
+            <section className="rounded-xl border border-gray-200">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-gray-100 bg-gray-50/60 rounded-t-xl">
+                <div className="text-xs font-medium text-gray-600 uppercase tracking-wide">Items ({lines.length})</div>
+                <span className="text-[11px] text-gray-500">📦 Stock posts to the store on GRN · 🏷️ Asset registers an AST record</span>
               </div>
+              {quoteSource && (
+                <div className="mx-3 mt-3 rounded-lg bg-green-50 border border-green-100 px-3 py-2 text-[11px] text-green-800">
+                  Unit prices filled from {quoteSource.rfq} quote #{quoteSource.quoteNumber} ({quoteSource.supplierName}). Edit any line if this order differs.
+                </div>
+              )}
+              <div className="p-3 space-y-2">
               <div className="hidden md:grid grid-cols-12 gap-2 text-xs text-gray-500 px-1">
                 <div className="col-span-3">Receipt (Stock / Asset)</div>
                 <div className="col-span-3">Description *</div>
@@ -800,15 +853,11 @@ export default function PurchaseOrders() {
                   <div className="col-span-3 md:col-span-1 flex justify-end">
                     <Button variant="danger" title={`Remove line ${idx + 1}`} onClick={() => setLines((ls) => ls.filter((_, i) => i !== idx))} disabled={lines.length <= 1}>✕</Button>
                   </div>
-                  {!l.inventoryItemId && (
+                  {l.track === 'STOCK' && !l.inventoryItemId && (
                     <div className="col-span-12 -mt-1">
                       <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <span className={l.track === 'ASSET' ? 'text-orange-700' : 'text-gray-500'}>
-                          {l.track === 'ASSET'
-                            ? '🏷️ Asset line — the GRN registers it in the asset register; nothing enters stock.'
-                            : '📦 Stock line — pick the store item, or create one here.'}
-                        </span>
-                        {canCreateItems && l.track === 'STOCK' && (
+                        <span className="text-gray-500">No stock item yet — pick one above, or create it here.</span>
+                        {canCreateItems && (
                           <Button
                             variant="ghost"
                             onClick={() => {
@@ -857,11 +906,15 @@ export default function PurchaseOrders() {
                   )}
                 </div>
               ))}
-              <div className="flex items-center justify-between pt-1">
-                <Button variant="ghost" onClick={() => setLines((ls) => [...ls, emptyLine()])}>+ Add line</Button>
-                <div className="text-sm text-gray-600">Estimated total: <b>{money(estimatedTotal())}</b></div>
               </div>
-            </div>
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-t border-gray-100 bg-gray-50/60 rounded-b-xl">
+                <Button variant="ghost" onClick={() => setLines((ls) => [...ls, emptyLine()])}>+ Add line</Button>
+                <div className="text-sm text-gray-600">
+                  <span className="text-xs text-gray-400 mr-2">quantity × unit price</span>
+                  Total <b className="tabular-nums">{money(estimatedTotal())}</b>
+                </div>
+              </div>
+            </section>
 
             <div>
               <label htmlFor="po-note" className="text-xs text-gray-500 block mb-1">Note</label>
