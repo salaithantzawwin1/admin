@@ -28,6 +28,10 @@ export const PERMISSIONS = {
   LICENSES_MANAGE: 'licenses.manage',
   PROCUREMENT_READ: 'procurement.read',
   PROCUREMENT_MANAGE: 'procurement.manage',
+  // read-only AP visibility: vendor bills & the three-way match, WITHOUT the
+  // supplier identity (masked server-side) and without approve/post (those
+  // stay behind procurement.manage). See invoices.controller.ts.
+  INVOICES_READ: 'invoices.read',
   ASSETS_READ: 'assets.read',
   ASSETS_MANAGE: 'assets.manage',
   MAINTENANCE_READ: 'maintenance.read',

@@ -30,6 +30,17 @@ class CreateInvoiceDto {
   items!: InvoiceItemDto[];
 }
 
+/**
+ * True when the caller reaches the AP ledger through the read-only
+ * invoices.read leg alone — no procurement.read/manage. That caller (FINANCE)
+ * gets the bill numbers, amounts, statuses and match verdicts, but the supplier
+ * identity is masked in the projection so the GLG rule holds at the API layer.
+ */
+function isRestrictedReader(req: Request): boolean {
+  const granted = (req as Request & { userPermissions?: string[] }).userPermissions ?? [];
+  return !granted.includes(PERMISSIONS.PROCUREMENT_READ) && !granted.includes(PERMISSIONS.PROCUREMENT_MANAGE);
+}
+
 @ApiBearerAuth()
 @ApiTags('invoices')
 @UseGuards(JwtAuthGuard)
@@ -38,14 +49,23 @@ export class InvoicesController {
   constructor(private invoices: InvoicesService) {}
 
   // The AP ledger carries supplier names + amounts, so the gate mirrors the
-  // sidebar exactly (procurement.read | procurement.manage). The inventory.read
-  // leg was the same bypass class as the /inventory/suppliers alias: every
-  // default role holds inventory.read, so revoking procurement.read for FINANCE
-  // in the matrix still leaked every invoice through this route.
+  // sidebar exactly (procurement.read | procurement.manage), plus the read-only
+  // invoices.read (FINANCE). The inventory.read leg was the same bypass class as
+  // the /inventory/suppliers alias: every default role holds inventory.read, so
+  // revoking procurement.read for FINANCE in the matrix still leaked every
+  // invoice through this route.
   @Get()
-  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
-  list(@Query('page') page = '1', @Query('pageSize') pageSize = '20', @Query('status') status?: string) {
-    return this.invoices.list({ page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status });
+  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE], [PERMISSIONS.INVOICES_READ])
+  list(
+    @Req() req: Request,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+    @Query('status') status?: string,
+  ) {
+    return this.invoices.list(
+      { page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status },
+      { maskSupplier: isRestrictedReader(req) },
+    );
   }
 
   @Get('recalc/:id')
@@ -55,9 +75,9 @@ export class InvoicesController {
   }
 
   @Get(':id')
-  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
-  detail(@Param('id') id: string) {
-    return this.invoices.byId(id);
+  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE], [PERMISSIONS.INVOICES_READ])
+  detail(@Param('id') id: string, @Req() req: Request) {
+    return this.invoices.byId(id, { maskSupplier: isRestrictedReader(req) });
   }
 
   @Post()

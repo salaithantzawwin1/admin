@@ -44,9 +44,10 @@ const navGroups = [
       { to: '/procurement', label: 'Procurement', icon: '🛒', show: () => hasPermission('procurement.read') || hasPermission('procurement.manage') || hasPermission('requests.create') },
       { to: '/purchase-orders', label: 'Purchase Orders', icon: '🧾', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
       { to: '/rfqs', label: 'RFQ / Quotations', icon: '📨', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
-      // mirrors the backend gate on GET /invoices (procurement.* only) —
+      // mirrors the backend gate on GET /invoices (procurement.*, or the
+      // read-only invoices.read whose API projection hides the supplier) —
       // inventory.read must not reveal the AP ledger (supplier names + amounts)
-      { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') },
+      { to: '/invoices', label: 'Invoices', icon: '🧮', show: () => hasPermission('procurement.manage') || hasPermission('procurement.read') || hasPermission('invoices.read') },
       { to: '/purchase-reports', label: 'Purchase Reports', icon: '📊', show: () => hasPermission('procurement.read') },
     ],
   },

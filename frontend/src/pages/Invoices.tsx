@@ -114,8 +114,10 @@ const emptyLine = (): LineDraft => ({ description: '', quantity: '1', unit: '', 
 
 export default function Invoices() {
   const canManage = hasPermission('procurement.manage');
-  // mirrors the backend gate on GET /invoices (procurement.read | manage)
-  const canViewInvoices = hasPermission('procurement.read') || hasPermission('procurement.manage');
+  // full AP view (supplier visible, transitions available) — mirrors the
+  // procurement.* gates; invoices.read alone gets the read-only, masked view
+  const canSeeSupplier = hasPermission('procurement.read') || canManage;
+  const canViewInvoices = canSeeSupplier || hasPermission('invoices.read');
   // a 403 on the list call means the server now enforces a revocation the
   // stored session has not caught up with yet (stale tab) — lock card, not an
   // empty "No invoices yet" table
@@ -198,7 +200,11 @@ export default function Invoices() {
     <div>
       <PageHeader
         title="Invoices"
-        subtitle="Vendor bills with three-way matching (§23) — controls: GRN check, PO amount, duplicate bill"
+        subtitle={
+          canSeeSupplier
+            ? 'Vendor bills with three-way matching (§23) — controls: GRN check, PO amount, duplicate bill'
+            : 'Read-only AP view — supplier identity is hidden and approval/posting stays with Procurement'
+        }
         actions={canManage ? <Button onClick={() => setCreateOpen(true)}>+ New invoice</Button> : undefined}
       />
 
@@ -207,7 +213,7 @@ export default function Invoices() {
         <Card className="mb-5 p-8 text-center">
           <div className="text-3xl mb-2">🔒</div>
           <p className="text-sm text-gray-700 font-medium">You do not have permission to view invoices.</p>
-          <p className="text-xs text-gray-400 mt-1">"View invoices" requires the Procurement permission, which was revoked from your role in the RBAC permission matrix.</p>
+          <p className="text-xs text-gray-400 mt-1">"View invoices" requires the Procurement or Invoices (AP) permission, which was revoked from your role in the RBAC permission matrix.</p>
         </Card>
       )}
 

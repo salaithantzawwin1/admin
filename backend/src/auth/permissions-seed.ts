@@ -26,7 +26,10 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
   // GLG ERP §W1: FINANCE records/edits payments (payments.manage) and reads
   // everything payables; MANAGEMENT only reads the register — Administration
   // deliberately does NOT get payments.* (invoices but never marks them paid).
-  FINANCE: ['announcements.read', 'inventory.read', 'suppliers.read', 'procurement.read', 'assets.read', 'maintenance.read', 'pettycash.read', 'pettycash.manage', 'payments.read', 'payments.manage'],
+  // invoices.read → read-only vendor bills for the AP desk; the supplier is
+  // masked in the API projection while procurement.read stays denied, so the
+  // GLG "Finance must not see supplier names" rule still holds.
+  FINANCE: ['announcements.read', 'inventory.read', 'suppliers.read', 'procurement.read', 'invoices.read', 'assets.read', 'maintenance.read', 'pettycash.read', 'pettycash.manage', 'payments.read', 'payments.manage'],
   SYSTEM_ADMIN: [], // superuser — every code is granted dynamically
 };
 
@@ -41,7 +44,9 @@ const DEFAULT_GRANTS: Record<string, string[]> = {
  * from the matrix — the matrix PATCH syncs this memory automatically.
  *
  * procurement.read was revoked the same way (2026-10-23, GLG requirement):
- * FINANCE must not see supplier names in POs/RFQs/Invoices.
+ * FINANCE must not see supplier names in POs/RFQs/Invoices. FINANCE reaches
+ * the AP ledger through invoices.read instead, whose projection masks the
+ * supplier name on the server.
  */
 const DENIED_BY_ROLE: Record<string, string[]> = {
   FINANCE: ['suppliers.read', 'procurement.read'],

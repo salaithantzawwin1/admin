@@ -39,6 +39,18 @@ const INVOICE_TRANSITIONS: Record<string, string[]> = {
 const PRICE_TOLERANCE = 0.011;
 
 /**
+ * Shown in place of the vendor's name to a read-only AP reader (invoices.read
+ * without procurement.read/manage) — GLG requires FINANCE to reconcile bills
+ * without seeing who the supplier is.
+ */
+export const MASKED_SUPPLIER_NAME = 'Supplier (hidden)';
+
+export interface InvoiceReadOptions {
+  /** mask the supplier identity down to its id (see MASKED_SUPPLIER_NAME) */
+  maskSupplier?: boolean;
+}
+
+/**
  * Procurement Phase 4 (roadmap R6, design §22–25): vendor invoices + the
  * three-way match.
  *
@@ -62,7 +74,7 @@ export class InvoicesService {
     private audit: AuditService,
   ) {}
 
-  async list(params: { page: number; pageSize: number; status?: string }) {
+  async list(params: { page: number; pageSize: number; status?: string }, opts: InvoiceReadOptions = {}) {
     const where = params.status ? { status: params.status } : undefined;
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.invoice.count({ where }),
@@ -78,10 +90,15 @@ export class InvoicesService {
         },
       }),
     ]);
-    return { items: rows, total, page: params.page, pageSize: params.pageSize };
+    return {
+      items: rows.map((row) => this.maskSupplier(row, opts)),
+      total,
+      page: params.page,
+      pageSize: params.pageSize,
+    };
   }
 
-  async byId(id: string) {
+  async byId(id: string, opts: InvoiceReadOptions = {}) {
     const inv = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
@@ -99,7 +116,19 @@ export class InvoicesService {
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
-    return inv;
+    return this.maskSupplier(inv, opts);
+  }
+
+  /**
+   * Server-side supplier masking for the read-only leg: the whole supplier
+   * object (contact, bank details, name) collapses to id + a placeholder. Done
+   * here, in the API projection, so the browser never receives the name.
+   */
+  private maskSupplier<T>(row: T, opts: InvoiceReadOptions): T {
+    if (!opts.maskSupplier) return row;
+    const supplier = (row as { supplier?: { id?: string } }).supplier;
+    if (!supplier) return row;
+    return { ...(row as object), supplier: { id: supplier.id, name: MASKED_SUPPLIER_NAME } } as T;
   }
 
   async create(data: CreateInvoiceInput, actor: Actor) {
