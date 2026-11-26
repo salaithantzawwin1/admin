@@ -4,7 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions, AnyPermission } from '../auth/permissions.guard';
+import { RequirePermissions, AnyPermission, grantedPermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { InvoicesService } from './invoices.service';
 
@@ -30,15 +30,17 @@ class CreateInvoiceDto {
   items!: InvoiceItemDto[];
 }
 
+/** Codes that carry the full AP view — supplier identity included. */
+const FULL_AP_VIEW = [PERMISSIONS.PROCUREMENT_READ, PERMISSIONS.PROCUREMENT_MANAGE];
+
 /**
- * True when the caller reaches the AP ledger through the read-only
- * invoices.read leg alone — no procurement.read/manage. That caller (FINANCE)
- * gets the bill numbers, amounts, statuses and match verdicts, but the supplier
- * identity is masked in the projection so the GLG rule holds at the API layer.
+ * invoices.read alone (FINANCE) gets bill numbers, amounts, statuses and match
+ * verdicts but not the supplier identity — the API swaps the name for a
+ * placeholder so the GLG rule holds before the response leaves the server.
  */
-function isRestrictedReader(req: Request): boolean {
-  const granted = (req as Request & { userPermissions?: string[] }).userPermissions ?? [];
-  return !granted.includes(PERMISSIONS.PROCUREMENT_READ) && !granted.includes(PERMISSIONS.PROCUREMENT_MANAGE);
+function hidesSupplier(req: Request): boolean {
+  const granted = grantedPermissions(req);
+  return !FULL_AP_VIEW.some((code) => granted.includes(code));
 }
 
 @ApiBearerAuth()
@@ -64,7 +66,7 @@ export class InvoicesController {
   ) {
     return this.invoices.list(
       { page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status },
-      { maskSupplier: isRestrictedReader(req) },
+      hidesSupplier(req),
     );
   }
 
@@ -77,7 +79,7 @@ export class InvoicesController {
   @Get(':id')
   @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE], [PERMISSIONS.INVOICES_READ])
   detail(@Param('id') id: string, @Req() req: Request) {
-    return this.invoices.byId(id, { maskSupplier: isRestrictedReader(req) });
+    return this.invoices.byId(id, hidesSupplier(req));
   }
 
   @Post()

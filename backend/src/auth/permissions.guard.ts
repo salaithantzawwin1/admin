@@ -10,6 +10,15 @@ export const RequirePermissions = (...perms: string[]) => SetMetadata(PERMISSION
 /** Declare alternate permission sets: any one set suffices (OR of ANDs). */
 export const AnyPermission = (...sets: string[][]) => SetMetadata(PERMISSIONS_KEY, sets);
 
+/**
+ * Permission codes the guard attached to this request. Handlers that shape
+ * their response by capability (e.g. invoices masking the supplier identity)
+ * read this instead of querying PermissionsService a second time.
+ */
+export function grantedPermissions(req: object): string[] {
+  return (req as { userPermissions?: string[] }).userPermissions ?? [];
+}
+
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector, private permissions: PermissionsService) {}

@@ -39,15 +39,15 @@ const INVOICE_TRANSITIONS: Record<string, string[]> = {
 const PRICE_TOLERANCE = 0.011;
 
 /**
- * Shown in place of the vendor's name to a read-only AP reader (invoices.read
- * without procurement.read/manage) — GLG requires FINANCE to reconcile bills
- * without seeing who the supplier is.
+ * Stands in for the vendor's name on the read-only AP leg (invoices.read
+ * without procurement.read/manage): GLG requires FINANCE to reconcile bills
+ * without seeing who the supplier is. Invoice rows only ever select the
+ * supplier's id and name, so hiding the identity is this one name swap.
  */
-export const MASKED_SUPPLIER_NAME = 'Supplier (hidden)';
+const MASKED_SUPPLIER_NAME = 'Supplier (hidden)';
 
-export interface InvoiceReadOptions {
-  /** mask the supplier identity down to its id (see MASKED_SUPPLIER_NAME) */
-  maskSupplier?: boolean;
+function maskSupplierName(row: { supplier: { name: string } }): void {
+  row.supplier.name = MASKED_SUPPLIER_NAME;
 }
 
 /**
@@ -74,7 +74,7 @@ export class InvoicesService {
     private audit: AuditService,
   ) {}
 
-  async list(params: { page: number; pageSize: number; status?: string }, opts: InvoiceReadOptions = {}) {
+  async list(params: { page: number; pageSize: number; status?: string }, maskSupplier = false) {
     const where = params.status ? { status: params.status } : undefined;
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.invoice.count({ where }),
@@ -90,19 +90,18 @@ export class InvoicesService {
         },
       }),
     ]);
-    return {
-      items: rows.map((row) => this.maskSupplier(row, opts)),
-      total,
-      page: params.page,
-      pageSize: params.pageSize,
-    };
+    if (maskSupplier) rows.forEach(maskSupplierName);
+    return { items: rows, total, page: params.page, pageSize: params.pageSize };
   }
 
-  async byId(id: string, opts: InvoiceReadOptions = {}) {
+  async byId(id: string, maskSupplier = false) {
     const inv = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
-        supplier: true,
+        // id + name only: the invoice screen never shows the vendor's contact
+        // details, and keeping them out of this payload means the read-only leg
+        // has nothing sensitive to mask beyond the name
+        supplier: { select: { id: true, name: true } },
         purchaseOrder: {
           select: {
             id: true, poNumber: true, status: true, orderDate: true,
@@ -116,19 +115,8 @@ export class InvoicesService {
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
-    return this.maskSupplier(inv, opts);
-  }
-
-  /**
-   * Server-side supplier masking for the read-only leg: the whole supplier
-   * object (contact, bank details, name) collapses to id + a placeholder. Done
-   * here, in the API projection, so the browser never receives the name.
-   */
-  private maskSupplier<T>(row: T, opts: InvoiceReadOptions): T {
-    if (!opts.maskSupplier) return row;
-    const supplier = (row as { supplier?: { id?: string } }).supplier;
-    if (!supplier) return row;
-    return { ...(row as object), supplier: { id: supplier.id, name: MASKED_SUPPLIER_NAME } } as T;
+    if (maskSupplier) maskSupplierName(inv);
+    return inv;
   }
 
   async create(data: CreateInvoiceInput, actor: Actor) {
