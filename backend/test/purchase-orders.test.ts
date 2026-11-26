@@ -203,7 +203,7 @@ async function main() {
     assert.strictEqual(prisma.__state.prismaOps.filter(([op]: any[]) => op === 'po.create').length, 0, 'a budget-blocked PO must not be written');
   });
 
-  await test('§16 machine: cannot receive against a DRAFT PO (Control 2), GRN needs SENT_TO_VENDOR', async () => {
+  await test('§16 machine: cannot receive against a DRAFT PO (Control 2), GRN needs an APPROVED PO', async () => {
     const prisma = makePrisma({
       po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'DRAFT', supplierId: 'sup-1' },
       poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 100, unitPrice: 8000, inventoryItemId: 'itm-1' }],
@@ -211,13 +211,23 @@ async function main() {
     const svc = makeService(prisma);
     await assert.rejects(
       () => svc.createGrn('po-1', { items: [{ poItemId: 'poi-1', receivedQty: 40, acceptedQty: 40 }] }, ACTOR),
-      /sent to the vendor/i,
+      /approved purchase order/i,
     );
+  });
+
+  await test('legacy SENT_TO_VENDOR rows can still be received (no data stranded)', async () => {
+    const prisma = makePrisma({
+      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'APPROVED', supplierId: 'sup-1' },
+      poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 1, unitPrice: 8000, inventoryItemId: 'itm-1' }],
+    });
+    const svc = makeService(prisma);
+    const res = await svc.createGrn('po-1', { items: [{ poItemId: 'poi-1', receivedQty: 1, acceptedQty: 1 }] }, ACTOR);
+    assert.strictEqual(res.poStatus, 'FULLY_RECEIVED');
   });
 
   await test('GRN line math: accepted + rejected must equal received', async () => {
     const prisma = makePrisma({
-      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'SENT_TO_VENDOR', supplierId: 'sup-1' },
+      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'APPROVED', supplierId: 'sup-1' },
       poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 100, unitPrice: 8000, inventoryItemId: 'itm-1' }],
     });
     const svc = makeService(prisma);
@@ -229,7 +239,7 @@ async function main() {
 
   await test('partial delivery §19: first GRN of 40 posts stock IN, PO → PARTIALLY_RECEIVED', async () => {
     const prisma = makePrisma({
-      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'SENT_TO_VENDOR', supplierId: 'sup-1' },
+      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'APPROVED', supplierId: 'sup-1' },
       poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 100, unitPrice: 8000, inventoryItemId: 'itm-1' }],
       balances: { 'itm-1': 12 },
     });
@@ -274,7 +284,7 @@ async function main() {
 
   await test('asset/service line (no inventoryItemId) posts NO stock but still records the GRN', async () => {
     const prisma = makePrisma({
-      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'SENT_TO_VENDOR', supplierId: 'sup-1' },
+      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'APPROVED', supplierId: 'sup-1' },
       poItems: [{ id: 'poi-1', description: 'Aircon maintenance service', quantity: 1, unitPrice: 250000, inventoryItemId: null }],
     });
     const svc = makeService(prisma);
@@ -339,15 +349,18 @@ async function main() {
     assert.strictEqual(approved.status, 'APPROVED');
   });
 
-  await test('§16 machine: DRAFT → APPROVED ok, then SENT_TO_VENDOR; illegal DRAFT → SENT_TO_VENDOR throws', async () => {
-    const prisma = makePrisma({ po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'DRAFT', supplierId: 'sup-1' } });
+  await test('§16 machine: DRAFT → APPROVED ok, then GRN straight away (no send step)', async () => {
+    const prisma = makePrisma({
+      po: { id: 'po-1', poNumber: 'PO-202610-0001', status: 'DRAFT', supplierId: 'sup-1' },
+      poItems: [{ id: 'poi-1', description: 'A4 paper', quantity: 10, unitPrice: 8000, inventoryItemId: 'itm-1' }],
+    });
     const svc = makeService(prisma);
-    await assert.rejects(() => svc.transition('po-1', 'send', ACTOR), /Cannot send a PO in status DRAFT/);
     const approved = await svc.transition('po-1', 'approve', ACTOR);
     assert.strictEqual(approved.status, 'APPROVED');
-    const sent = await svc.transition('po-1', 'send', ACTOR);
-    assert.strictEqual(sent.status, 'SENT_TO_VENDOR');
-    assert.ok(sent.sentToVendorAt instanceof Date, 'sentToVendorAt stamped');
+    // the send action is gone: no status stamp, no button, no API route
+    await assert.rejects(() => svc.transition('po-1', 'send' as never, ACTOR), /Unknown action/);
+    const res = await svc.createGrn('po-1', { items: [{ poItemId: 'poi-1', receivedQty: 10, acceptedQty: 10 }] }, ACTOR);
+    assert.strictEqual(res.poStatus, 'FULLY_RECEIVED');
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

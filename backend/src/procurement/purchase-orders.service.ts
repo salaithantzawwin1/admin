@@ -59,7 +59,10 @@ export const PO_ESTIMATE_TOLERANCE = 0.1;
 /** §16 status machine — which transitions are legal. */
 const PO_TRANSITIONS: Record<string, string[]> = {
   DRAFT: ['APPROVED', 'CANCELLED'],
-  APPROVED: ['SENT_TO_VENDOR', 'CANCELLED'],
+  // An approved PO is an order — goods may be received straight away. There is
+  // no "sent to vendor" stop: nothing was ever sent, the status only gated GRN.
+  APPROVED: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
+  // legacy rows only: POs stamped SENT_TO_VENDOR before the send step was removed
   SENT_TO_VENDOR: ['PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CANCELLED'],
   // CANCELLED: a part-delivered PO whose remainder the vendor will never ship
   // used to be stuck forever (no legal transition out of PARTIALLY_RECEIVED)
@@ -220,7 +223,7 @@ export class PurchaseOrdersService {
   /** §16 transition with guard checks (approve = Control 1 enforcement point for ad-hoc POs). */
   async transition(
     id: string,
-    action: 'approve' | 'send' | 'close' | 'cancel',
+    action: 'approve' | 'close' | 'cancel',
     actor: Actor,
     opts: { confirmOverEstimate?: boolean } = {},
   ) {
@@ -240,7 +243,6 @@ export class PurchaseOrdersService {
 
     const next: Record<string, { to: string; stamp?: string } | undefined> = {
       approve: { to: 'APPROVED' },
-      send: { to: 'SENT_TO_VENDOR', stamp: 'sentToVendorAt' },
       close: { to: 'CLOSED', stamp: 'closedAt' },
       cancel: { to: 'CANCELLED', stamp: 'cancelledAt' },
     };
@@ -335,9 +337,10 @@ export class PurchaseOrdersService {
       },
     });
     if (!po) throw new NotFoundException('Purchase order not found');
-    // Control 2 (§35): PO-required receiving — status must be past APPROVED
-    if (!['SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(po.status)) {
-      throw new ConflictException(`Receiving requires a PO sent to the vendor (current: ${po.status})`);
+    // Control 2 (§35): PO-required receiving — an approved PO can receive at once
+    // (SENT_TO_VENDOR is kept for rows stamped before the send step was removed)
+    if (!['APPROVED', 'SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(po.status)) {
+      throw new ConflictException(`Receiving requires an approved purchase order (current: ${po.status})`);
     }
     if (!data.items?.length) throw new BadRequestException('At least one received line is required');
 

@@ -89,13 +89,6 @@ export class PurchaseOrdersController {
     });
   }
 
-  @Post(':id/send')
-  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
-  send(@Param('id') id: string, @Req() req: Request) {
-    const user = req.user as { id: string; username: string };
-    return this.po.transition(id, 'send', { userId: user.id, username: user.username });
-  }
-
   @Post(':id/close')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
   close(@Param('id') id: string, @Req() req: Request) {

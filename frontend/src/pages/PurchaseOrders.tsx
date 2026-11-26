@@ -124,7 +124,6 @@ function quotedUnitPrice(quote: QuotedQuote | null, line: PrLineDetail, index: n
 const PO_STATUS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
   DRAFT: 'gray',
   APPROVED: 'blue',
-  SENT_TO_VENDOR: 'yellow',
   PARTIALLY_RECEIVED: 'orange',
   FULLY_RECEIVED: 'green',
   CLOSED: 'gray',
@@ -135,13 +134,12 @@ const PO_STATUS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | '
 const PO_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
   APPROVED: 'Approved',
-  SENT_TO_VENDOR: 'Sent to vendor',
   PARTIALLY_RECEIVED: 'Partially received',
   FULLY_RECEIVED: 'Fully received',
   CLOSED: 'Closed',
   CANCELLED: 'Cancelled',
 };
-const PO_STATUS_ORDER = ['DRAFT', 'APPROVED', 'SENT_TO_VENDOR', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CLOSED', 'CANCELLED'];
+const PO_STATUS_ORDER = ['DRAFT', 'APPROVED', 'PARTIALLY_RECEIVED', 'FULLY_RECEIVED', 'CLOSED', 'CANCELLED'];
 
 /** Structured 409 payload when a PO costs more than the PR estimate allows. */
 export interface EstimateOverrun {
@@ -630,7 +628,7 @@ export default function PurchaseOrders() {
   };
 
   const canRecordGrn = (po: PoRow) =>
-    canManage && ['SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(po.status);
+    canManage && ['APPROVED', 'PARTIALLY_RECEIVED'].includes(po.status);
 
   return (
     <div>
@@ -947,7 +945,7 @@ export default function PurchaseOrders() {
               <span className="text-sm text-gray-500">Ordered {fmtDate(detail.orderDate)}</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-gray-50 rounded-lg px-3 py-2 text-sm">
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 bg-gray-50 rounded-lg px-3 py-2 text-sm">
               <div>
                 <div className="text-xs text-gray-400">Order total</div>
                 <div className="font-semibold tabular-nums">{money(poTotal(detail.items))}</div>
@@ -961,10 +959,6 @@ export default function PurchaseOrders() {
               <div>
                 <div className="text-xs text-gray-400">Expected delivery</div>
                 <div>{detail.expectedDelivery ? fmtDate(detail.expectedDelivery) : '—'}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-400">Sent to vendor</div>
-                <div>{detail.sentToVendorAt ? fmtDate(detail.sentToVendorAt) : '—'}</div>
               </div>
             </div>
 
@@ -1025,10 +1019,9 @@ export default function PurchaseOrders() {
             {canManage && (
               <div className="flex flex-wrap gap-2 justify-end pt-2 border-t">
                 {detail.status === 'DRAFT' && <Button disabled={busy} onClick={() => transition(detail, 'approve')}>Approve</Button>}
-                {detail.status === 'APPROVED' && <Button disabled={busy} onClick={() => transition(detail, 'send')}>Send to vendor</Button>}
-                {['SENT_TO_VENDOR', 'PARTIALLY_RECEIVED'].includes(detail.status) && <Button disabled={busy} onClick={openGrn}>📥 Record GRN</Button>}
+                {['APPROVED', 'PARTIALLY_RECEIVED'].includes(detail.status) && <Button disabled={busy} onClick={openGrn}>📥 Record GRN</Button>}
                 {detail.status === 'FULLY_RECEIVED' && <Button disabled={busy} onClick={() => transition(detail, 'close')}>Close PO</Button>}
-                {['DRAFT', 'APPROVED', 'SENT_TO_VENDOR'].includes(detail.status) && (
+                {['DRAFT', 'APPROVED'].includes(detail.status) && (
                   <Button variant="danger" disabled={busy} onClick={() => transition(detail, 'cancel')}>Cancel PO</Button>
                 )}
               </div>
