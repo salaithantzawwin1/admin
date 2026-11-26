@@ -165,6 +165,9 @@ export class InvoicesService {
         supplierInvoiceNumber,
         supplierId: data.supplierId,
         status,
+        // a created-to-submit invoice was submitted now: stamp it so the
+        // register's submitted column is not blank until someone re-submits
+        submittedAt: status === 'SUBMITTED' ? new Date() : undefined,
         invoiceDate,
         dueDate: dueDate ?? undefined,
         purchaseOrderId: data.purchaseOrderId || undefined,
@@ -188,8 +191,15 @@ export class InvoicesService {
       include: { items: true },
     });
 
-    // a created-to-submit invoice computes its match immediately
-    if (status === 'SUBMITTED') await this.recomputeMatch(inv.id);
+    // a created-to-submit invoice computes its match immediately; return the
+    // row as it stands after that write (status verdict + submittedAt), not the
+    // stale pre-match snapshot the INSERT returned
+    let saved = inv;
+    if (status === 'SUBMITTED') {
+      await this.recomputeMatch(inv.id);
+      const fresh = await this.prisma.invoice.findUnique({ where: { id: inv.id }, include: { items: true } });
+      if (fresh) saved = fresh;
+    }
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -197,7 +207,7 @@ export class InvoicesService {
       module: 'PROCUREMENT', recordId: inv.id,
       newValue: { invoiceNumber: inv.invoiceNumber, supplier: supplier.name, supplierBillNo: supplierInvoiceNumber, total, items: items.length },
     });
-    return inv;
+    return saved;
   }
 
   /** §23 — recompute the three-way match for an invoice (persisted for the UI). */
