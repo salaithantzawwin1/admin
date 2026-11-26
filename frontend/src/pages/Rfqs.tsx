@@ -98,7 +98,8 @@ const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow'
   CANCELLED: 'gray',
 };
 
-const statusLabel = (s: string) => (s === 'OPEN' ? 'Open' : s);
+const statusLabel = (s: string) =>
+  s === 'OPEN' ? 'Open' : s === 'CLOSED' ? 'Closed' : s === 'CANCELLED' ? 'Cancelled' : s;
 
 const fmtMoney = (n: number) => (n === undefined || n === null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
 const num = (v: string | number | null | undefined, fallback = 0) => (v === null || v === undefined || v === '' ? fallback : Number(v));
