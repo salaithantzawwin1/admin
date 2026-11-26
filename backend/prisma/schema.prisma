@@ -77,7 +77,7 @@ model User {
   purchaseOrdersCreated  PurchaseOrder[]         @relation("PoCreatedBy")
   goodsReceiptsReceived  GoodsReceipt[]          @relation("GrnReceivedBy")
   invoicesCreated        Invoice[]               @relation("InvoiceCreatedBy")
-  rfqsCreated            Rfq[]                   @relation("RfqCreatedBy")
+  quotationRequestsRequested QuotationRequest[]  @relation("RfqCreatedBy")
   rfqVendorsCreated      RfqVendor[]             @relation("RfqVendorCreatedBy")
   quotationsCreated      Quotation[]             @relation("QuotationCreatedBy")
   quotationItemsCreated  QuotationItem[]         @relation("QuotationItemCreatedBy")
@@ -193,6 +193,7 @@ model Department {
   headEmployee Employee?         @relation("DeptHead", fields: [headEmployeeId], references: [id])
   employees    Employee[]        @relation("DeptEmployees")
   requestDocs  RequestDocument[]
+  quotationRequests QuotationRequest[]
   /// drivers assigned to this department (VMS §6 — fleet master data)
   drivers      Driver[]          @relation("DriverDepartment")
 
@@ -357,34 +358,44 @@ enum RequestDocType {
   RFQ
 }
 
-// ---------- Procurement Phase 5 (design §11–14, roadmap P3/P4): RFQ / Quotation / Comparison ----------
-// RFQ is a workflow document (RequestDocument, docType = RFQ); the RFQ row
-// carries the procurement fields, rfq_vendors tracks which suppliers were
-// asked, quotations are per-vendor answers and quotation_comparisons record
-// the Procurement Officer's recommendation + justification (§13-14).
-model Rfq {
+// ---------- Procurement Phase 5 (design §11–14, roadmap P3/P4): Quotation request / Quotation / Comparison ----------
+// A quotation request records that vendors were asked for prices. It is NOT a
+// workflow document: no approval step, no inbox/badge entry, no docType — its
+// own table carries the RFQ- number and an OPEN/CLOSED status. rfq_vendors,
+// quotations and quotation_comparisons keep their rfqId FKs (and row ids).
+enum QuotationRequestStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+model QuotationRequest {
   id            String    @id @default(uuid()) @db.Uuid
-  requestId     String    @unique @db.Uuid // link to RequestDocument (workflow)
-  // the approved PR this RFQ asks vendors about — lets the PO default to a
+  docNumber     String    @unique
+  title         String
+  description   String?
+  status        QuotationRequestStatus @default(OPEN)
+  // the approved PR this request asks vendors about — lets the PO default to a
   // vendor that actually quoted (§14 decision travels to the purchase)
   purchaseRequestId String? @db.Uuid
+  requestedById String    @db.Uuid
+  departmentId  String?   @db.Uuid
   requiredDate  DateTime?
   dueDate       DateTime? // quotation due date (design §11)
   specification String?
   notes         String?
-  createdById   String    @db.Uuid
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  request    RequestDocument      @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  createdBy  User                 @relation("RfqCreatedBy", fields: [createdById], references: [id])
-  purchaseRequest PurchaseRequest?    @relation("RfqForPr", fields: [purchaseRequestId], references: [id], onDelete: SetNull)
+  requestedBy User                 @relation("RfqCreatedBy", fields: [requestedById], references: [id])
+  department  Department?          @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  purchaseRequest PurchaseRequest? @relation("RfqForPr", fields: [purchaseRequestId], references: [id], onDelete: SetNull)
   rfqVendors RfqVendor[]
   quotations Quotation[]
   comparison QuotationComparison?
 
   @@index([purchaseRequestId])
-  @@map("rfqs")
+  @@map("quotation_requests")
 }
 
 model RfqVendor {
@@ -398,8 +409,8 @@ model RfqVendor {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  rfq        Rfq      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
-  supplier   Supplier @relation("RfqVendorSupplier", fields: [supplierId], references: [id], onDelete: Restrict)
+  rfq        QuotationRequest @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplier   Supplier         @relation("RfqVendorSupplier", fields: [supplierId], references: [id], onDelete: Restrict)
   createdBy  User     @relation("RfqVendorCreatedBy", fields: [createdById], references: [id])
 
   @@unique([rfqId, supplierId]) // invite a vendor once per RFQ
@@ -423,7 +434,7 @@ model Quotation {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  rfq           Rfq                   @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  rfq           QuotationRequest      @relation(fields: [rfqId], references: [id], onDelete: Cascade)
   supplier      Supplier              @relation("QuotationSupplier", fields: [supplierId], references: [id], onDelete: Restrict)
   items         QuotationItem[]
   createdBy     User                  @relation("QuotationCreatedBy", fields: [createdById], references: [id])
@@ -472,8 +483,8 @@ model QuotationComparison {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  rfq                 Rfq       @relation(fields: [rfqId], references: [id], onDelete: Cascade)
-  recommendedSupplier Supplier  @relation("ComparisonSupplier", fields: [recommendedSupplierId], references: [id], onDelete: Restrict)
+  rfq                 QuotationRequest @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  recommendedSupplier Supplier         @relation("ComparisonSupplier", fields: [recommendedSupplierId], references: [id], onDelete: Restrict)
   recommendedQuote    Quotation @relation("ComparisonQuote", fields: [recommendedQuoteId], references: [id], onDelete: Restrict)
   createdBy           User      @relation("ComparisonCreatedBy", fields: [createdById], references: [id])
 
@@ -566,7 +577,6 @@ model RequestDocument {
   supplierDrafts  SupplierPurchaseDraft[] @relation("SupplierDraftRequest")
   stockTxns       StockTransaction[]      @relation("StockTxRequest")
   purchaseRequest PurchaseRequest?
-  rfq             Rfq?
 
   @@index([status])
   @@index([requesterId])
@@ -1866,7 +1876,7 @@ model PurchaseRequest {
   sourceSupplyRequest OfficeSupplyRequest? @relation("PrFromSupply", fields: [sourceSupplyRequestId], references: [requestId], onDelete: SetNull)
   items          PurchaseRequestItem[]
   purchaseOrders PurchaseOrder[]
-  rfqs           Rfq[] @relation("RfqForPr")
+  quotationRequests QuotationRequest[] @relation("RfqForPr")
 
   @@index([sourceSupplyRequestId])
 

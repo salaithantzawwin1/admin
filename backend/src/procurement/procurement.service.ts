@@ -7,8 +7,6 @@ import { normalizePurchaseType } from './purchase-types';
 import { PermissionsService } from '../auth/permissions.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { WorkflowService } from '../workflow/workflow.service';
-import * as fs from 'fs';
-import * as path from 'path';
 
 export interface PrItemInput {
   description: string;
@@ -40,9 +38,10 @@ export interface CreatePrInput {
  * Procurement — Purchase Request (design §5–7, phase P1) + RFQ/Quotation
  * (design §11–14, phase P3/P4).
  *
- * The approval side lives on RequestDocument (docType = PURCHASE_REQUEST |
- * RFQ, doc number PR-/RFQ-…, multi-level approval via the shared workflow
- * engine). This service carries the procurement-specific fields.
+ * The approval side lives on RequestDocument (docType = PURCHASE_REQUEST,
+ * doc number PR-…, multi-level approval via the shared workflow engine). A
+ * quotation request (RFQ-…) is its own record with no approval step. This
+ * service carries the procurement-specific fields for both.
  */
 @Injectable()
 export class ProcurementService {
@@ -527,61 +526,54 @@ export class ProcurementService {
     );
   }
 
-  // ---------- RFQ (design §11): Request for Quotation ----------
+  // ---------- Quotation request (design §11): "ask vendors for prices" ----------
   /**
-   * RFQ is a workflow document too (docType = 'RFQ'), so its approval runs on
-   * the existing engine. The RFQ row carries the procurement fields; RFQ
-   * vendors (which suppliers were asked) and per-vendor quotations attach for
-   * traceability (design §11-12).
+   * A quotation request is a record, not a workflow document: it lives in its own
+   * table with an RFQ- number and an OPEN/CLOSED status, so it never enters an
+   * approval inbox, the badge count or My Requests. The vendors asked
+   * (rfq_vendors), their quotations and the recorded decision keep their
+   * existing rfqId FKs and row ids.
    */
 
-  /** Lists RFQs — every vendor attempt the workflow exposed (purchasing view). */
+  /** Lists quotation requests (purchasing view). */
   async listRfqs(params: { page: number; pageSize: number }) {
-    const where = { docType: 'RFQ' as const };
     const [total, rows] = await this.prisma.$transaction([
-      this.prisma.requestDocument.count({ where }),
-      this.prisma.requestDocument.findMany({
-        where,
+      this.prisma.quotationRequest.count(),
+      this.prisma.quotationRequest.findMany({
         orderBy: { createdAt: 'desc' },
         skip: (params.page - 1) * params.pageSize,
         take: params.pageSize,
         include: {
-          requester: { select: { id: true, fullName: true } },
+          requestedBy: { select: { id: true, fullName: true } },
           department: { select: { id: true, name: true } },
-          rfq: {
-            include: {
-              rfqVendors: { include: { supplier: { select: { id: true, name: true } } } },
-              quotations: { select: { id: true, quoteNumber: true, supplier: { select: { name: true } } } },
-              comparison: { include: { recommendedSupplier: { select: { id: true, name: true } } } },
-            },
-          },
+          rfqVendors: { include: { supplier: { select: { id: true, name: true } } } },
+          quotations: { select: { id: true, quoteNumber: true, supplier: { select: { name: true } } } },
+          comparison: { include: { recommendedSupplier: { select: { id: true, name: true } } } },
         },
       }),
     ]);
-    return { items: rows, total, page: params.page, pageSize: params.pageSize };
+    // the screens read a flat row plus `rfq`; keep that shape with no workflow doc
+    const items = rows.map((r) => ({ ...r, requester: r.requestedBy, rfq: r }));
+    return { items, total, page: params.page, pageSize: params.pageSize };
   }
 
   async byRfq(rfqId: string, actor: Actor & { canReadAll?: boolean }) {
-    const request = await this.prisma.requestDocument.findUnique({
+    const rfq = await this.prisma.quotationRequest.findUnique({
       where: { id: rfqId },
       include: {
-        requester: { select: { id: true, fullName: true } },
+        requestedBy: { select: { id: true, fullName: true } },
         department: { select: { id: true, name: true } },
-        rfq: {
-          include: {
-            purchaseRequest: { select: { requestId: true, request: { select: { docNumber: true } } } },
-            rfqVendors: { include: { supplier: true }, orderBy: { priority: 'asc' } },
-            quotations: { include: { supplier: true, items: { orderBy: { id: 'asc' } } }, orderBy: { quoteDate: 'desc' } },
-            comparison: { include: { recommendedSupplier: true, recommendedQuote: { include: { items: true } } } },
-          },
-        },
+        purchaseRequest: { select: { requestId: true, request: { select: { docNumber: true } } } },
+        rfqVendors: { include: { supplier: true }, orderBy: { priority: 'asc' } },
+        quotations: { include: { supplier: true, items: { orderBy: { id: 'asc' } } }, orderBy: { quoteDate: 'desc' } },
+        comparison: { include: { recommendedSupplier: true, recommendedQuote: { include: { items: true } } } },
       },
     });
-    if (!request || request.docType !== 'RFQ') throw new NotFoundException('RFQ not found');
-    if (request.requesterId !== actor.userId && !actor.canReadAll) {
+    if (!rfq) throw new NotFoundException('RFQ not found');
+    if (rfq.requestedById !== actor.userId && !actor.canReadAll) {
       throw new ForbiddenException('Not your RFQ');
     }
-    return { ...request, rfq: request.rfq };
+    return { ...rfq, requester: rfq.requestedBy, rfq };
   }
 
   /** The RFQ's source PR, stored as purchase_requests.id (the FK's target). */
@@ -601,11 +593,10 @@ export class ProcurementService {
   async quotedSuppliersForPr(requestId: string) {
     const pr = await this.prisma.purchaseRequest.findUnique({ where: { requestId } });
     if (!pr) throw new NotFoundException('Purchase request not found');
-    const rfq = await this.prisma.rfq.findFirst({
+    const rfq = await this.prisma.quotationRequest.findFirst({
       where: { purchaseRequestId: pr.id },
       orderBy: { createdAt: 'desc' },
       include: {
-        request: { select: { docNumber: true } },
         comparison: {
           include: { recommendedQuote: { include: { supplier: true, items: { orderBy: { id: 'asc' } } } } },
         },
@@ -619,7 +610,7 @@ export class ProcurementService {
     const quote = rfq.comparison?.recommendedQuote
       ?? (rfq.quotations.length === 1 ? rfq.quotations[0] : null);
     return {
-      rfq: { docNumber: rfq.request.docNumber },
+      rfq: { docNumber: rfq.docNumber },
       quote: quote
         ? {
             quoteNumber: quote.quoteNumber,
@@ -641,13 +632,12 @@ export class ProcurementService {
    * only feeds the PO form's defaults. '' unlinks.
    */
   async linkRfqSourcePr(rfqId: string, purchaseRequestId: string | undefined, actor: Actor) {
-    const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
-    if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
-    if (['CLOSED', 'CANCELLED', 'REJECTED'].includes(request.status)) {
-      throw new BadRequestException(`${request.docNumber} is ${request.status.toLowerCase()} — its source PR can no longer change`);
+    const rfq = await this.getRfq(rfqId);
+    if (rfq.status !== 'OPEN') {
+      throw new BadRequestException(`${rfq.docNumber} is ${rfq.status.toLowerCase()} — its source PR can no longer change`);
     }
     const prLink = await this.resolveSourcePr(purchaseRequestId || undefined);
-    await this.prisma.rfq.update({ where: { id: request.rfq.id }, data: { purchaseRequestId: prLink } });
+    await this.prisma.quotationRequest.update({ where: { id: rfq.id }, data: { purchaseRequestId: prLink } });
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'RFQ_SOURCE_PR_LINKED', module: 'PROCUREMENT', recordId: rfqId,
@@ -675,60 +665,38 @@ export class ProcurementService {
     const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
     if (dueDate && Number.isNaN(dueDate.getTime())) throw new BadRequestException('Invalid dueDate');
 
-    // An RFQ records that vendors were asked — it is not a document that waits
-    // for a signature. It is created APPROVED so it never enters an approval
-    // inbox, the badge count or the Approvals page; the approval trail keeps one
-    // SUBMIT entry so the record still says who raised it and when.
-    const now = new Date();
-    const request = await this.prisma.requestDocument.create({
+    // A quotation request is its own record — no workflow document, no approval,
+    // no inbox entry. The RFQ- number keeps its monthly sequence.
+    const departmentId = (await this.prisma.employee.findFirst({ where: { userId: actor.userId } }))?.departmentId ?? null;
+    const rfq = await this.prisma.quotationRequest.create({
       data: {
         docNumber: await this.numbering.next('RFQ'),
-        docType: 'RFQ',
         title: data.title.trim().slice(0, 200),
         description: data.specification?.trim() || data.notes?.trim() || undefined,
-        requesterId: actor.userId,
-        departmentId: (await this.prisma.employee.findFirst({ where: { userId: actor.userId } }))?.departmentId,
-        status: 'APPROVED',
-        currentLevel: 1,
-        totalLevels: 1,
-        submittedAt: now,
-      },
-    });
-
-    await this.prisma.approvalAction.create({
-      data: {
-        requestId: request.id, level: 0, approverId: actor.userId,
-        action: 'SUBMIT',
-        comment: 'Recorded — an RFQ asks vendors for prices and needs no approval',
-        previousStatus: 'DRAFT', newStatus: 'APPROVED',
-      },
-    });
-
-    const rfq = await this.prisma.rfq.create({
-      data: {
-        requestId: request.id,
+        status: 'OPEN',
         purchaseRequestId,
+        requestedById: actor.userId,
+        departmentId,
         dueDate,
         specification: data.specification?.trim() || undefined,
         notes: data.notes?.trim() || undefined,
-        createdById: actor.userId,
       },
     });
 
     const createdVendors = await Promise.all(
       supplierIds.map((supplierId) => this.inviteVendor(rfq.id, supplierId, actor.userId)),
-    );{}
+    );
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
-      action: 'RFQ_CREATED', module: 'PROCUREMENT', recordId: request.id,
-      newValue: { docNumber: request.docNumber, vendors: createdVendors.length, purchaseRequestId },
+      action: 'RFQ_CREATED', module: 'PROCUREMENT', recordId: rfq.id,
+      newValue: { docNumber: rfq.docNumber, vendors: createdVendors.length, purchaseRequestId },
     });
 
-    return { ...request, rfq: { ...rfq, rfqVendors: createdVendors } };
+    return { ...rfq, rfq: { ...rfq, rfqVendors: createdVendors } };
   }
 
-  /** Edit an RFQ while the quotation round is open (not closed/cancelled/rejected). */
+  /** Edit a quotation request while it is still OPEN. */
   async updateRfq(rfqId: string, data: {
     title?: string;
     specification?: string;
@@ -737,11 +705,10 @@ export class ProcurementService {
     purchaseRequestId?: string;
     vendors?: { supplierId: string }[];
   }, actor: Actor) {
-    const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
-    if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
-    if (request.requesterId !== actor.userId) throw new ForbiddenException('Only the requester can edit the RFQ');
-    if (['CLOSED', 'CANCELLED', 'REJECTED'].includes(request.status)) {
-      throw new BadRequestException(`RFQ ${request.docNumber} is ${request.status.toLowerCase()} — it can no longer be edited`);
+    const rfq = await this.getRfq(rfqId);
+    if (rfq.requestedById !== actor.userId) throw new ForbiddenException('Only the requester can edit the RFQ');
+    if (rfq.status !== 'OPEN') {
+      throw new BadRequestException(`RFQ ${rfq.docNumber} is ${rfq.status.toLowerCase()} — it can no longer be edited`);
     }
 
     const dueDate = data.dueDate ? new Date(data.dueDate) : undefined;
@@ -757,31 +724,24 @@ export class ProcurementService {
         const count = await this.prisma.supplier.count({ where: { id: { in: supplierIds }, isActive: true } });
         if (count !== supplierIds.length) throw new BadRequestException('All vendors must exist and be active suppliers');
       }
-      const existing = await this.prisma.rfqVendor.findMany({ where: { rfqId: request.rfq.id }, select: { supplierId: true } });
+      const existing = await this.prisma.rfqVendor.findMany({ where: { rfqId: rfq.id }, select: { supplierId: true } });
       const existingIds = new Set(existing.map((e) => e.supplierId));
       await Promise.all(
-        supplierIds.filter((s) => !existingIds.has(s)).map((supplierId) => this.inviteVendor(request.rfq!.id, supplierId, actor.userId)),
+        supplierIds.filter((s) => !existingIds.has(s)).map((supplierId) => this.inviteVendor(rfq.id, supplierId, actor.userId)),
       );
     }
 
-    await this.prisma.$transaction([
-      this.prisma.rfq.update({
-        where: { id: request.rfq!.id },
-        data: {
-          dueDate,
-          purchaseRequestId: prLink,
-          specification: data.specification?.trim() || undefined,
-          notes: data.notes?.trim() || undefined,
-        },
-      }),
-      this.prisma.requestDocument.update({
-        where: { id: rfqId },
-        data: {
-          title: data.title?.trim() ? data.title.trim().slice(0, 200) : undefined,
-          description: data.specification?.trim() || data.notes?.trim() || undefined,
-        },
-      }),
-    ]);
+    await this.prisma.quotationRequest.update({
+      where: { id: rfq.id },
+      data: {
+        title: data.title?.trim() ? data.title.trim().slice(0, 200) : undefined,
+        description: data.specification?.trim() || data.notes?.trim() || undefined,
+        dueDate,
+        purchaseRequestId: prLink,
+        specification: data.specification?.trim() || undefined,
+        notes: data.notes?.trim() || undefined,
+      },
+    });
 
     await this.audit.log({
       userId: actor.userId, username: actor.username,
@@ -831,52 +791,45 @@ export class ProcurementService {
     return vendor;
   }
 
-  /** RFQ closure (design §11): only APPROVED RFQs may close — the workflow doc goes CLOSED. */
+  /** Close an open quotation round; no approval involved. */
   async updateRfqStatus(rfqId: string, status: string, actor: Actor) {
-    const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
-    if (!request || request.docType !== 'RFQ') throw new NotFoundException('RFQ not found');
-    if (status !== 'CLOSED') throw new BadRequestException('RFQ documents support only the CLOSED status — open/close the workflow via its own endpoints');
-    if (request.status !== 'APPROVED') throw new BadRequestException('RFQ must be APPROVED (workflow) before closing');
+    const rfq = await this.getRfq(rfqId);
+    if (status !== 'CLOSED') throw new BadRequestException('A quotation request supports only the CLOSED status');
+    if (rfq.status !== 'OPEN') throw new BadRequestException(`RFQ ${rfq.docNumber} is ${rfq.status.toLowerCase()} — it can no longer be closed`);
 
-    const updated = await this.prisma.requestDocument.update({
+    const updated = await this.prisma.quotationRequest.update({
       where: { id: rfqId },
       data: { status: 'CLOSED' },
     });
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'RFQ_CLOSED', module: 'PROCUREMENT', recordId: rfqId,
-      oldValue: { status: request.status }, newValue: { status: 'CLOSED' },
+      oldValue: { status: rfq.status }, newValue: { status: 'CLOSED' },
     });
     return updated;
   }
 
   /**
-   * Remove an RFQ that has no quotations yet, together with its vendors and the
-   * workflow document that carries it. Once a vendor has answered, the RFQ is a
-   * record of that answer — close it instead — so an RFQ raised by mistake can
-   * still be cleaned up without leaving a phantom row in every list.
+   * Remove a quotation request that has no quotations yet, together with its
+   * vendors. Once a vendor has answered, the request is a record of that answer —
+   * close it instead — so one raised by mistake can still be cleaned up without
+   * leaving a phantom row in every list.
    */
   async deleteRfq(rfqId: string, actor: Actor) {
-    const request = await this.prisma.requestDocument.findUnique({
+    const rfq = await this.prisma.quotationRequest.findUnique({
       where: { id: rfqId },
       include: {
-        attachments: { select: { storedName: true } },
-        rfq: {
-          include: {
-            quotations: { select: { quoteNumber: true } },
-            rfqVendors: { select: { supplierId: true } },
-            comparison: { select: { id: true } },
-          },
-        },
+        quotations: { select: { quoteNumber: true } },
+        rfqVendors: { select: { supplierId: true } },
+        comparison: { select: { id: true } },
       },
     });
-    if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
-    const rfq = request.rfq;
+    if (!rfq) throw new NotFoundException('RFQ not found');
     if (rfq.quotations.length || rfq.comparison) {
-      throw new ConflictException(`RFQ ${request.docNumber} has quotations recorded — close it instead of deleting it`);
+      throw new ConflictException(`RFQ ${rfq.docNumber} has quotations recorded — close it instead of deleting it`);
     }
-    if (['CLOSED', 'CANCELLED'].includes(request.status)) {
-      throw new ConflictException(`RFQ ${request.docNumber} is ${request.status.toLowerCase()} — it can no longer be deleted`);
+    if (rfq.status !== 'OPEN') {
+      throw new ConflictException(`RFQ ${rfq.docNumber} is ${rfq.status.toLowerCase()} — it can no longer be deleted`);
     }
     // children first: the decision row restricts its quotation, so it has to go
     // before the quotations the rest of the tree cascades from
@@ -884,31 +837,20 @@ export class ProcurementService {
       this.prisma.quotationComparison.deleteMany({ where: { rfqId: rfq.id } }),
       this.prisma.quotation.deleteMany({ where: { rfqId: rfq.id } }),
       this.prisma.rfqVendor.deleteMany({ where: { rfqId: rfq.id } }),
-      this.prisma.rfq.delete({ where: { id: rfq.id } }),
-      this.prisma.requestDocument.delete({ where: { id: request.id } }),
+      this.prisma.quotationRequest.delete({ where: { id: rfq.id } }),
     ]);
-    // the rows are gone, so a leftover file would be unreachable
-    const uploadRoot = process.env.UPLOAD_PATH || '/app/uploads';
-    for (const a of request.attachments) {
-      try {
-        const file = path.join(uploadRoot, a.storedName);
-        if (fs.existsSync(file)) fs.unlinkSync(file);
-      } catch {
-        // a missing file must not turn a completed delete into an error
-      }
-    }
     await this.audit.log({
       userId: actor.userId, username: actor.username,
-      action: 'RFQ_DELETED', module: 'PROCUREMENT', recordId: request.id,
+      action: 'RFQ_DELETED', module: 'PROCUREMENT', recordId: rfq.id,
       oldValue: {
-        docNumber: request.docNumber, title: request.title, status: request.status,
+        docNumber: rfq.docNumber, title: rfq.title, status: rfq.status,
         vendors: rfq.rfqVendors.length,
         quotations: rfq.quotations.map((q) => q.quoteNumber),
         hadDecision: !!rfq.comparison,
       },
       severity: 'WARNING',
     });
-    return { success: true, docNumber: request.docNumber };
+    return { success: true, docNumber: rfq.docNumber };
   }
 
   async closeRfq(rfqId: string, actor: Actor) {
@@ -978,7 +920,7 @@ export class ProcurementService {
     await this.audit.log({
       userId: actor.userId, username: actor.username,
       action: 'QUOTATION_CREATED', module: 'PROCUREMENT', recordId: quotation.id,
-      newValue: { rfqNumber: (await this.prisma.requestDocument.findUnique({ where: { id: rfqId } }))?.docNumber, supplier: supplier.name, quoteNumber: quotation.quoteNumber, items: quotation.items.length },
+      newValue: { rfqNumber: rfq.docNumber, supplier: supplier.name, quoteNumber: quotation.quoteNumber, items: quotation.items.length },
     });
     return quotation;
   }
@@ -1067,12 +1009,8 @@ export class ProcurementService {
 
   // ---------- helpers ----------
   private async getRfq(rfqId: string) {
-    const rfq = await this.prisma.rfq.findUnique({ where: { requestId: rfqId } });
-    if (!rfq) {
-      const request = await this.prisma.requestDocument.findUnique({ where: { id: rfqId }, include: { rfq: true } });
-      if (!request || request.docType !== 'RFQ' || !request.rfq) throw new NotFoundException('RFQ not found');
-      return request.rfq;
-    }
+    const rfq = await this.prisma.quotationRequest.findUnique({ where: { id: rfqId } });
+    if (!rfq) throw new NotFoundException('RFQ not found');
     return rfq;
   }
 

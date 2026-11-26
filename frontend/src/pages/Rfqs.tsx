@@ -9,10 +9,10 @@ import { toast } from '../components/Toast';
 
 // ---------------------------------------------------------------------------
 // RFQ / Quotation / Comparison (Procurement Design §11–14, phase P3/P4).
-// An RFQ (RFQ-…) records that vendors were asked: it needs no approval, so it is
-// created already approved and carries the vendors asked (§11), their quotations
-// (§12) and the recorded comparison decision (§13–14). "Approved" reads as
-// "Recorded" here — there is no approver to wait for.
+// A quotation request (RFQ-…) records that vendors were asked. It is not a
+// workflow document: no approval step (the record opens on creation) and no
+// entry in Approvals or My Requests. It carries the vendors asked (§11), their
+// quotations (§12) and the recorded comparison decision (§13–14).
 // ---------------------------------------------------------------------------
 
 interface SupplierRef {
@@ -73,7 +73,7 @@ interface RfqDecision {
 }
 
 interface RfqRow {
-  id: string; // RequestDocument id — the canonical RFQ id across routes
+  id: string; // quotation_requests id (children keep this same rfqId)
   docNumber: string;
   title: string;
   status: string;
@@ -93,16 +93,12 @@ interface RfqRow {
 }
 
 const STATUS_COLORS: Record<string, 'gray' | 'green' | 'red' | 'blue' | 'yellow' | 'orange'> = {
-  DRAFT: 'gray',
-  SUBMITTED: 'yellow',
-  PENDING_APPROVAL: 'yellow',
-  APPROVED: 'green',
-  REJECTED: 'red',
+  OPEN: 'green',
   CLOSED: 'gray',
   CANCELLED: 'gray',
 };
 
-const statusLabel = (s: string) => (s === 'APPROVED' ? 'Recorded' : s);
+const statusLabel = (s: string) => (s === 'OPEN' ? 'Open' : s);
 
 const fmtMoney = (n: number) => (n === undefined || n === null ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: 2 }));
 const num = (v: string | number | null | undefined, fallback = 0) => (v === null || v === undefined || v === '' ? fallback : Number(v));
@@ -414,12 +410,12 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
 
         {/* no approval step — the RFQ is recorded on creation; close it when the round ends */}
         <div className="flex flex-wrap gap-2">
-          {canManage && status === 'APPROVED' && (
+          {canManage && status === 'OPEN' && (
             <Button variant="ghost" disabled={busy} onClick={() => act(() => api(`/procurement/rfqs/${doc.id}/close`, { method: 'PATCH' }), 'RFQ closed')}>
               Close RFQ
             </Button>
           )}
-          {canManage && quotes.length === 0 && !['CLOSED', 'CANCELLED'].includes(status) && (
+          {canManage && quotes.length === 0 && status === 'OPEN' && (
             <Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>
               Delete RFQ
             </Button>

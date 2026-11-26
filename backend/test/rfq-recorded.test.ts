@@ -1,13 +1,13 @@
 /**
- * A1 — an RFQ is recorded, not approved.
+ * A2 — a quotation request is a record, not a workflow document.
  *
- * REAL ProcurementService.createRfq with a spy Prisma:
- *  - the document is written APPROVED with its level counters filled, so the
- *    workflow engine has nothing to pick up (no PENDING_APPROVAL, no inbox row,
- *    no badge count);
- *  - the approval trail still gets one SUBMIT entry naming the requester;
- *  - nothing calls requestDocument.update (the old submit path) and no
- *    notification is raised.
+ * REAL ProcurementService.createRfq / byRfq with a spy Prisma:
+ *  - the RFQ- number, title, requester and department go into
+ *    quotation_requests with status OPEN;
+ *  - nothing is written to request_documents or approval_actions, so the record
+ *    can never appear in an approval inbox, the badge or My Requests;
+ *  - the audit row points at the quotation request id;
+ *  - another user cannot read someone else's quotation request.
  *
  * Run:  cd backend && node -r ts-node/register/transpile-only test/rfq-recorded.test.ts
  */
@@ -31,94 +31,112 @@ function test(name: string, fn: () => void | Promise<void>) {
 const ACTOR = { userId: 'u-1', username: 'cy1' };
 
 function makeEnv() {
-  const createdDocs: any[] = [];
-  const createdActions: any[] = [];
-  const auditLogs: any[] = [];
-  let documentUpdates = 0;
-  let notificationCount = 0;
+  const created: any[] = [];
+  const audits: any[] = [];
+  let workflowDocs = 0;
+  let approvalActions = 0;
+
+  const row = {
+    id: 'qr-1',
+    docNumber: 'RFQ-202611-0014',
+    title: 'Office chairs',
+    description: null,
+    status: 'OPEN',
+    requestedById: ACTOR.userId,
+    departmentId: 'dept-1',
+    rfqVendors: [],
+    quotations: [],
+    comparison: null,
+    requestedBy: { id: ACTOR.userId, fullName: 'Cy One' },
+    department: null,
+    purchaseRequest: null,
+  };
 
   const prisma: any = {
-    employee: { findFirst: async () => ({ departmentId: 'dept-chan-yin' }) },
+    employee: { findFirst: async () => ({ departmentId: 'dept-1' }) },
     supplier: { count: async () => 0 },
-    requestDocument: {
+    quotationRequest: {
       create: async ({ data }: any) => {
-        createdDocs.push(data);
-        return { id: 'req-1', ...data };
+        created.push(data);
+        return { id: 'qr-1', ...data };
       },
-      update: async () => {
-        documentUpdates++;
-        return { id: 'req-1' };
-      },
+      findUnique: async ({ where }: any) => (where.id === 'qr-1' ? row : null),
     },
-    rfq: {
-      create: async ({ data }: any) => {
-        createdActions.push({ kind: 'rfq', ...data });
-        return { id: 'rfq-1', ...data };
+    requestDocument: {
+      create: async () => {
+        workflowDocs++;
+        throw new Error('a quotation request must not create a workflow document');
       },
     },
     approvalAction: {
-      create: async ({ data }: any) => {
-        createdActions.push(data);
-        return data;
+      create: async () => {
+        approvalActions++;
+        throw new Error('a quotation request must not write approval actions');
       },
     },
   };
-  const audit = { log: async (e: any) => { auditLogs.push(e); } };
+  const audit = { log: async (e: any) => { audits.push(e); } };
   const numbering = { next: async () => 'RFQ-202611-0001' };
-  const notifications = { notify: async () => { notificationCount++; }, notifyMany: async () => { notificationCount++; } };
 
-  return { prisma, audit, numbering, notifications, createdDocs, createdActions, auditLogs, documentUpdates: () => documentUpdates, notifications: () => notificationCount };
+  return { prisma, audit, numbering, audits, created, workflowDocs: () => workflowDocs, approvalActions: () => approvalActions };
 }
 
 const { ProcurementService } = require('../src/procurement/procurement.service');
 
 function makeSvc() {
   const env = makeEnv();
-  const svc = new ProcurementService(env.prisma, env.audit, env.numbering, {} as never, env.notifications as never, {} as never);
+  const notifications = { notify: async () => undefined, notifyMany: async () => undefined };
+  const svc = new ProcurementService(env.prisma, env.audit, env.numbering, {} as never, notifications as never, {} as never);
   return { svc, env };
 }
 
 async function main() {
-  console.log('\n== RFQ is recorded APPROVED, no approval step ==');
+  console.log('\n== RFQ is a quotation request record ==');
 
-  await test('createRfq writes an APPROVED document (no PENDING_APPROVAL, no submit transition)', async () => {
+  await test('createRfq writes quotation_requests with the RFQ- number and OPEN status', async () => {
     const { svc, env } = makeSvc();
     const created = await svc.createRfq({ title: 'Office chairs — 12' }, ACTOR);
 
-    assert.strictEqual(env.createdDocs.length, 1);
-    const doc = env.createdDocs[0];
-    assert.strictEqual(doc.status, 'APPROVED');
-    assert.strictEqual(doc.docType, 'RFQ');
-    assert.strictEqual(doc.currentLevel, 1);
-    assert.strictEqual(doc.totalLevels, 1);
-    assert.ok(doc.submittedAt instanceof Date, 'submittedAt is stamped at creation');
-    assert.strictEqual(doc.departmentId, 'dept-chan-yin');
-    assert.strictEqual(created.status, 'APPROVED');
-
-    assert.strictEqual(env.documentUpdates(), 0, 'no second workflow update (the old submit path)');
-    assert.strictEqual(env.notifications(), 0, 'no approver notification');
+    assert.strictEqual(env.created.length, 1);
+    const row = env.created[0];
+    assert.strictEqual(row.docNumber, 'RFQ-202611-0001');
+    assert.strictEqual(row.status, 'OPEN');
+    assert.strictEqual(row.title, 'Office chairs — 12');
+    assert.strictEqual(row.requestedById, ACTOR.userId);
+    assert.strictEqual(row.departmentId, 'dept-1');
+    assert.strictEqual(created.id, 'qr-1');
+    assert.strictEqual(created.docNumber, 'RFQ-202611-0001');
   });
 
-  await test('the approval trail still records who raised it, as one SUBMIT entry', async () => {
+  await test('no workflow document and no approval action is written', async () => {
     const { svc, env } = makeSvc();
     await svc.createRfq({ title: 'Printer toner' }, ACTOR);
 
-    const actions = env.createdActions.filter((a: any) => a.kind !== 'rfq');
-    assert.strictEqual(actions.length, 1);
-    assert.strictEqual(actions[0].action, 'SUBMIT');
-    assert.strictEqual(actions[0].approverId, ACTOR.userId);
-    assert.strictEqual(actions[0].previousStatus, 'DRAFT');
-    assert.strictEqual(actions[0].newStatus, 'APPROVED');
-    assert.strictEqual(actions[0].level, 0);
+    assert.strictEqual(env.workflowDocs(), 0, 'request_documents must stay untouched');
+    assert.strictEqual(env.approvalActions(), 0, 'no approval trail — there is no approval step');
   });
 
-  await test('RFQ_CREATED is still audited', async () => {
+  await test('RFQ_CREATED is audited against the quotation request id', async () => {
     const { svc, env } = makeSvc();
     await svc.createRfq({ title: 'Cleaning supplies' }, ACTOR);
 
-    const audit = env.auditLogs.find((a: any) => a.action === 'RFQ_CREATED');
+    const audit = env.audits.find((a: any) => a.action === 'RFQ_CREATED');
     assert.ok(audit, 'RFQ_CREATED audit row');
+    assert.strictEqual(audit.recordId, 'qr-1');
     assert.strictEqual(audit.newValue.docNumber, 'RFQ-202611-0001');
+  });
+
+  await test('byRfq hides another user’s quotation request', async () => {
+    const { svc } = makeSvc();
+    await assert.rejects(
+      () => svc.byRfq('qr-1', { userId: 'u-2', username: 'someone-else' }),
+      /Not your RFQ/,
+    );
+    const own = await svc.byRfq('qr-1', ACTOR);
+    assert.strictEqual(own.docNumber, 'RFQ-202611-0014');
+    assert.strictEqual(own.status, 'OPEN');
+    assert.strictEqual(own.rfq.id, 'qr-1', 'the screens still read the nested rfq shape');
+    assert.strictEqual(own.requester.fullName, 'Cy One');
   });
 
   console.log(`\n${passed}/${passed + failures.length} passed`);
