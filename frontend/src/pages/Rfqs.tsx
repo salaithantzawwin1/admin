@@ -458,6 +458,8 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
   const [busy, setBusy] = useState(false);
   const [showQuoteForm, setShowQuoteForm] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [editingQuote, setEditingQuote] = useState<Quotation | null>(null);
+  const [deletingQuote, setDeletingQuote] = useState<Quotation | null>(null);
 
   const load = useCallback(() => {
     api<RfqRow & { rfq?: { comparison?: RfqDecision | null } }>(`/procurement/rfqs/${rfqId}`).then((d) => {
@@ -539,6 +541,27 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
           />
         )}
 
+        {deletingQuote && (
+          <ConfirmDialog
+            title={`Delete quotation #${deletingQuote.quoteNumber}?`}
+            description={`Removes ${deletingQuote.supplier.name}'s quotation with its ${deletingQuote.items.length} line(s). Record it again if this was not a mistake. Only possible while the RFQ is open and no vendor decision has been recorded.`}
+            confirmLabel="Delete quotation"
+            variant="danger"
+            onClose={() => setDeletingQuote(null)}
+            onConfirm={async () => {
+              try {
+                await api(`/procurement/rfqs/${doc.id}/quotations/${deletingQuote.id}`, { method: 'DELETE' });
+                toast('Quotation deleted');
+                setDeletingQuote(null);
+                load();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Could not delete the quotation');
+                setDeletingQuote(null);
+              }
+            }}
+          />
+        )}
+
         {/* vendors §11 */}
         <section>
           <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Vendors ({vendors.length})</div>
@@ -562,13 +585,21 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
         <section>
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Quotations ({quotes.length})</div>
-            {canManage && vendors.length > 0 && (
+            {canManage && vendors.length > 0 && !editingQuote && (
               <Button variant="ghost" onClick={() => setShowQuoteForm(!showQuoteForm)}>
                 {showQuoteForm ? 'Cancel' : '+ Record quotation'}
               </Button>
             )}
           </div>
-          {showQuoteForm && <NewQuotationForm rfqId={doc.id} vendors={vendors} onDone={() => { setShowQuoteForm(false); load(); }} />}
+          {(showQuoteForm || editingQuote) && (
+            <NewQuotationForm
+              rfqId={doc.id}
+              vendors={vendors}
+              initial={editingQuote ?? undefined}
+              onDone={() => { setShowQuoteForm(false); setEditingQuote(null); load(); }}
+              onCancel={() => { setShowQuoteForm(false); setEditingQuote(null); }}
+            />
+          )}
           {quotes.length === 0 ? <Empty label="No quotations yet" /> : (
             <div className="space-y-3">
               {quotes.map((q) => (
@@ -579,6 +610,12 @@ function RfqDetailModal({ rfqId, canManage, onClose }: { rfqId: string; canManag
                     <span className="text-xs text-gray-400">
                       {q.paymentTerms ? `${q.paymentTerms} · ` : ''}quoted {fmtDate(q.quoteDate)}
                     </span>
+                    {canManage && status === 'OPEN' && !decision && (
+                      <span className="ml-auto flex gap-2">
+                        <Button variant="ghost" onClick={() => { setEditingQuote(q); setShowQuoteForm(false); }}>Edit</Button>
+                        <Button variant="danger" onClick={() => setDeletingQuote(q)}>Delete</Button>
+                      </span>
+                    )}
                   </div>
                   <table className="w-full text-xs">
                     <thead>
@@ -792,13 +829,35 @@ function VendorPicker({ rfqId, existing, onDone }: { rfqId: string; existing: st
   );
 }
 
-function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: RfqVendor[]; onDone: () => void }) {
-  const [supplierId, setSupplierId] = useState(vendors[0]?.supplier.id ?? '');
-  const [quoteNumber, setQuoteNumber] = useState('');
-  const [paymentTerms, setPaymentTerms] = useState('');
-  const [validUntil, setValidUntil] = useState('');
-  const [quoteDate, setQuoteDate] = useState('');
-  const [items, setItems] = useState<DraftQuoteItem[]>([emptyQuoteItem()]);
+function NewQuotationForm({
+  rfqId, vendors, initial, onDone, onCancel,
+}: {
+  rfqId: string;
+  vendors: RfqVendor[];
+  /** existing quotation → the same form edits it (PATCH) instead of recording a new one */
+  initial?: Quotation;
+  onDone: () => void;
+  onCancel?: () => void;
+}) {
+  const [supplierId, setSupplierId] = useState(initial?.supplier.id ?? vendors[0]?.supplier.id ?? '');
+  const [quoteNumber, setQuoteNumber] = useState(initial?.quoteNumber ?? '');
+  const [paymentTerms, setPaymentTerms] = useState(initial?.paymentTerms ?? '');
+  const [validUntil, setValidUntil] = useState(initial?.validUntil?.slice(0, 10) ?? '');
+  const [quoteDate, setQuoteDate] = useState(initial?.quoteDate?.slice(0, 10) ?? '');
+  const [items, setItems] = useState<DraftQuoteItem[]>(
+    initial?.items.length
+      ? initial.items.map((it) => ({
+          description: it.description,
+          quantity: String(it.quantity),
+          unit: it.unit ?? '',
+          unitPrice: String(it.unitPrice),
+          taxPercent: it.taxPercent == null ? '' : String(Number(it.taxPercent)),
+          discountPercent: it.discountPercent == null ? '' : String(Number(it.discountPercent)),
+          deliveryDays: it.deliveryDays == null ? '' : String(it.deliveryDays),
+          warrantyMonths: it.warrantyMonths == null ? '' : String(it.warrantyMonths),
+        }))
+      : [emptyQuoteItem()],
+  );
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -811,8 +870,8 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
     setError('');
     setBusy(true);
     try {
-      await api(`/procurement/rfqs/${rfqId}/quotations`, {
-        method: 'POST',
+      await api(initial ? `/procurement/rfqs/${rfqId}/quotations/${initial.id}` : `/procurement/rfqs/${rfqId}/quotations`, {
+        method: initial ? 'PATCH' : 'POST',
         body: {
           supplierId,
           quoteNumber: quoteNumber.trim(),
@@ -831,7 +890,7 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
           })),
         },
       });
-      toast('Quotation recorded');
+      toast(initial ? 'Quotation updated' : 'Quotation recorded');
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed');
@@ -899,8 +958,13 @@ function NewQuotationForm({ rfqId, vendors, onDone }: { rfqId: string; vendors: 
         </div>
       ))}
       <div className="flex items-center justify-between">
-        <Button variant="ghost" onClick={() => setItems((prev) => [...prev, emptyQuoteItem()])}>+ Add line</Button>
-        <Button disabled={!valid || busy} onClick={submit}>{busy ? 'Saving…' : 'Save quotation'}</Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={() => setItems((prev) => [...prev, emptyQuoteItem()])}>+ Add line</Button>
+          {onCancel && <Button variant="ghost" onClick={onCancel}>Cancel</Button>}
+        </div>
+        <Button disabled={!valid || busy} onClick={submit}>
+          {busy ? 'Saving…' : initial ? 'Save changes' : 'Save quotation'}
+        </Button>
       </div>
     </div>
   );

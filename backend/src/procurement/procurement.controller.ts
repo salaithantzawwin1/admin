@@ -333,6 +333,25 @@ export class ProcurementController {
     return this.procurement.addQuotation(rfqId, body, this.actor(req));
   }
 
+  /** Correct a quotation recorded by mistake (open RFQ, no §14 decision yet). */
+  @Patch('rfqs/:rfqId/quotations/:quotationId')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  updateQuotation(
+    @Req() req,
+    @Param('rfqId') rfqId: string,
+    @Param('quotationId') quotationId: string,
+    @Body() body: AddQuotationDto,
+  ) {
+    return this.procurement.updateQuotation(rfqId, quotationId, body, this.actor(req));
+  }
+
+  /** Remove a quotation recorded by mistake (open RFQ, no §14 decision yet). */
+  @Delete('rfqs/:rfqId/quotations/:quotationId')
+  @RequirePermissions(PERMISSIONS.PROCUREMENT_MANAGE)
+  deleteQuotation(@Req() req, @Param('rfqId') rfqId: string, @Param('quotationId') quotationId: string) {
+    return this.procurement.deleteQuotation(rfqId, quotationId, this.actor(req));
+  }
+
   /** Live comparison view (design §13) — quotes sorted by net total. */
   @Get('rfqs/:rfqId/comparison')
   @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)

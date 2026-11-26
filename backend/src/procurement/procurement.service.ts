@@ -953,6 +953,130 @@ export class ProcurementService {
     return rows.sort((a, b) => a.subtotal - b.subtotal);
   }
 
+  /**
+   * A quotation recorded by mistake can be corrected while the round is still
+   * open and no vendor has been selected: replace its header and lines. Once a
+   * §14 decision exists the quote is the evidence behind that decision, so it
+   * is frozen — deleting the decision has no endpoint, by design.
+   */
+  async updateQuotation(rfqId: string, quotationId: string, data: {
+    supplierId: string;
+    quoteNumber: string;
+    quoteDate?: string;
+    dueDate?: string;
+    validUntil?: string;
+    paymentTerms?: string;
+    taxIncluded?: boolean;
+    note?: string;
+    items: { description: string; quantity: number; unit?: string; unitPrice: number; taxPercent?: number; deliveryDays?: number; warrantyMonths?: number; discountPercent?: number }[];
+  }, actor: Actor) {
+    const rfq = await this.getRfq(rfqId);
+    this.assertQuotationMutable(rfq);
+    await this.assertNoDecision(rfq);
+    const quote = await this.prisma.quotation.findUnique({
+      where: { id: quotationId },
+      include: { supplier: { select: { name: true } }, items: true },
+    });
+    if (!quote || quote.rfqId !== rfq.id) throw new NotFoundException('Quotation not found on this RFQ');
+    if (!data.quoteNumber?.trim()) throw new BadRequestException('Vendor quotation number is required');
+    if (!data.items?.length) throw new BadRequestException('At least one quotation line is required');
+
+    const supplier = await this.prisma.supplier.findUnique({ where: { id: data.supplierId } });
+    if (!supplier || !supplier.isActive) throw new BadRequestException('A valid, active supplier is required');
+    const invited = await this.prisma.rfqVendor.findFirst({ where: { rfqId: rfq.id, supplierId: data.supplierId } });
+    if (!invited) throw new BadRequestException(`${supplier.name} is not invited on this RFQ — add the vendor first`);
+    const duplicateNumber = await this.prisma.quotation.findFirst({
+      where: { rfqId: rfq.id, supplierId: data.supplierId, quoteNumber: data.quoteNumber.trim(), NOT: { id: quotationId } },
+    });
+    if (duplicateNumber) {
+      throw new ConflictException(`Quotation ${data.quoteNumber} already recorded for ${supplier.name} on this RFQ`);
+    }
+    const duplicateVendor = await this.prisma.quotation.findFirst({
+      where: { rfqId: rfq.id, supplierId: data.supplierId, NOT: { id: quotationId } },
+    });
+    if (duplicateVendor) {
+      throw new ConflictException(`${supplier.name} already answered this RFQ — one quotation per vendor (design §12)`);
+    }
+
+    const updated = await this.prisma.quotation.update({
+      where: { id: quotationId },
+      data: {
+        supplierId: data.supplierId,
+        quoteNumber: data.quoteNumber.trim(),
+        quoteDate: data.quoteDate ? new Date(data.quoteDate) : quote.quoteDate,
+        dueDate: data.dueDate ? new Date(data.dueDate) : null,
+        validUntil: data.validUntil ? new Date(data.validUntil) : null,
+        paymentTerms: data.paymentTerms?.trim() || null,
+        taxIncluded: data.taxIncluded ?? quote.taxIncluded,
+        note: data.note?.trim() || null,
+        items: {
+          deleteMany: {},
+          create: data.items.map((it, idx) => ({
+            ...this.normalizeQuotationItem(it, idx),
+            createdById: actor.userId,
+          })),
+        },
+      },
+      include: { items: true, supplier: true },
+    });
+
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'QUOTATION_UPDATED', module: 'PROCUREMENT', recordId: quotationId,
+      oldValue: {
+        rfqNumber: rfq.docNumber, supplier: quote.supplier.name, quoteNumber: quote.quoteNumber,
+        items: quote.items.map((i) => ({ description: i.description, quantity: i.quantity, unitPrice: Number(i.unitPrice) })),
+      },
+      newValue: {
+        rfqNumber: rfq.docNumber, supplier: updated.supplier.name, quoteNumber: updated.quoteNumber,
+        items: updated.items.map((i) => ({ description: i.description, quantity: i.quantity, unitPrice: Number(i.unitPrice) })),
+      },
+    });
+    return updated;
+  }
+
+  /** Remove a quotation recorded by mistake while the round is still open. */
+  async deleteQuotation(rfqId: string, quotationId: string, actor: Actor) {
+    const rfq = await this.getRfq(rfqId);
+    this.assertQuotationMutable(rfq);
+    await this.assertNoDecision(rfq);
+    const quote = await this.prisma.quotation.findUnique({
+      where: { id: quotationId },
+      include: { supplier: { select: { id: true, name: true } }, items: true },
+    });
+    if (!quote || quote.rfqId !== rfq.id) throw new NotFoundException('Quotation not found on this RFQ');
+
+    await this.prisma.quotation.delete({ where: { id: quotationId } });
+    await this.audit.log({
+      userId: actor.userId, username: actor.username,
+      action: 'QUOTATION_DELETED', module: 'PROCUREMENT', recordId: quotationId,
+      oldValue: {
+        rfqNumber: rfq.docNumber, supplier: quote.supplier.name, quoteNumber: quote.quoteNumber,
+        lines: quote.items.length,
+        items: quote.items.map((i) => ({ description: i.description, quantity: i.quantity, unitPrice: Number(i.unitPrice) })),
+      },
+      severity: 'WARNING',
+    });
+    return { success: true, quoteNumber: quote.quoteNumber };
+  }
+
+  /** Quotations are evidence once the round closes or a vendor is selected. */
+  private assertQuotationMutable(rfq: { docNumber: string; status: string; id: string }) {
+    if (rfq.status !== 'OPEN') {
+      throw new BadRequestException(`RFQ ${rfq.docNumber} is ${rfq.status.toLowerCase()} — its quotations can no longer change`);
+    }
+  }
+
+  /** The §14 decision references its quotation, so the quote is frozen after it. */
+  private async assertNoDecision(rfq: { docNumber: string; id: string }) {
+    const decision = await this.prisma.quotationComparison.findUnique({ where: { rfqId: rfq.id }, select: { id: true } });
+    if (decision) {
+      throw new ConflictException(
+        `RFQ ${rfq.docNumber} has a recorded vendor decision — its quotations can no longer change`,
+      );
+    }
+  }
+
   // ---------- comparison / vendor selection (design §13-14) ----------
   async findComparison(rfqId: string) {
     const rfq = await this.getRfq(rfqId);
