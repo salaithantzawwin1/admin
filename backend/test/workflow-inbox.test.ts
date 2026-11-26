@@ -50,8 +50,10 @@ interface PrismaOpts {
   pendingDocTypes?: string[];
   workflows?: any[];
   /** rows for the amount-routed pending query (second findMany, no distinct) */
-  amountPending?: { id: string; docType: string; currentLevel: number }[];
+  amountPending?: { id: string; docType: string; currentLevel: number; departmentId?: string | null }[];
   prRow?: any;
+  /** the actor's own department (employee record) */
+  departmentId?: string;
 }
 
 function makePrisma(opts: PrismaOpts) {
@@ -64,6 +66,13 @@ function makePrisma(opts: PrismaOpts) {
     },
     approvalDelegation: {
       findMany: async () => (opts.delegations ?? []).map((d) => ({ ...d, status: 'ACTIVE', startAt: new Date(0), endAt: new Date(8.64e15) })),
+    },
+    employee: {
+      findFirst: async () => (opts.departmentId ? { departmentId: opts.departmentId } : null),
+      findMany: async (a: any) => (opts.departmentId ? (a?.where?.userId?.in ?? []).map((userId: string) => ({ userId })) : []),
+    },
+    department: {
+      findUnique: async () => ({ name: 'Test' }),
     },
     approvalWorkflow: {
       findMany: async (a: any) => (opts.workflows ?? [CAR_WORKFLOW, GENERIC_WORKFLOW]).filter((w) => w.module === a?.where?.module),
@@ -144,6 +153,7 @@ async function main() {
         roles: { 'u-head': ['DEPARTMENT_HEAD', 'EMPLOYEE'] },
         pendingDocTypes: ['CAR_REQUEST', 'GENERIC_REQUEST'],
         workflows: [CAR_WORKFLOW, GENERIC_WORKFLOW],
+        departmentId: 'dept-a',
       },
       { userId: 'u-head', username: 'head1' },
     );
@@ -157,6 +167,40 @@ async function main() {
       'DEPARTMENT_HEAD must NOT see CAR requests queued at L1 ADMINISTRATION',
     );
     assert.strictEqual(where.requesterId.not, 'u-head');
+  });
+
+  await test('a Department Head inbox is scoped to their own department', async () => {
+    const where = await inboxWhere(
+      {
+        roles: { 'u-head': ['DEPARTMENT_HEAD'] },
+        pendingDocTypes: ['GENERIC_REQUEST'],
+        workflows: [GENERIC_WORKFLOW],
+        departmentId: 'dept-a',
+      },
+      { userId: 'u-head', username: 'tpt1' },
+    );
+    const or = orClauses(where);
+    assert.ok(
+      or.some((c) => c.docType === 'GENERIC_REQUEST' && c.departmentId === 'dept-a'),
+      'the head step must be filtered to the head\u2019s own department',
+    );
+  });
+
+  await test('Administration sees Department Head steps across every department', async () => {
+    const where = await inboxWhere(
+      {
+        roles: { 'u-admin': ['ADMINISTRATION'] },
+        pendingDocTypes: ['GENERIC_REQUEST'],
+        workflows: [GENERIC_WORKFLOW],
+        departmentId: 'dept-administration',
+      },
+      { userId: 'u-admin', username: 'admin1' },
+    );
+    const or = orClauses(where);
+    assert.ok(
+      or.some((c) => c.docType === 'GENERIC_REQUEST' && c.departmentId === undefined),
+      'Administration must see the head step without a department filter',
+    );
   });
 
   await test('delegation FROM a SYSTEM_ADMIN grants the bypass to the delegate', async () => {

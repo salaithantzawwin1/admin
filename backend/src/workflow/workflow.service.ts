@@ -128,6 +128,27 @@ export class WorkflowService {
     return active.map((d) => d.fromUserId);
   }
 
+  /** The department a user belongs to, from their employee record. */
+  private async userDepartmentId(userId: string): Promise<string | null> {
+    const employee = await this.prisma.employee.findFirst({ where: { userId }, select: { departmentId: true } });
+    return employee?.departmentId ?? null;
+  }
+
+  /** Active Department Head users of one department (used for on-behalf records). */
+  private async departmentHeadUserIds(departmentId: string): Promise<string[]> {
+    const holders = await this.prisma.userRole.findMany({
+      where: { role: { name: 'DEPARTMENT_HEAD' }, user: { status: 'ACTIVE' } },
+      select: { userId: true },
+    });
+    const ids = holders.map((h) => h.userId);
+    if (ids.length === 0) return [];
+    const employees = await this.prisma.employee.findMany({
+      where: { userId: { in: ids }, departmentId },
+      select: { userId: true },
+    });
+    return employees.map((e) => e.userId).filter((id): id is string => Boolean(id));
+  }
+
   private async userRoleNames(userId: string): Promise<string[]> {
     const rows = await this.prisma.userRole.findMany({
       where: { userId, role: { name: { not: undefined } } },
@@ -187,7 +208,7 @@ export class WorkflowService {
   }
 
   private async notifyApprovers(requestId: string, level: number, type: Parameters<NotificationsService['notifyMany']>[1]['type'], title: string, body: string) {
-    const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { docType: true } });
+    const request = await this.prisma.requestDocument.findUnique({ where: { id: requestId }, select: { docType: true, departmentId: true } });
     // resolve the workflow the same way approve/submit does — amount bands included
     const workflow = await this.workflowFor(request?.docType as string, await this.amountFor(requestId, request?.docType as string));
     const step = workflow?.steps.find((s) => s.level === level);
@@ -195,11 +216,25 @@ export class WorkflowService {
       this.logger.warn(`notifyApprovers: no step at level ${level} for ${request?.docType} ${requestId}`);
       return;
     }
-    const usersWithRole = await this.prisma.userRole.findMany({
-      where: { role: { name: step.roleName }, user: { status: 'ACTIVE' } },
-      select: { userId: true },
-    });
-    let userIds = usersWithRole.map((u) => u.userId);
+    // A Department Head step belongs to the requester's own department, so only
+    // that head (and the Administration office, which signs on their behalf) is
+    // notified — not every head in the organisation.
+    let holderIds: string[];
+    if (step.roleName === 'DEPARTMENT_HEAD') {
+      const heads = request?.departmentId ? await this.departmentHeadUserIds(request.departmentId) : [];
+      const administration = await this.prisma.userRole.findMany({
+        where: { role: { name: 'ADMINISTRATION' }, user: { status: 'ACTIVE' } },
+        select: { userId: true },
+      });
+      holderIds = [...heads, ...administration.map((u) => u.userId)];
+    } else {
+      const usersWithRole = await this.prisma.userRole.findMany({
+        where: { role: { name: step.roleName }, user: { status: 'ACTIVE' } },
+        select: { userId: true },
+      });
+      holderIds = usersWithRole.map((u) => u.userId);
+    }
+    let userIds = holderIds;
     // notify delegates too
     const delegations = await this.prisma.approvalDelegation.findMany({
       where: { status: 'ACTIVE', startAt: { lte: new Date() }, endAt: { gte: new Date() }, fromUserId: { in: userIds } },
@@ -224,17 +259,26 @@ export class WorkflowService {
   async approverUserIds(requestId: string): Promise<string[]> {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
-      select: { docType: true, currentLevel: true, requesterId: true },
+      select: { docType: true, currentLevel: true, requesterId: true, departmentId: true },
     });
     if (!request) return [];
     const workflow = await this.workflowFor(request.docType as string, await this.amountFor(requestId, request.docType as string));
     const step = workflow?.steps.find((s) => s.level === request.currentLevel);
     if (!step) return [];
-    const holders = await this.prisma.userRole.findMany({
-      where: { role: { name: { in: [step.roleName, 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
-      select: { userId: true },
-    });
-    const holderIds = holders.map((h) => h.userId);
+    // Department Head steps are department-scoped: only that department's head,
+    // plus Administration (on-behalf) and SYSTEM_ADMIN, can act.
+    const holderIds: string[] = step.roleName === 'DEPARTMENT_HEAD'
+      ? [
+          ...(request.departmentId ? await this.departmentHeadUserIds(request.departmentId) : []),
+          ...(await this.prisma.userRole.findMany({
+            where: { role: { name: { in: ['ADMINISTRATION', 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
+            select: { userId: true },
+          })).map((h) => h.userId),
+        ]
+      : (await this.prisma.userRole.findMany({
+          where: { role: { name: { in: [step.roleName, 'SYSTEM_ADMIN'] } }, user: { status: 'ACTIVE' } },
+          select: { userId: true },
+        })).map((h) => h.userId);
     const delegates = holderIds.length
       ? await this.prisma.approvalDelegation.findMany({
           where: { status: 'ACTIVE', startAt: { lte: new Date() }, endAt: { gte: new Date() }, fromUserId: { in: holderIds } },
@@ -680,17 +724,43 @@ export class WorkflowService {
     const roles = await this.userRoleNames(actor.userId);
     const now = new Date();
 
-    const isDirect = roles.includes(step.roleName) || roles.includes('SYSTEM_ADMIN');
+    // Department Head steps are also signable by the Administration office,
+    // which signs on that department's head's behalf (audited as such).
+    const isAdministration = roles.includes('ADMINISTRATION');
+    const isSuperadmin = roles.includes('SYSTEM_ADMIN');
+    const actsForHead = step.roleName === 'DEPARTMENT_HEAD' && isAdministration;
+    const isDirect = roles.includes(step.roleName) || isSuperadmin || actsForHead;
     let actingFor: string | null = null; // delegation: approve on behalf of
+    let onBehalfOfDepartment: string | null = null;
+    let onBehalfDeptName: string | null = null;
     if (!isDirect) {
       const delegations = await this.resolveDelegation(actor.userId, now);
       const delegateUserRoles = await this.prisma.userRole.findMany({
         where: { userId: { in: delegations }, role: { name: step.roleName } },
       });
       if (delegateUserRoles.length > 0) {
-        actingFor = delegateUserRoles[0].userId;
+        const delegatorId = delegateUserRoles[0].userId;
+        // a delegated head keeps that head's department scope
+        if (step.roleName === 'DEPARTMENT_HEAD' && (await this.userDepartmentId(delegatorId)) !== request.departmentId) {
+          throw new ForbiddenException('Department Head approval is limited to that head\u2019s own department');
+        }
+        actingFor = delegatorId;
       } else {
         throw new ForbiddenException(`Requires role ${step.roleName} (or a delegation)`);
+      }
+    } else if (step.roleName === 'DEPARTMENT_HEAD' && !isSuperadmin) {
+      const myDepartment = await this.userDepartmentId(actor.userId);
+      if (myDepartment !== request.departmentId) {
+        if (!isAdministration) {
+          throw new ForbiddenException('Department Head approval is limited to your own department \u2014 Administration signs on the head\u2019s behalf');
+        }
+        // Administration signing another department's head step: on-behalf
+        const headDepartmentId = request.departmentId;
+        if (headDepartmentId) {
+          onBehalfOfDepartment = headDepartmentId;
+          onBehalfDeptName = (await this.prisma.department.findUnique({ where: { id: headDepartmentId }, select: { name: true } }))?.name ?? null;
+          actingFor = (await this.departmentHeadUserIds(headDepartmentId))[0] ?? null;
+        }
       }
     }
 
@@ -705,9 +775,12 @@ export class WorkflowService {
       });
       await tx.approvalAction.create({
         data: {
-          requestId: id, level: request.currentLevel, approverId: actor.userId,
+          requestId: id, level: request.currentLevel,           approverId: actor.userId,
           action: isLastLevel ? 'FINAL_APPROVE' : 'APPROVE',
-          comment, previousStatus: request.status, newStatus,
+          comment: onBehalfDeptName
+            ? [comment, `On behalf of the ${onBehalfDeptName} Department Head`].filter(Boolean).join(' — ')
+            : comment,
+          previousStatus: request.status, newStatus,
         },
       });
       // module status mirror — same transaction as the document update
@@ -720,7 +793,7 @@ export class WorkflowService {
       action: isLastLevel ? 'REQUEST_FINAL_APPROVED' : 'REQUEST_APPROVED',
       module: 'WORKFLOW', recordId: id,
       oldValue: { status: request.status, level: request.currentLevel },
-      newValue: { status: newStatus, level: nextLevel, actingFor },
+      newValue: { status: newStatus, level: nextLevel, actingFor, onBehalfOfDepartment },
     });
 
     if (isLastLevel) {
@@ -760,7 +833,7 @@ export class WorkflowService {
    * current workflow step's role (or act via an active delegation). Used by the
    * reject/return paths which the controller-level guards cannot scope per-request.
    */
-  private async assertApproverForStep(request: { id: string; docType: string; currentLevel: number; requesterId?: string }, actor: Actor) {
+  private async assertApproverForStep(request: { id: string; docType: string; currentLevel: number; requesterId?: string; departmentId?: string | null }, actor: Actor) {
     // separation of duties: a requester can never act on their own request
     if (request.requesterId === actor.userId) {
       throw new ForbiddenException('You cannot act on your own request');
@@ -771,14 +844,30 @@ export class WorkflowService {
       where: { workflowId: workflow.id, level: request.currentLevel },
     });
     const roles = await this.userRoleNames(actor.userId);
-    if (roles.includes('SYSTEM_ADMIN') || roles.includes(step.roleName)) return;
+    const isSuperadmin = roles.includes('SYSTEM_ADMIN');
+    const isAdministration = roles.includes('ADMINISTRATION');
+    // Department Head steps are department-scoped; Administration signs on behalf.
+    const headScoped = step.roleName === 'DEPARTMENT_HEAD' && !isSuperadmin && !isAdministration;
+    const inDepartment = async () => (await this.userDepartmentId(actor.userId)) === request.departmentId;
+
+    if (isSuperadmin || roles.includes(step.roleName) || (step.roleName === 'DEPARTMENT_HEAD' && isAdministration)) {
+      if (headScoped && !(await inDepartment())) {
+        throw new ForbiddenException('Department Head approval is limited to your own department \u2014 Administration signs on the head\u2019s behalf');
+      }
+      return;
+    }
 
     const delegations = await this.resolveDelegation(actor.userId, new Date());
     if (delegations.length > 0) {
       const delegateUserRoles = await this.prisma.userRole.findMany({
         where: { userId: { in: delegations }, role: { name: step.roleName } },
       });
-      if (delegateUserRoles.length > 0) return;
+      if (delegateUserRoles.length > 0) {
+        if (step.roleName === 'DEPARTMENT_HEAD' && (await this.userDepartmentId(delegateUserRoles[0].userId)) !== request.departmentId) {
+          throw new ForbiddenException('Department Head approval is limited to that head\u2019s own department');
+        }
+        return;
+      }
     }
     throw new ForbiddenException(`Requires role ${step.roleName} (or a delegation)`);
   }
@@ -972,6 +1061,15 @@ export class WorkflowService {
     // so without this the admin's Pending Approvals list was always empty even
     // though their approve() tap succeeds everywhere.
     const isSuperadmin = allRoles.includes('SYSTEM_ADMIN');
+    // The Administration office is organisation-wide: it sees every department's
+    // queue and signs Department Head steps on that head's behalf.
+    const isAdministration = allRoles.includes('ADMINISTRATION');
+    const seesAllDepartments = isSuperadmin || isAdministration;
+    let myDepartmentId: string | null | undefined; // resolved lazily (one employee lookup)
+    const departmentId = async () => {
+      if (myDepartmentId === undefined) myDepartmentId = await this.userDepartmentId(actor.userId);
+      return myDepartmentId;
+    };
 
     // resolve the applicable workflow per docType, then match (docType, level) pairs
     // by role — prevents cross-workflow level leakage (e.g. head seeing CAR requests)
@@ -987,7 +1085,18 @@ export class WorkflowService {
       const wf = await this.workflowFor(docType as string);
       if (!wf || !wf.active) continue;
       for (const step of wf.steps) {
-        if (isSuperadmin || allRoles.includes(step.roleName as string)) {
+        const role = step.roleName as string;
+        const viaRole = allRoles.includes(role);
+        // Administration covers Department Head steps — signed on the head's behalf.
+        const viaAdministration = role === 'DEPARTMENT_HEAD' && isAdministration;
+        if (!(isSuperadmin || viaRole || viaAdministration)) continue;
+        // Department-level approval is scoped to the request's own department,
+        // so the TPT head never sees (or signs) a CY request.
+        if (role === 'DEPARTMENT_HEAD' && !seesAllDepartments) {
+          const mine = await departmentId();
+          if (!mine) continue;
+          or.push({ docType: docType as RequestDocType, currentLevel: step.level, departmentId: mine });
+        } else {
           or.push({ docType: docType as RequestDocType, currentLevel: step.level });
         }
       }
@@ -1000,12 +1109,18 @@ export class WorkflowService {
     if (amountRoutedTypes.length > 0) {
       const amountRoutedPending = await this.prisma.requestDocument.findMany({
         where: { status: 'PENDING_APPROVAL', docType: { in: amountRoutedTypes as RequestDocType[] } },
-        select: { id: true, docType: true, currentLevel: true },
+        select: { id: true, docType: true, currentLevel: true, departmentId: true },
       });
       for (const doc of amountRoutedPending) {
         const wf = await this.workflowFor(doc.docType as string, await this.amountFor(doc.id, doc.docType as string));
         const step = wf?.steps.find((s) => s.level === doc.currentLevel);
-        if (step && (isSuperadmin || allRoles.includes(step.roleName as string))) or.push({ id: doc.id });
+        if (!step) continue;
+        const role = step.roleName as string;
+        const viaRole = allRoles.includes(role);
+        const viaAdministration = role === 'DEPARTMENT_HEAD' && isAdministration;
+        if (!(isSuperadmin || viaRole || viaAdministration)) continue;
+        if (role === 'DEPARTMENT_HEAD' && !seesAllDepartments && doc.departmentId !== (await departmentId())) continue;
+        or.push({ id: doc.id });
       }
     }
 
