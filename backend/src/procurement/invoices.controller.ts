@@ -4,9 +4,10 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions, AnyPermission, grantedPermissions } from '../auth/permissions.guard';
+import { RequirePermissions, AnyPermission } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { InvoicesService } from './invoices.service';
+import { hidesVendor } from './ap-visibility';
 
 class InvoiceItemDto {
   @IsString() @MinLength(1) @MaxLength(200) description!: string;
@@ -28,19 +29,6 @@ class CreateInvoiceDto {
   @IsOptional() @IsString() @MaxLength(1000) note?: string;
   @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => InvoiceItemDto)
   items!: InvoiceItemDto[];
-}
-
-/** Codes that carry the full AP view — supplier identity included. */
-const FULL_AP_VIEW = [PERMISSIONS.PROCUREMENT_READ, PERMISSIONS.PROCUREMENT_MANAGE];
-
-/**
- * invoices.read alone (FINANCE) gets bill numbers, amounts, statuses and match
- * verdicts but not the supplier identity — the API swaps the name for a
- * placeholder so the GLG rule holds before the response leaves the server.
- */
-function hidesSupplier(req: Request): boolean {
-  const granted = grantedPermissions(req);
-  return !FULL_AP_VIEW.some((code) => granted.includes(code));
 }
 
 @ApiBearerAuth()
@@ -66,7 +54,7 @@ export class InvoicesController {
   ) {
     return this.invoices.list(
       { page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status },
-      hidesSupplier(req),
+      hidesVendor(req),
     );
   }
 
@@ -79,7 +67,7 @@ export class InvoicesController {
   @Get(':id')
   @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE], [PERMISSIONS.INVOICES_READ])
   detail(@Param('id') id: string, @Req() req: Request) {
-    return this.invoices.byId(id, hidesSupplier(req));
+    return this.invoices.byId(id, hidesVendor(req));
   }
 
   @Post()

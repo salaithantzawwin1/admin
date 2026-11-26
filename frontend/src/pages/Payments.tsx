@@ -52,6 +52,9 @@ const emptyForm = { invoiceId: '', amount: '', date: '', method: 'BANK_TRANSFER'
 
 export default function Payments() {
   const canManage = hasPermission('payments.manage');
+  // the supplier identity is masked server-side for callers without the
+  // procurement view — say so, so the placeholder reads as policy
+  const canSeeVendor = hasPermission('procurement.read') || hasPermission('procurement.manage');
   const [items, setItems] = useState<PaymentRow[]>([]);
   const [payables, setPayables] = useState<Payable[]>([]);
   const [payableTotals, setPayableTotals] = useState({ total: 0, paid: 0, balance: 0 });
@@ -140,7 +143,11 @@ export default function Payments() {
     <div>
       <PageHeader
         title="Payments"
-        subtitle="Finance records money against APPROVED/POSTED invoices — an invoice flips UNPAID → PARTIALLY_PAID → PAID as its balance is settled (§26)"
+        subtitle={
+          canSeeVendor
+            ? 'Finance records money against APPROVED/POSTED invoices — an invoice flips UNPAID → PARTIALLY_PAID → PAID as its balance is settled (§26)'
+            : 'Money against APPROVED/POSTED invoices (UNPAID → PARTIALLY_PAID → PAID) — supplier identity is hidden on this page'
+        }
         actions={
           <>
             <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>

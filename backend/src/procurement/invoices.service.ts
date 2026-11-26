@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.module';
 import { NumberingService } from '../numbering/numbering.service';
 import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
+import { maskSupplierName } from './ap-visibility';
 
 export interface InvoiceItemInput {
   description: string;
@@ -37,18 +38,6 @@ const INVOICE_TRANSITIONS: Record<string, string[]> = {
 
 /** Tolerance for unit-price comparison (MMK has no minor unit; 0.01 buys precision). */
 const PRICE_TOLERANCE = 0.011;
-
-/**
- * Stands in for the vendor's name on the read-only AP leg (invoices.read
- * without procurement.read/manage): GLG requires FINANCE to reconcile bills
- * without seeing who the supplier is. Invoice rows only ever select the
- * supplier's id and name, so hiding the identity is this one name swap.
- */
-const MASKED_SUPPLIER_NAME = 'Supplier (hidden)';
-
-function maskSupplierName(row: { supplier: { name: string } }): void {
-  row.supplier.name = MASKED_SUPPLIER_NAME;
-}
 
 /**
  * Procurement Phase 4 (roadmap R6, design §22–25): vendor invoices + the
