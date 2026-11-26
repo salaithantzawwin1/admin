@@ -553,8 +553,9 @@ export default function Assets() {
   }, []);
 
   // the tab label carries the backlog count, so it is loaded as soon as the
-  // page opens (and again after each save)
-  useEffect(() => { if (canManage) void loadReview(); }, [canManage, loadReview]);
+  // page opens; tab changes refetch too (a new asset created on the register
+  // tab must appear the moment the review tab is opened), as does every save
+  useEffect(() => { if (canManage) void loadReview(); }, [canManage, tab, loadReview]);
 
   /** Fill the category/custodian chosen for one row; blanks leave a field alone. */
   const saveReviewRow = async (row: IncompleteAssetRow) => {
