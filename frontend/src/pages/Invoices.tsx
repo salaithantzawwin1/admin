@@ -228,7 +228,10 @@ export default function Invoices() {
             <thead>
               <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
                 <th className="px-4 py-3 font-medium">Invoice</th>
-                <th className="px-4 py-3 font-medium">Bill # (vendor)</th>
+                {/* the vendor's own bill no is vendor identity: the API masks it and
+                    the column is dropped entirely for the masked view (Payments
+                    shows no bill-no column for the same reason) */}
+                {canSeeSupplier && <th className="px-4 py-3 font-medium">Bill # (vendor)</th>}
                 <th className="px-4 py-3 font-medium">Supplier</th>
                 <th className="px-4 py-3 font-medium">PO</th>
                 <th className="px-4 py-3 font-medium">Total</th>
@@ -242,7 +245,7 @@ export default function Invoices() {
               {rows.map((inv) => (
                 <tr key={inv.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => openDetail(inv)}>
                   <td className="px-4 py-3 font-medium">{inv.invoiceNumber}</td>
-                  <td className="px-4 py-3 text-gray-500">{inv.supplierInvoiceNumber}</td>
+                  {canSeeSupplier && <td className="px-4 py-3 text-gray-500">{inv.supplierInvoiceNumber}</td>}
                   <td className="px-4 py-3">{inv.supplier.name}</td>
                   <td className="px-4 py-3 text-gray-500">{inv.purchaseOrder?.poNumber ?? '—'}</td>
                   <td className="px-4 py-3">{money(inv.total)}</td>
@@ -316,7 +319,7 @@ export default function Invoices() {
               {detail.matchStatus && (
                 <Badge color={MATCH_COLORS[detail.matchStatus] ?? 'gray'}>Match: {detail.matchStatus.replace(/_/g, ' ')}</Badge>
               )}
-              <span className="text-sm text-gray-500">Bill #{detail.supplierInvoiceNumber}</span>
+              {canSeeSupplier && <span className="text-sm text-gray-500">Bill #{detail.supplierInvoiceNumber}</span>}
               {detail.purchaseOrder && <span className="text-sm text-gray-500">PO: {detail.purchaseOrder.poNumber}</span>}
               {detail.goodsReceipt && <span className="text-sm text-gray-500">GRN: {detail.goodsReceipt.grnNumber}</span>}
               <span className="text-sm text-gray-500">Dated {fmtDate(detail.invoiceDate)}</span>
