@@ -1,19 +1,25 @@
 /**
- * The audit trail is an admin record: GET /audit-logs, /audit-logs/filters,
- * /audit-logs/export.csv and /audit-logs/:id must all require audit.read.
+ * The audit trail must require audit.read on every route: GET /audit-logs,
+ * /audit-logs/filters, /audit-logs/export.csv and /audit-logs/:id.
  *
- * The controller carried @RequirePermissions(AUDIT_READ) but listed only
- * JwtAuthGuard in @UseGuards, so the metadata was inert and any signed-in user
- * could page through — and export — the whole trail. The metadata check alone
- * cannot catch that, so the guard's presence in @UseGuards is asserted too.
+ * AuditController declares @RequirePermissions(AUDIT_READ) at class level but
+ * lists only JwtAuthGuard in @UseGuards — the requirement is enforced by the
+ * PermissionsGuard registered app-wide as an APP_GUARD in AppModule. That is
+ * easy to overlook (and easy to delete), so this test pins both halves:
+ *  - the controller still declares audit.read for every handler, and
+ *  - AppModule still registers PermissionsGuard as a global guard.
+ * It then exercises the guard itself: a signed-in caller without audit.read is
+ * refused on every route, a holder is admitted, an anonymous one is rejected.
  *
  * Run:  cd backend && node -r ts-node/register/transpile-only test/audit-logs-guard.test.ts
  */
 const assert = require('assert');
 const { ForbiddenException } = require('@nestjs/common');
+const { APP_GUARD } = require('@nestjs/core');
 const { PERMISSIONS } = require('../src/auth/permissions');
 const { PermissionsGuard, PERMISSIONS_KEY } = require('../src/auth/permissions.guard');
 const { AuditController } = require('../src/audit/audit.controller');
+const { AppModule } = require('../src/app.module');
 
 let passed = 0;
 const failures: string[] = [];
@@ -36,7 +42,7 @@ const HANDLERS = ['findAll', 'filters', 'exportCsv', 'findOne'];
 (async () => {
   const controller: any = new AuditController({} as any);
 
-  // reads real decorator metadata, in Nest's handler-then-class order
+  // resolves metadata the way Nest does: handler first, then controller class
   const reflector = {
     getAllAndOverride: (key: string, targets: any[]) => {
       for (const t of targets) {
@@ -53,17 +59,8 @@ const HANDLERS = ['findAll', 'filters', 'exportCsv', 'findOne'];
       switchToHttp: () => ({ getRequest: () => ({ user }) }),
     }) as any;
 
-  await test('PermissionsGuard is attached to the controller (metadata alone is inert)', () => {
-    const guards = Reflect.getMetadata('__guards__', AuditController) ?? [];
-    assert.ok(
-      guards.includes(PermissionsGuard),
-      'AuditController must list PermissionsGuard in @UseGuards, otherwise audit.read is never checked',
-    );
-  });
-
   await test('audit.read is declared at class level, so every route needs it', () => {
-    const required = Reflect.getMetadata(PERMISSIONS_KEY, AuditController);
-    assert.deepStrictEqual(required, [PERMISSIONS.AUDIT_READ]);
+    assert.deepStrictEqual(Reflect.getMetadata(PERMISSIONS_KEY, AuditController), [PERMISSIONS.AUDIT_READ]);
     for (const h of HANDLERS) {
       assert.deepStrictEqual(
         reflector.getAllAndOverride(PERMISSIONS_KEY, [controller[h], AuditController]),
@@ -71,6 +68,14 @@ const HANDLERS = ['findAll', 'filters', 'exportCsv', 'findOne'];
         `${h} must resolve audit.read`,
       );
     }
+  });
+
+  await test('AppModule enforces the metadata with a global PermissionsGuard', () => {
+    const providers = Reflect.getMetadata('providers', AppModule) ?? [];
+    assert.ok(
+      providers.some((p: any) => p?.provide === APP_GUARD && p?.useClass === PermissionsGuard),
+      'without the APP_GUARD registration @RequirePermissions on AuditController is inert',
+    );
   });
 
   await test('every audit route refuses a signed-in caller without audit.read', async () => {
@@ -94,7 +99,7 @@ const HANDLERS = ['findAll', 'filters', 'exportCsv', 'findOne'];
     }
   });
 
-  await test('a request without a user is rejected before any permission lookup', async () => {
+  await test('an anonymous request is rejected before any permission lookup', async () => {
     let looked = false;
     const guard = new PermissionsGuard(
       reflector as any,
