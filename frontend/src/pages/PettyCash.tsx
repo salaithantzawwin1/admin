@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, hasPermission, getToken } from '../api';
 import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '../components/ui';
 import { Modal } from '../components/Modal';
@@ -15,21 +15,38 @@ interface Txn {
   description?: string | null;
   account?: { code?: string | null; name: string } | null;
   createdBy?: { username: string; fullName?: string } | null;
+  /** v2 P1-1: the bill this entry settled, when it settled one */
+  invoice?: { id: string; invoiceNumber: string } | null;
+  payment?: { id: string; paymentNumber: string; invoiceId: string } | null;
 }
 
 interface Totals { topup: number; expense: number; balance: number }
 
 interface Account { id: string; code?: string | null; name: string }
 
-const emptyForm = { type: 'TOPUP', amount: '', date: '', payee: '', accountId: '', description: '' };
+/** An invoice an expense may settle (v2 P1-1 invoice picker). */
+interface BillOption {
+  id: string;
+  invoiceNumber: string;
+  status: string;
+  total: string | number;
+  paidAmount: string | number;
+  supplier: { id: string; name: string };
+}
+
+const emptyForm = { type: 'TOPUP', amount: '', date: '', payee: '', accountId: '', description: '', invoiceId: '' };
+
+const money = (v: string | number) => Number(v ?? 0).toLocaleString();
 
 export default function PettyCash() {
   const canManage = hasPermission('pettycash.manage');
+  const canSeeBills = hasPermission('procurement.read') || hasPermission('procurement.manage');
   const [items, setItems] = useState<Txn[]>([]);
   const [totals, setTotals] = useState<Totals>({ topup: 0, expense: 0, balance: 0 });
   // unfiltered balance — "cash on hand" must not follow the list filters
   const [cashBalance, setCashBalance] = useState(0);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [bills, setBills] = useState<BillOption[]>([]);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [type, setType] = useState('');
@@ -72,6 +89,36 @@ export default function PettyCash() {
     })();
   }, []);
 
+  // v2 P1-1: the bills an expense can settle — open (not cancelled/rejected)
+  // and still carrying a balance. Loaded lazily the first time the form opens.
+  const loadBills = useCallback(async () => {
+    if (!canSeeBills || bills.length) return;
+    try {
+      const r = await api<{ items: BillOption[] }>('/invoices?page=1&pageSize=100');
+      setBills(r.items ?? []);
+    } catch {
+      setBills([]);
+    }
+  }, [canSeeBills, bills.length]);
+
+  const openForm = () => {
+    setForm({ ...emptyForm });
+    setFormError('');
+    void loadBills();
+  };
+
+  const openBills = useMemo(
+    () => bills
+      .filter((b) => b.status !== 'CANCELLED' && b.status !== 'REJECTED')
+      .filter((b) => Number(b.total) - Number(b.paidAmount ?? 0) > 0.009)
+      .sort((a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber)),
+    [bills],
+  );
+
+  const pickedBill = form?.invoiceId ? openBills.find((b) => b.id === form.invoiceId) : undefined;
+  const pickedBalance = pickedBill ? Number(pickedBill.total) - Number(pickedBill.paidAmount ?? 0) : 0;
+  const overOutstanding = Boolean(pickedBill) && Number(form?.amount ?? 0) > pickedBalance;
+
   // keeps "cash on hand" honest after a write even while the list is filtered
   const refreshCash = useCallback(() => {
     api<{ totals: Totals }>('/petty-cash')
@@ -93,9 +140,17 @@ export default function PettyCash() {
           payee: form.payee || undefined,
           accountId: form.accountId || undefined,
           description: form.description || undefined,
+          // only an expense may name a bill; the server refuses a linked top-up
+          invoiceId: form.type === 'EXPENSE' && form.invoiceId ? form.invoiceId : undefined,
         },
       });
-      toast(`Petty cash ${form.type === 'TOPUP' ? 'top-up' : 'expense'} recorded`);
+      toast(
+        form.type === 'TOPUP'
+          ? 'Petty cash top-up recorded'
+          : form.invoiceId
+            ? 'Expense recorded and the invoice marked paid'
+            : 'Petty cash expense recorded',
+      );
       setForm(null);
       await load();
       refreshCash();
@@ -139,7 +194,7 @@ export default function PettyCash() {
         actions={
           <>
             <Button variant="ghost" onClick={() => void downloadCsv()}>⬇ CSV</Button>
-            {canManage && <Button onClick={() => setForm({ ...emptyForm })}>+ Record entry</Button>}
+            {canManage && <Button onClick={openForm}>+ Record entry</Button>}
           </>
         }
       />
@@ -157,6 +212,7 @@ export default function PettyCash() {
         <Card className="p-4">
           <div className="text-xs text-gray-500 uppercase tracking-wide">Balance{usingFilters ? ' (in range)' : ''}</div>
           <div className="text-xl font-bold text-gray-900 mt-1 tabular-nums">{totals.balance.toLocaleString()}</div>
+          <p className="text-[11px] text-gray-400 mt-1 leading-tight">Advisory — top-ups are not always recorded</p>
         </Card>
       </div>
 
@@ -201,7 +257,14 @@ export default function PettyCash() {
             <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${amountColor(t.type)}`}>
               {t.type === 'EXPENSE' ? '−' : '+'}{Number(t.amount).toLocaleString()}
             </td>
-            <td className="px-4 py-2.5">{t.payee ?? '—'}</td>
+            <td className="px-4 py-2.5">
+              {t.payee ?? '—'}
+              {t.invoice && (
+                <div className="text-xs text-gray-500 whitespace-nowrap" title={t.payment ? `paid as ${t.payment.paymentNumber}` : undefined}>
+                  → {t.invoice.invoiceNumber}{t.payment ? ` · ${t.payment.paymentNumber}` : ''}
+                </div>
+              )}
+            </td>
             <td className="px-4 py-2.5">{t.account ? `${t.account.code ?? ''} ${t.account.name}` : '—'}</td>
             <td className="px-4 py-2.5 max-w-[280px] truncate" title={t.description ?? ''}>{t.description ?? '—'}</td>
             <td className="px-4 py-2.5 text-gray-500">{t.createdBy?.fullName || t.createdBy?.username || '—'}</td>
@@ -224,7 +287,7 @@ export default function PettyCash() {
           <div className="space-y-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Type *</label>
-              <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+              <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, invoiceId: '' })}>
                 <option value="TOPUP">TOPUP — cash received</option>
                 <option value="EXPENSE">EXPENSE — cash paid out</option>
               </Select>
@@ -234,7 +297,7 @@ export default function PettyCash() {
               <Input type="number" min={0.01} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="e.g. 50000" />
               {form.type === 'EXPENSE' && Number(form.amount) > cashBalance && (
                 <p className="text-xs text-orange-600 mt-1">
-                  More than the cash on hand (MMK {cashBalance.toLocaleString()}) — the float would go negative.
+                  More than the cash on hand (MMK {cashBalance.toLocaleString()}). The float figure is advisory — the entry saves anyway.
                 </p>
               )}
             </div>
@@ -242,6 +305,36 @@ export default function PettyCash() {
               <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
               <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
             </div>
+
+            {form.type === 'EXPENSE' && canSeeBills && (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Invoice paid (optional)</label>
+                <Select
+                  value={form.invoiceId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const bill = openBills.find((b) => b.id === id);
+                    setForm({ ...form, invoiceId: id, payee: bill ? bill.supplier.name : form.payee });
+                  }}
+                >
+                  <option value="">— none (ordinary expense) —</option>
+                  {openBills.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.invoiceNumber} · {b.supplier.name} · balance {money(Number(b.total) - Number(b.paidAmount ?? 0))}
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Linking records the payment to the supplier and marks the bill paid. Leave it empty when the cash was not for a bill.
+                </p>
+                {overOutstanding && (
+                  <p className="text-xs text-red-600 mt-1">
+                    More than the outstanding balance on {pickedBill?.invoiceNumber} (MMK {money(pickedBalance)}) — record a separate expense per instalment.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Payee</label>
               <Input value={form.payee} onChange={(e) => setForm({ ...form, payee: e.target.value })} placeholder={form.type === 'EXPENSE' ? 'Paid to' : 'Drawn from'} />
@@ -260,7 +353,10 @@ export default function PettyCash() {
           </div>
           <div className="flex justify-end gap-2 mt-4">
             <Button variant="ghost" onClick={() => { setForm(null); setFormError(''); }}>Cancel</Button>
-            <Button disabled={!form.amount || Number(form.amount) <= 0 || formBusy} onClick={() => void submitForm()}>
+            <Button
+              disabled={!form.amount || Number(form.amount) <= 0 || formBusy || overOutstanding}
+              onClick={() => void submitForm()}
+            >
               {formBusy ? 'Recording…' : 'Record'}
             </Button>
           </div>
@@ -271,7 +367,11 @@ export default function PettyCash() {
       {toDelete && (
         <ConfirmDialog
           title={`Delete ${toDelete.code}?`}
-          description={`A monetary entry is never edited — delete (audited) and re-enter the corrected row. Amount: MMK ${Number(toDelete.amount).toLocaleString()} (${toDelete.type}).`}
+          description={
+            toDelete.payment
+              ? `This expense paid ${toDelete.invoice?.invoiceNumber ?? 'an invoice'} (payment ${toDelete.payment.paymentNumber}). Deleting it also deletes that payment and puts the bill back to its previous payment status — both steps are audited. Amount: MMK ${Number(toDelete.amount).toLocaleString()}.`
+              : `A monetary entry is never edited — delete (audited) and re-enter the corrected row. Amount: MMK ${Number(toDelete.amount).toLocaleString()} (${toDelete.type}).`
+          }
           variant="danger"
           confirmLabel="Delete entry"
           onClose={() => setToDelete(null)}

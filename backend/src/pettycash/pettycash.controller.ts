@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IsDateString, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { Response } from 'express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions } from '../auth/permissions.guard';
+import { AnyPermission, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { PettyCashService } from './pettycash.service';
 import { Actor } from '../org/org.service';
@@ -17,6 +17,12 @@ export class PettyCashDto {
   @IsOptional() @IsString() @MaxLength(160) payee?: string;
   @IsOptional() @IsString() accountId?: string;
   @IsOptional() @IsString() @IsNotEmpty() @MaxLength(500) description?: string;
+  /** v2 P1-1: the bill this expense settled (EXPENSE only). */
+  @IsOptional() @IsString() invoiceId?: string;
+}
+
+export class LinkInvoiceDto {
+  @IsString() @IsNotEmpty() invoiceId!: string;
 }
 
 @ApiTags('petty-cash')
@@ -47,10 +53,32 @@ export class PettyCashController {
     res.send(body);
   }
 
+  /**
+   * v2 P1-1: unlinked expenses that plausibly settled this invoice — the picker
+   * behind "Link petty-cash expense". Read-only; must be declared before ':id'.
+   */
+  @Get('linkable/:invoiceId')
+  @AnyPermission(
+    [PERMISSIONS.PETTYCASH_READ],
+    [PERMISSIONS.PAYMENTS_READ],
+    [PERMISSIONS.PROCUREMENT_READ],
+    [PERMISSIONS.PROCUREMENT_MANAGE],
+  )
+  linkable(@Param('invoiceId') invoiceId: string) {
+    return this.petty.linkable(invoiceId);
+  }
+
   @Post()
   @RequirePermissions(PERMISSIONS.PETTYCASH_MANAGE)
   create(@Req() req, @Body() dto: PettyCashDto) {
     return this.petty.create(dto, this.actor(req));
+  }
+
+  /** v2 P1-1: link an expense already in the ledger to the bill it paid. */
+  @Post(':id/link-invoice')
+  @AnyPermission([PERMISSIONS.PETTYCASH_MANAGE], [PERMISSIONS.PAYMENTS_MANAGE])
+  linkInvoice(@Req() req, @Param('id') id: string, @Body() dto: LinkInvoiceDto) {
+    return this.petty.linkInvoice(id, dto.invoiceId, this.actor(req));
   }
 
   /** No edit — a wrong row is deleted (audited) and re-entered. */

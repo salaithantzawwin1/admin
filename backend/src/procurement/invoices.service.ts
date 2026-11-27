@@ -109,6 +109,25 @@ export class InvoicesService {
           select: { id: true, filename: true, mimeType: true, size: true, createdAt: true },
           orderBy: { createdAt: 'asc' },
         },
+        // v2 P1-1: the payment panel — every payment row plus the petty-cash
+        // expenses behind them, so the screen can show what was paid, when and
+        // from which pot of money.
+        payments: {
+          select: {
+            id: true, paymentNumber: true, date: true, amount: true, method: true,
+            reference: true, note: true, fundingSource: true, payerName: true,
+            pettyCashTransactionId: true,
+            createdBy: { select: { fullName: true, username: true } },
+          },
+          orderBy: { date: 'asc' },
+        },
+        pettyCashExpenses: {
+          select: {
+            id: true, code: true, date: true, amount: true, payee: true,
+            payment: { select: { paymentNumber: true } },
+          },
+          orderBy: { date: 'asc' },
+        },
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
@@ -308,6 +327,16 @@ export class InvoicesService {
     if (!target) throw new BadRequestException('Unknown action');
     if (!INVOICE_TRANSITIONS[inv.status]?.includes(target.to)) {
       throw new ConflictException(`Cannot ${action} an invoice in status ${inv.status}`);
+    }
+
+    // v2 BR-14: recorded money keeps the bill alive. Cancelling or rejecting an
+    // invoice that already has payments would leave the ledger counting money
+    // against a void document, so the payments must be removed first — an
+    // explicit, audited step, never a side effect of a status change.
+    if ((target.to === 'CANCELLED' || target.to === 'REJECTED') && Number(inv.paidAmount) > 0) {
+      throw new ConflictException(
+        `Invoice ${inv.invoiceNumber} has ${Number(inv.paidAmount).toLocaleString()} MMK recorded as paid — remove the payment(s) first`,
+      );
     }
 
     // Control 3 (§35): GRN check at submission — invoice needs a PO with at least one GRN

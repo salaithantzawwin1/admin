@@ -90,6 +90,7 @@ model User {
   maintenanceSchedulesCreated MaintenanceSchedule[] @relation("MaintenanceScheduleCreatedBy")
   pettyCashCreated       PettyCashTransaction[]  @relation("PettyCashTransactions")
   paymentsCreated        Payment[]               @relation("PaymentCreatedBy")
+  paymentsPaid           Payment[]               @relation("PaymentPayer")
   telegramChatId         String?                 @unique // linked Telegram chat (bind via /start USR-<code>)
   telegramBindCode       String?                 @unique
   telegramUsername       String?
@@ -1140,6 +1141,7 @@ model Supplier {
   purchaseDrafts    SupplierPurchaseDraft[]
   purchaseOrders    PurchaseOrder[]         @relation("PoSupplier")
   invoices          Invoice[]               @relation("InvoiceSupplier")
+  pettyCashTransactions PettyCashTransaction[] @relation("SupplierPettyCashTransactions")
   rfqVendors        RfqVendor[]             @relation("RfqVendorSupplier")
   assetCosts        AssetCost[]
   maintenanceRecords MaintenanceRecord[]      @relation("MaintenanceVendor")
@@ -1844,14 +1846,24 @@ model PettyCashTransaction {
   payee       String? // paid to (expense) / drawn from (top-up)
   accountId   String?  @db.Uuid // optional account classification (§17)
   description String?
+  /// the bill this cash actually settled (null = ordinary float spending)
+  invoiceId   String?  @db.Uuid
+  /// optional supplier link for reporting; `payee` stays the free-text truth
+  supplierId  String?  @db.Uuid
   createdById String   @db.Uuid
   createdAt   DateTime @default(now())
 
   account   Account? @relation(fields: [accountId], references: [id])
   createdBy User     @relation("PettyCashTransactions", fields: [createdById], references: [id])
+  invoice   Invoice?  @relation("InvoicePettyCashExpenses", fields: [invoiceId], references: [id])
+  supplier  Supplier? @relation("SupplierPettyCashTransactions", fields: [supplierId], references: [id])
+  /// one expense <=> at most one payment (single write path, v2 BR-13)
+  payment   Payment?
 
   @@index([date])
   @@index([type])
+  @@index([invoiceId])
+  @@index([supplierId])
   @@map("petty_cash_transactions")
 }
 
@@ -2047,6 +2059,8 @@ model Invoice {
 
   supplier      Supplier       @relation("InvoiceSupplier", fields: [supplierId], references: [id])
   payments      Payment[]
+  /// petty-cash expenses linked to this bill (each carries its payment)
+  pettyCashExpenses PettyCashTransaction[] @relation("InvoicePettyCashExpenses")
   purchaseOrder PurchaseOrder? @relation("InvoicePurchaseOrder", fields: [purchaseOrderId], references: [id])
   goodsReceipt  GoodsReceipt?  @relation("InvoiceGoodsReceipt", fields: [goodsReceiptId], references: [id])
   createdBy     User           @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
@@ -2097,12 +2111,23 @@ model Payment {
   note          String?
   createdById   String   @db.Uuid
   createdAt     DateTime @default(now())
+  // v2 P1-1: where the money came from. A String, not an enum, so a later
+  // PERSONAL/reimbursement value can be added additively (v2 keeps it out of
+  // scope today). Legacy rows stay null and render as a dash.
+  fundingSource String? // PETTY_CASH / COMPANY_CASH / COMPANY_BANK
+  payerUserId   String? @db.Uuid
+  payerName     String? // free text: driver, outsider, whoever handed it over
+  /// the petty-cash expense that produced this payment - one expense, one payment
+  pettyCashTransactionId String? @unique @db.Uuid
 
-  invoice    Invoice @relation(fields: [invoiceId], references: [id])
-  createdBy  User    @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+  invoice    Invoice              @relation(fields: [invoiceId], references: [id])
+  createdBy  User                 @relation("PaymentCreatedBy", fields: [createdById], references: [id])
+  payer      User?                @relation("PaymentPayer", fields: [payerUserId], references: [id])
+  pettyCash  PettyCashTransaction? @relation(fields: [pettyCashTransactionId], references: [id])
 
   @@index([invoiceId])
   @@index([date])
+  @@index([fundingSource])
   @@map("payments")
 }
 

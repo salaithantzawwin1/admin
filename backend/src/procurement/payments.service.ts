@@ -5,6 +5,7 @@ import { AuditService } from '../audit/audit.service';
 import { Actor } from '../org/org.service';
 import { csvCell } from '../util/csv';
 import { maskSupplierIdentity, maskSupplierName } from './ap-visibility';
+import { PAYMENT_TOLERANCE, syncInvoiceRollup } from './payment-rollup';
 
 export const PAYMENT_METHODS = ['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'] as const;
 
@@ -13,7 +14,7 @@ export const PAYMENT_METHODS = ['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'] as c
 const PAYABLE_STATUSES = ['APPROVED', 'POSTED'];
 
 /** Rounding window for balance arithmetic (MMK has no minor unit). */
-const TOLERANCE = 0.01;
+const TOLERANCE = PAYMENT_TOLERANCE;
 
 /**
  * GLG Procurement ERP W1 — vendor payments (design §26, Plan §9).
@@ -209,6 +210,14 @@ export class PaymentsService {
       include: { invoice: { select: { invoiceNumber: true } } },
     });
     if (!row) throw new NotFoundException('Payment not found');
+    // v2 BR-13: a petty-cash payment is the product of its expense. Deleting it
+    // here would orphan the expense and hide the cash that actually left the
+    // float, so the correction belongs on the petty-cash screen.
+    if (row.fundingSource === 'PETTY_CASH') {
+      throw new ConflictException(
+        `Payment ${row.paymentNumber} was created by a petty-cash expense — delete that expense instead (Petty Cash screen)`,
+      );
+    }
     await this.prisma.$transaction(async (tx) => {
       await tx.payment.delete({ where: { id } });
       await this.syncRollup(tx, row.invoiceId);
@@ -225,14 +234,10 @@ export class PaymentsService {
     return { success: true };
   }
 
-  /** Recompute paidAmount + paymentStatus from the ledger (single source of truth). */
+  /** Recompute paidAmount + paymentStatus from the ledger (single source of truth).
+   *  Shared with the petty-cash ledger so both write paths agree (v2 BR-1). */
   private async syncRollup(tx: any, invoiceId: string) {
-    const agg = await tx.payment.aggregate({ where: { invoiceId }, _sum: { amount: true } });
-    const paid = Number(agg._sum.amount ?? 0);
-    const inv = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId }, select: { total: true } });
-    const total = Number(inv.total);
-    const paymentStatus = paid <= 0 ? 'UNPAID' : paid >= total - TOLERANCE ? 'PAID' : 'PARTIALLY_PAID';
-    return tx.invoice.update({ where: { id: invoiceId }, data: { paidAmount: paid, paymentStatus } });
+    return syncInvoiceRollup(tx, invoiceId);
   }
 
   /** §41-style CSV export of the register (respects from/to filters). */

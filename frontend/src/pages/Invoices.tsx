@@ -60,6 +60,42 @@ interface Invoice {
   createdBy?: { fullName?: string | null } | null;
   createdAt: string;
   items: InvoiceItem[];
+  /** detail payload (v2 P1-1): money actually paid against this bill */
+  payments?: PaymentRow[];
+  /** detail payload (v2 P1-1): petty-cash expenses that settled it */
+  pettyCashExpenses?: PettyCashExpenseRow[];
+}
+
+interface PaymentRow {
+  id: string;
+  paymentNumber: string;
+  date: string;
+  amount: string | number;
+  method: string;
+  reference?: string | null;
+  note?: string | null;
+  fundingSource?: string | null;
+  payerName?: string | null;
+  pettyCashTransactionId?: string | null;
+  createdBy?: { fullName?: string | null; username?: string | null } | null;
+}
+
+interface PettyCashExpenseRow {
+  id: string;
+  code: string;
+  date: string;
+  amount: string | number;
+  payee?: string | null;
+  payment?: { paymentNumber: string } | null;
+}
+
+interface LinkableExpense {
+  id: string;
+  code: string;
+  date: string;
+  amount: string | number;
+  payee?: string | null;
+  description?: string | null;
 }
 
 interface Supplier {
@@ -449,6 +485,12 @@ export default function Invoices() {
               </div>
             )}
 
+            <PaymentPanel
+              invoice={detail}
+              canManage={canManage}
+              onChanged={async () => { setDetail(await api<Invoice>(`/invoices/${detail.id}`)); load(); }}
+            />
+
             </div>
 
             <div className={detailTab === 'attachments' ? 'space-y-3' : 'hidden'}>
@@ -833,6 +875,195 @@ function InvoiceAttachments({
             }
           }}
         />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Payment to supplier (v2 P1-1).
+ *
+ * Payment status is derived from the payment ledger, never typed — so this
+ * panel only shows what the ledger says and offers the one action the office
+ * actually needs: linking the petty-cash expense that already paid the shop.
+ * A wrongly linked expense is corrected by deleting it on the Petty Cash
+ * screen (audited), not by editing money here.
+ */
+const SOURCE_LABELS: Record<string, string> = {
+  PETTY_CASH: 'Petty cash',
+  COMPANY_CASH: 'Company cash',
+  COMPANY_BANK: 'Company bank',
+};
+
+function PaymentPanel({
+  invoice,
+  canManage,
+  onChanged,
+}: {
+  invoice: Invoice;
+  canManage: boolean;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<LinkableExpense[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [picked, setPicked] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const paid = Number(invoice.paidAmount ?? 0);
+  const total = Number(invoice.total ?? 0);
+  const outstanding = total - paid;
+  const payments = invoice.payments ?? [];
+  const closed = invoice.status === 'CANCELLED' || invoice.status === 'REJECTED';
+  const canLink = canManage && !closed && outstanding > 0.009;
+
+  const openLink = async () => {
+    setOpen(true);
+    setPicked('');
+    setError('');
+    setLoading(true);
+    try {
+      const r = await api<{ items: LinkableExpense[] }>(`/petty-cash/linkable/${invoice.id}`);
+      setItems(r.items ?? []);
+    } catch (e) {
+      setItems([]);
+      setError(e instanceof Error ? e.message : 'Could not load petty-cash expenses');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pickedRow = items.find((i) => i.id === picked);
+  const overBalance = Boolean(pickedRow) && Number(pickedRow?.amount ?? 0) > outstanding + 0.01;
+
+  const link = async () => {
+    if (!picked) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await api<{ paymentNumber: string }>(`/petty-cash/${picked}/link-invoice`, {
+        method: 'POST',
+        body: { invoiceId: invoice.id },
+      });
+      toast(`Linked — payment ${r.paymentNumber} recorded against ${invoice.invoiceNumber}`);
+      setOpen(false);
+      await onChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not link the expense');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Payment to supplier</div>
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span className="text-gray-500">Paid <span className="font-medium text-gray-900 tabular-nums">{money(paid)}</span></span>
+          <span className="text-gray-500">Outstanding <span className={`font-medium tabular-nums ${outstanding > 0.009 ? 'text-orange-700' : 'text-green-700'}`}>{money(outstanding)}</span></span>
+          {canLink && <Button variant="ghost" onClick={() => void openLink()}>Link petty-cash expense</Button>}
+        </div>
+      </div>
+
+      {payments.length === 0 ? (
+        <p className="text-sm text-gray-500">
+          No payment recorded yet. If the shop was already paid from petty cash, link that expense; otherwise the bill stays{' '}
+          <span className="font-medium">UNPAID</span>.
+        </p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-500 border-b">
+              <th className="py-1 pr-2 font-medium">Payment</th>
+              <th className="py-1 pr-2 font-medium">Date</th>
+              <th className="py-1 pr-2 font-medium">Source</th>
+              <th className="py-1 pr-2 font-medium">Method</th>
+              <th className="py-1 pr-2 font-medium text-right">Amount</th>
+              <th className="py-1 pr-2 font-medium">Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {payments.map((p) => (
+              <tr key={p.id} className="border-b last:border-0">
+                <td className="py-1 pr-2 font-medium text-gray-900">{p.paymentNumber}</td>
+                <td className="py-1 pr-2">{fmtDate(p.date)}</td>
+                <td className="py-1 pr-2">
+                  {p.fundingSource ? (SOURCE_LABELS[p.fundingSource] ?? p.fundingSource) : <span className="text-gray-400">—</span>}
+                </td>
+                <td className="py-1 pr-2">{p.method.replace(/_/g, ' ')}</td>
+                <td className="py-1 pr-2 text-right tabular-nums">{money(p.amount)}</td>
+                <td className="py-1 pr-2 max-w-[240px] truncate" title={p.note ?? ''}>
+                  {p.note ?? p.reference ?? '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {(invoice.pettyCashExpenses?.length ?? 0) > 0 && (
+        <p className="text-xs text-gray-500">
+          Linked petty-cash expenses:{' '}
+          {invoice.pettyCashExpenses!.map((e) => `${e.code}${e.payment ? ` → ${e.payment.paymentNumber}` : ' (unlinked)'}`).join(', ')}
+        </p>
+      )}
+
+      {open && (
+        <Modal title={`Link a petty-cash expense to ${invoice.invoiceNumber}`} onClose={() => setOpen(false)} error={error}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Only expenses with no bill attached are listed. Linking records the payment and marks this bill paid; the
+              expense itself is unchanged.
+            </p>
+            {loading ? (
+              <Empty label="Loading…" />
+            ) : items.length === 0 ? (
+              <Empty label="No unlinked petty-cash expense for this supplier" />
+            ) : (
+              <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 border border-gray-200 rounded-lg">
+                {items.map((e) => {
+                  const tooBig = Number(e.amount) > outstanding + 0.01;
+                  return (
+                    <label
+                      key={e.id}
+                      className={`flex items-start gap-2 p-2 text-sm ${tooBig ? 'opacity-60' : 'cursor-pointer hover:bg-gray-50'}`}
+                    >
+                      <input
+                        type="radio"
+                        name="linkable-expense"
+                        className="mt-1"
+                        disabled={tooBig}
+                        checked={picked === e.id}
+                        onChange={() => setPicked(e.id)}
+                      />
+                      <span className="flex-1">
+                        <span className="font-medium text-gray-900">{e.code}</span>
+                        <span className="text-gray-500"> · {fmtDate(e.date)} · {money(e.amount)} MMK</span>
+                        <span className="block text-xs text-gray-500">
+                          {e.payee ?? '—'}{e.description ? ` — ${e.description}` : ''}
+                          {tooBig ? ' · more than the outstanding balance' : ''}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {overBalance && (
+              <p className="text-xs text-red-600">
+                The selected expense is larger than the outstanding balance (MMK {money(outstanding)}).
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+            <Button disabled={!picked || busy || overBalance} onClick={() => void link()}>
+              {busy ? 'Linking…' : 'Link and mark paid'}
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );
