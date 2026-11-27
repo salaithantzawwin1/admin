@@ -26,8 +26,9 @@ export class LinkInvoiceDto {
 }
 
 export class DeletePettyCashDto {
-  /** D-9/BR-14 — why the row is being removed; kept in the audit entry. */
-  @IsString() @MaxLength(500) reason!: string;
+  /** D-9/BR-14 — why the row is being removed; kept in the audit entry.
+   *  Presence is checked in the service (it owns the wording). */
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 @ApiTags('petty-cash')

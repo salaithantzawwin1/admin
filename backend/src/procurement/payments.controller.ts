@@ -16,8 +16,9 @@ class RecordPaymentDto {
   @IsOptional() @IsDateString() date?: string;
   @IsIn(PAYMENT_METHODS as unknown as string[]) method!: string;
   /** v2 BR-7/D-3 — mandatory; `PETTY_CASH` reaches the service and is refused
-   *  with USE_PETTY_CASH_LINK (D-2 — it has exactly one writer: the expense). */
-  @IsString() @MaxLength(40) fundingSource!: string;
+   *  with USE_PETTY_CASH_LINK (D-2 — it has exactly one writer: the expense).
+   *  Presence is checked in the service so the message says what to send. */
+  @IsOptional() @IsString() @MaxLength(40) fundingSource?: string;
   /** Staff member who physically paid (either an id or a free-text name). */
   @IsOptional() @IsString() payerUserId?: string;
   @IsOptional() @IsString() @MaxLength(160) payerName?: string;
@@ -28,8 +29,9 @@ class RecordPaymentDto {
 }
 
 class DeletePaymentDto {
-  /** D-9/BR-14 — why the payment is being removed; kept in the audit entry. */
-  @IsString() @MaxLength(500) reason!: string;
+  /** D-9/BR-14 — why the payment is being removed; kept in the audit entry.
+   *  Presence is checked in the service (it owns the wording). */
+  @IsOptional() @IsString() @MaxLength(500) reason?: string;
 }
 
 @ApiBearerAuth()
