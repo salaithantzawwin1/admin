@@ -927,9 +927,10 @@ function PaymentPanel({
   const outstanding = total - paid;
   const payments = invoice.payments ?? [];
   const closed = invoice.status === 'CANCELLED' || invoice.status === 'REJECTED';
-  // mirrors POST /petty-cash/:id/link-invoice (pettycash.manage or payments.manage):
-  // the Finance user who owns the cash can link, without procurement.manage
-  const canLink = (canManage || canPay || hasPermission('pettycash.manage')) && !closed && outstanding > 0.009;
+  // Exact mirror of POST /petty-cash/:id/link-invoice, which accepts
+  // pettycash.manage or payments.manage and nothing else — procurement.manage
+  // may read the picker's data but would get a 403 on the link itself.
+  const canLink = (canPay || hasPermission('pettycash.manage')) && !closed && outstanding > 0.009;
   const canRecord = canPay && !closed && outstanding > 0.009;
 
   const openRecord = () => {
