@@ -156,6 +156,9 @@ export default function Invoices() {
   // procurement.* gates; invoices.read alone gets the read-only, masked view
   const canSeeSupplier = hasPermission('procurement.read') || canManage;
   const canViewInvoices = canSeeSupplier || hasPermission('invoices.read');
+  // bill papers follow attachments.use on the API (POST /attachments/upload,
+  // DELETE /attachments/:id), not the procurement manage permission
+  const canUseAttachments = hasPermission('attachments.use');
   // a 403 on the list call means the server now enforces a revocation the
   // stored session has not caught up with yet (stale tab) — lock card, not an
   // empty "No invoices yet" table
@@ -196,14 +199,23 @@ export default function Invoices() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Picker data follows each endpoint's own backend gate, not the manage gate:
+  // /suppliers needs suppliers.read, /purchase-orders procurement.read, and
+  // /procurement/accounts is an open master lookup. Gating all three on
+  // procurement.manage hid rows the API would have served.
+  const canLoadSuppliers = canManage || hasPermission('suppliers.read');
+  const canLoadPos = canManage || hasPermission('procurement.read');
   useEffect(() => {
-    if (!canManage) return;
-    api<{ items: Supplier[] } | Supplier[]>('/suppliers?pageSize=200')
-      .then((r) => setSuppliers((r as { items?: Supplier[] }).items ?? (r as Supplier[])))
-      .catch(() => undefined);
-    api<{ items: PoOption[] }>('/purchase-orders?pageSize=100').then((r) => setPos(r.items ?? [])).catch(() => undefined);
+    if (canLoadSuppliers) {
+      api<{ items: Supplier[] } | Supplier[]>('/suppliers?pageSize=200')
+        .then((r) => setSuppliers((r as { items?: Supplier[] }).items ?? (r as Supplier[])))
+        .catch(() => undefined);
+    }
+    if (canLoadPos) {
+      api<{ items: PoOption[] }>('/purchase-orders?pageSize=100').then((r) => setPos(r.items ?? [])).catch(() => undefined);
+    }
     api<AccountOpt[]>('/procurement/accounts').then(setAccounts).catch(() => undefined);
-  }, [canManage]);
+  }, [canLoadSuppliers, canLoadPos]);
 
   const openDetail = async (inv: Invoice) => {
     try {
@@ -497,7 +509,7 @@ export default function Invoices() {
               <InvoiceAttachments
                 invoiceId={detail.id}
                 status={detail.status}
-                canManage={canManage}
+                canAttach={canUseAttachments}
                 onChanged={async () => {
                   setDetail(await api<Invoice>(`/invoices/${detail.id}`));
                 }}
@@ -728,11 +740,11 @@ interface InvoiceAttachment {
 }
 
 function InvoiceAttachments({
-  invoiceId, status, canManage, onChanged, onCount,
+  invoiceId, status, canAttach, onChanged, onCount,
 }: {
   invoiceId: string;
   status: string;
-  canManage: boolean;
+  canAttach: boolean;
   onChanged: () => Promise<void>;
   onCount?: (count: number) => void;
 }) {
@@ -813,7 +825,7 @@ function InvoiceAttachments({
     <div className="border border-gray-200 rounded-lg p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Bill attachments ({items.length})</div>
-        {canManage && (
+        {canAttach && (
           <label className={`text-sm px-3 py-1.5 rounded-lg cursor-pointer border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
             {busy ? 'Uploading…' : '+ Attach photo / PDF'}
             <input
@@ -846,7 +858,7 @@ function InvoiceAttachments({
               <span className="text-xs text-gray-400">{a.size < 1024 ? '<1 KB' : `${(a.size / 1024).toFixed(0)} KB`} · {fmtDate(a.createdAt)}</span>
               <span className="ml-auto flex gap-2">
                 <Button variant="ghost" onClick={() => void download(a)}>Download</Button>
-                {canManage && !posted && (
+                {canAttach && !posted && (
                   <Button variant="danger" onClick={() => setToDelete(a)}>Remove</Button>
                 )}
               </span>

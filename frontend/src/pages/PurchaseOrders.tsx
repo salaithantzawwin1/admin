@@ -260,17 +260,29 @@ export default function PurchaseOrders() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Picker data follows each endpoint's own backend gate: /suppliers needs
+  // suppliers.read, /inventory/items inventory.read, /procurement/requests a
+  // procurement read, and /procurement/accounts is an open master lookup.
+  // Gating the whole set on procurement.manage hid rows the API would serve.
+  const canLoadSuppliers = canManage || hasPermission('suppliers.read');
+  const canLoadInventory = canManage || hasPermission('inventory.read');
+  const canLoadPrs = canManage || hasPermission('procurement.read');
   useEffect(() => {
-    if (!canManage) return;
-    api<{ items: Supplier[] } | Supplier[]>('/suppliers?pageSize=200').then((r) => setSuppliers((r as { items?: Supplier[] }).items ?? (r as Supplier[]))).catch(() => undefined);
-    api<{ items: InventoryItemOpt[] } | InventoryItemOpt[]>('/inventory/items')
-      .then((r) => setInventoryItems(Array.isArray(r) ? r : r.items ?? []))
-      .catch(() => undefined);
-    api<{ items: ({ id: string; docNumber: string; title?: string | null } | PrOption)[] }>('/procurement/requests?status=APPROVED&pageSize=50')
-      .then((r) => setApprovedPrs((r as { items?: PrOption[] }).items ?? []))
-      .catch(() => undefined);
+    if (canLoadSuppliers) {
+      api<{ items: Supplier[] } | Supplier[]>('/suppliers?pageSize=200').then((r) => setSuppliers((r as { items?: Supplier[] }).items ?? (r as Supplier[]))).catch(() => undefined);
+    }
+    if (canLoadInventory) {
+      api<{ items: InventoryItemOpt[] } | InventoryItemOpt[]>('/inventory/items')
+        .then((r) => setInventoryItems(Array.isArray(r) ? r : r.items ?? []))
+        .catch(() => undefined);
+    }
+    if (canLoadPrs) {
+      api<{ items: ({ id: string; docNumber: string; title?: string | null } | PrOption)[] }>('/procurement/requests?status=APPROVED&pageSize=50')
+        .then((r) => setApprovedPrs((r as { items?: PrOption[] }).items ?? []))
+        .catch(() => undefined);
+    }
     api<AccountOpt[]>('/procurement/accounts').then(setAccounts).catch(() => setAccounts([]));
-  }, [canManage]);
+  }, [canLoadSuppliers, canLoadInventory, canLoadPrs]);
 
   const openCreate = () => {
     setSupplierId('');

@@ -2,9 +2,9 @@
  * A vendor bill carries its photo/PDF through the shared attachments module:
  *  - upload with ?invoiceId stores the row on the invoice and audits it;
  *  - a file can have one owner only (request / announcement / invoice);
- *  - attaching needs procurement.manage and a real invoice;
+ *  - attaching needs attachments.use and a real invoice;
  *  - a POSTED invoice's paper is audit evidence: removal is refused;
- *  - a draft invoice's paper can be removed by an invoice manager (with audit);
+ *  - a draft invoice's paper can be removed by an attachments.use holder (with audit);
  *  - download needs procurement/invoices read permission.
  *
  * Run:  cd backend && node -r ts-node/register/transpile-only test/invoice-attachments.test.ts
@@ -43,7 +43,7 @@ function pdfFile(name = 'bill.pdf') {
 
 function makeSvc(opts: { invoiceStatus?: string | null; can?: string[]; uploadedById?: string } = {}) {
   const calls: any = { created: null, deleted: null, audits: [] as any[] };
-  const allowed = new Set(opts.can ?? ['procurement.manage']);
+  const allowed = new Set(opts.can ?? ['attachments.use']);
   const invoice = opts.invoiceStatus === null
     ? null
     : { id: 'inv-1', invoiceNumber: 'INV-202611-0016', status: opts.invoiceStatus ?? 'DRAFT' };
@@ -110,8 +110,8 @@ function makeSvc(opts: { invoiceStatus?: string | null; can?: string[]; uploaded
     );
   });
 
-  await test('a caller without procurement.manage cannot attach to an invoice', async () => {
-    const { svc } = makeSvc({ can: ['attachments.use'] });
+  await test('a caller without attachments.use cannot attach to an invoice', async () => {
+    const { svc } = makeSvc({ can: ['procurement.manage'] });
     await assert.rejects(
       () => svc.upload(pdfFile() as any, undefined, USER, 'cy1', undefined, 'inv-1'),
       /Not allowed to attach/,
@@ -124,7 +124,7 @@ function makeSvc(opts: { invoiceStatus?: string | null; can?: string[]; uploaded
     assert.strictEqual(calls.deleted, null);
   });
 
-  await test('a draft invoice lets an invoice manager remove the file, audited', async () => {
+  await test('a draft invoice lets an attachments.use holder remove another user\'s file, audited', async () => {
     const { svc, calls } = makeSvc({ invoiceStatus: 'DRAFT', uploadedById: 'u-colleague' });
     const res: any = await svc.remove('att-1', USER, 'admin1');
     assert.strictEqual(res.success, true);
@@ -133,6 +133,12 @@ function makeSvc(opts: { invoiceStatus?: string | null; can?: string[]; uploaded
     assert.ok(a, 'ATTACHMENT_DELETED audited');
     assert.strictEqual(a.oldValue.invoiceId, 'inv-1');
     assert.strictEqual(a.severity, 'WARNING');
+  });
+
+  await test('removal without attachments.use is forbidden', async () => {
+    const { svc, calls } = makeSvc({ invoiceStatus: 'DRAFT', can: ['procurement.manage'] });
+    await assert.rejects(() => svc.remove('att-1', USER, 'admin1'), /Not allowed to remove this invoice attachment/);
+    assert.strictEqual(calls.deleted, null);
   });
 
   await test('download without procurement/invoices read is forbidden', async () => {

@@ -92,8 +92,10 @@ export class AttachmentsService {
     if (invoiceId) {
       const invoice = await this.prisma.invoice.findUnique({ where: { id: invoiceId }, select: { id: true } });
       if (!invoice) throw new NotFoundException('Invoice not found');
-      // the bill and its papers are AP records — only invoice managers add them
-      if (!(await this.permissions.userHas(userId, 'procurement.manage'))) {
+      // bill papers follow the attachment permission (the route already
+      // requires attachments.use): the finance user who pays the bill attaches
+      // it. POSTED bills only freeze *removal* — see remove().
+      if (!(await this.permissions.userHas(userId, 'attachments.use'))) {
         throw new ForbiddenException('Not allowed to attach files to this invoice');
       }
     }
@@ -187,9 +189,11 @@ export class AttachmentsService {
     const attachment = await this.prisma.attachment.findUnique({ where: { id } });
     if (!attachment) throw new NotFoundException('Attachment not found');
 
-    // invoice papers: POSTED bills are frozen, and invoice managers (not only
-    // the uploader) may correct a draft bill's files
-    let invoiceManager = false;
+    // invoice papers: POSTED bills are frozen — the file is part of the audit
+    // trail and can never be removed. A draft bill's files may be corrected by
+    // any user with attachments.use (not only the uploader), because the bill
+    // paper is a shared AP record rather than a private upload.
+    let invoiceEditor = false;
     if (attachment.invoiceId) {
       const invoice = await this.prisma.invoice.findUnique({
         where: { id: attachment.invoiceId },
@@ -200,13 +204,13 @@ export class AttachmentsService {
           `Invoice ${invoice.invoiceNumber} is POSTED — its attachment is part of the audit trail and cannot be removed`,
         );
       }
-      invoiceManager = await this.permissions.userHas(userId, 'procurement.manage');
-      if (!invoiceManager) throw new ForbiddenException('Not allowed to remove this invoice attachment');
+      invoiceEditor = await this.permissions.userHas(userId, 'attachments.use');
+      if (!invoiceEditor) throw new ForbiddenException('Not allowed to remove this invoice attachment');
     }
 
     // owner, users.manage holder (admin override), or SYSTEM_ADMIN superuser
     const admin = await this.permissions.userHas(userId, 'users.manage');
-    if (!invoiceManager && attachment.uploadedById !== userId && !admin) throw new ForbiddenException('Not your attachment');
+    if (!invoiceEditor && attachment.uploadedById !== userId && !admin) throw new ForbiddenException('Not your attachment');
 
     const filePath = path.join(this.uploadRoot, attachment.storedName);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
