@@ -136,6 +136,8 @@ export default function Invoices() {
   const [detail, setDetail] = useState<Invoice | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [detailTab, setDetailTab] = useState<'details' | 'attachments'>('details');
+  const [attachmentCount, setAttachmentCount] = useState<number | null>(null);
 
   const PAGE_SIZE = 20;
 
@@ -168,6 +170,8 @@ export default function Invoices() {
   const openDetail = async (inv: Invoice) => {
     try {
       const r = await api<Invoice>(`/invoices/${inv.id}`);
+      setDetailTab('details');
+      setAttachmentCount(null);
       setDetail(r);
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Could not load the invoice', 'error');
@@ -326,6 +330,46 @@ export default function Invoices() {
               {detail.dueDate && <span className="text-sm text-gray-500">Due {fmtDate(detail.dueDate)}</span>}
             </div>
 
+            <div role="tablist" aria-label="Invoice detail" className="flex gap-1 border-b border-gray-200">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === 'details'}
+                className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                  detailTab === 'details'
+                    ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+                onClick={() => setDetailTab('details')}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === 'attachments'}
+                className={`shrink-0 whitespace-nowrap px-4 py-2 text-sm font-medium rounded-t-lg -mb-px border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${
+                  detailTab === 'attachments'
+                    ? 'border-yellow-600 text-yellow-800 bg-yellow-50/60'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'
+                }`}
+                onClick={() => setDetailTab('attachments')}
+              >
+                Bill attachments
+                {attachmentCount !== null && (
+                  <span
+                    title={attachmentCount === 0 ? 'No bill attached yet' : `${attachmentCount} file(s) attached`}
+                    className={`ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      attachmentCount === 0 ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    {attachmentCount === 0 ? '0 · missing' : attachmentCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            <div className={detailTab === 'details' ? 'space-y-3' : 'hidden'}>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 text-left text-xs text-gray-500 uppercase tracking-wide">
@@ -361,15 +405,6 @@ export default function Invoices() {
               </tfoot>
             </table>
 
-            <InvoiceAttachments
-              invoiceId={detail.id}
-              status={detail.status}
-              canManage={canManage}
-              onChanged={async () => {
-                setDetail(await api<Invoice>(`/invoices/${detail.id}`));
-              }}
-            />
-
             {detail.matchDetail?.lines && detail.matchDetail.lines.length > 0 && (
               <div className="border border-gray-200 rounded-lg p-3">
                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Three-way match (§23)</div>
@@ -401,6 +436,20 @@ export default function Invoices() {
                 </table>
               </div>
             )}
+
+            </div>
+
+            <div className={detailTab === 'attachments' ? 'space-y-3' : 'hidden'}>
+              <InvoiceAttachments
+                invoiceId={detail.id}
+                status={detail.status}
+                canManage={canManage}
+                onChanged={async () => {
+                  setDetail(await api<Invoice>(`/invoices/${detail.id}`));
+                }}
+                onCount={setAttachmentCount}
+              />
+            </div>
 
             {canManage && detail.status === 'CANCELLED' && (
               <div className="flex gap-2 sticky bottom-0 -mx-5 px-5 py-3 bg-white border-t border-gray-100 rounded-b-xl">
@@ -625,12 +674,13 @@ interface InvoiceAttachment {
 }
 
 function InvoiceAttachments({
-  invoiceId, status, canManage, onChanged,
+  invoiceId, status, canManage, onChanged, onCount,
 }: {
   invoiceId: string;
   status: string;
   canManage: boolean;
   onChanged: () => Promise<void>;
+  onCount?: (count: number) => void;
 }) {
   const [items, setItems] = useState<InvoiceAttachment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -640,8 +690,10 @@ function InvoiceAttachments({
   const posted = status === 'POSTED';
 
   const refresh = useCallback(async () => {
-    setItems(await api<InvoiceAttachment[]>(`/attachments/invoice/${invoiceId}`));
-  }, [invoiceId]);
+    const rows = await api<InvoiceAttachment[]>(`/attachments/invoice/${invoiceId}`);
+    setItems(rows);
+    onCount?.(rows.length);
+  }, [invoiceId, onCount]);
 
   useEffect(() => {
     let cancelled = false;
