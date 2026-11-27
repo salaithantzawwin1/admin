@@ -183,12 +183,21 @@ export class ProcurementService {
   }
 
   // ---------- purchase requests ----------
-  /** Lists PRs — every requester sees their own; procurement.read sees all. */
-  async list(params: { page: number; pageSize: number; status?: string; canReadAll: boolean; actor: Actor }) {
+  /**
+   * Lists PRs — every requester sees their own; procurement.read sees all.
+   * procurement.manage without procurement.read sees its own plus every
+   * APPROVED request (the ones it can turn into an RFQ / PO).
+   */
+  async list(params: { page: number; pageSize: number; status?: string; canReadAll: boolean; seeApprovedAll?: boolean; actor: Actor }) {
+    const visibility = params.canReadAll
+      ? {}
+      : params.seeApprovedAll
+        ? { OR: [{ requesterId: params.actor.userId }, { status: 'APPROVED' as const }] }
+        : { requesterId: params.actor.userId };
     const where = {
       docType: 'PURCHASE_REQUEST' as const,
       ...(params.status ? { status: params.status as never } : {}),
-      ...(!params.canReadAll ? { requesterId: params.actor.userId } : {}),
+      ...visibility,
     };
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.requestDocument.count({ where }),
@@ -228,7 +237,7 @@ export class ProcurementService {
    * approver must see the lines and prices the detail page shows, even without
    * the procurement.read the module normally requires.
    */
-  async byRequest(requestId: string, actor: Actor & { canReadAll?: boolean }) {
+  async byRequest(requestId: string, actor: Actor & { canReadAll?: boolean; seeApprovedAll?: boolean }) {
     const request = await this.prisma.requestDocument.findUnique({
       where: { id: requestId },
       include: {
@@ -237,9 +246,12 @@ export class ProcurementService {
       },
     });
     if (!request || request.docType !== 'PURCHASE_REQUEST') throw new NotFoundException('Purchase request not found');
+    // Mirrors the list visibility: a manager reads every APPROVED request.
+    const seesApproved = !!actor.seeApprovedAll && request.status === 'APPROVED';
     if (
       request.requesterId !== actor.userId &&
       !actor.canReadAll &&
+      !seesApproved &&
       !(await this.workflow.canView(requestId, actor))
     ) {
       throw new ForbiddenException('Not your request');

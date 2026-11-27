@@ -138,6 +138,16 @@ export class ProcurementController {
     return granted.includes(PERMISSIONS.PROCUREMENT_READ);
   }
 
+  /**
+   * procurement.manage without procurement.read still runs the office-wide
+   * buy flow (RFQ / PO from an APPROVED request), so the PR list and detail open
+   * every APPROVED row — drafts and pending approvals stay own-only.
+   */
+  private async canSeeApproved(req): Promise<boolean> {
+    const granted = await this.permissions.forUser(req.user.id);
+    return granted.includes(PERMISSIONS.PROCUREMENT_MANAGE);
+  }
+
   // ---------- master lookups (PR form pickers) ----------
   @Get('accounts')
   accounts(@Query('all') all?: string) {
@@ -201,6 +211,7 @@ export class ProcurementController {
       pageSize: Math.min(Number(pageSize) || 50, 200),
       status,
       canReadAll: await this.canReadAll(req),
+      seeApprovedAll: await this.canSeeApproved(req),
       actor: this.actor(req),
     });
   }
@@ -217,6 +228,7 @@ export class ProcurementController {
     return this.procurement.byRequest(requestId, {
       ...this.actor(req),
       canReadAll: await this.canReadAll(req),
+      seeApprovedAll: await this.canSeeApproved(req),
     });
   }
 

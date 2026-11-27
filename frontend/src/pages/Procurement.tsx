@@ -89,7 +89,9 @@ interface CatalogItem {
 
 export default function Procurement() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const canReadAll = hasPermission('procurement.read');
+  // procurement.manage also sees every APPROVED request (the backend opens the
+  // list the same way) — requester column and the "Ask for RFQ" action follow.
+  const canReadAll = hasPermission('procurement.read') || hasPermission('procurement.manage');
   const [rows, setRows] = useState<PrRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

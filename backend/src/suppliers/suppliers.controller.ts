@@ -68,8 +68,12 @@ export class SuppliersController {
     return this.suppliers.list(all === '1');
   }
 
-  /** Purchase history for one supplier (Who/When/What of their PURCHASE txs). */
-  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
+  /**
+   * Purchase history for one supplier (Who/When/What of their PURCHASE txs).
+   * procurement.manage reads it too: the PO / vendor-bill screens show the same
+   * supplier drill-down for a manager whose role has no suppliers.read.
+   */
+  @AnyPermission([PERMISSIONS.SUPPLIERS_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   @Get(':id/history')
   history(@Param('id') id: string, @Query('start') start?: string, @Query('end') end?: string) {
     return this.suppliers.purchaseHistory(id, start || undefined, end || undefined);
@@ -95,7 +99,8 @@ export class SuppliersController {
 
   // ---------- vendor management (Purchasing) ----------
 
-  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
+  // Vendor management (contact log) — same manage inclusion as /:id/history.
+  @AnyPermission([PERMISSIONS.SUPPLIERS_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   @Get(':id/contact-logs')
   contactLogs(@Param('id') id: string) {
     return this.suppliers.listContactLogs(id);
