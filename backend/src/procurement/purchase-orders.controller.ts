@@ -4,7 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ArrayMinSize, IsArray, IsBoolean, IsISO8601, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions } from '../auth/permissions.guard';
+import { AnyPermission, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { PurchaseOrdersService } from './purchase-orders.service';
 
@@ -61,14 +61,16 @@ class CreateGrnDto {
 export class PurchaseOrdersController {
   constructor(private po: PurchaseOrdersService) {}
 
+  // The invoice form's "related PO" picker reads this list, so a manager who
+  // can create POs must not be blocked by the plain read code.
+  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   @Get()
-  @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)
   list(@Query('page') page = '1', @Query('pageSize') pageSize = '20', @Query('status') status?: string) {
     return this.po.list({ page: Number(page) || 1, pageSize: Math.min(Number(pageSize) || 20, 100), status });
   }
 
+  @AnyPermission([PERMISSIONS.PROCUREMENT_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   @Get(':id')
-  @RequirePermissions(PERMISSIONS.PROCUREMENT_READ)
   detail(@Param('id') id: string) {
     return this.po.byId(id);
   }

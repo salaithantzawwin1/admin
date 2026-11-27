@@ -99,7 +99,10 @@ export class InventoryController {
   }
 
   // ---------- items ----------
-  @RequirePermissions(PERMISSIONS.INVENTORY_READ)
+  // PO line picker: same reason as GET /suppliers — an order/bill creator may
+  // pick a stock item without the warehouse read code, so procurement.manage is
+  // accepted alongside inventory.read.
+  @AnyPermission([PERMISSIONS.INVENTORY_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   @Get('items')
   items() {
     return this.inventory.itemsWithAlerts();

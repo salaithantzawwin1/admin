@@ -58,7 +58,11 @@ export class SuppliersController {
   // inventory.manage / suppliers.* — NOT plain inventory.read); keeping
   // inventory.read out of both gates is what makes an RBAC-matrix revocation of
   // "View suppliers" actually stick for roles like FINANCE.
-  @RequirePermissions(PERMISSIONS.SUPPLIERS_READ)
+  // A purchase-order / vendor-bill creator must be able to pick a supplier even
+  // when the supplier module's own read code is missing from their role: the
+  // procurement manager gate is accepted alongside suppliers.read. This only
+  // opens the name list — the supplier screens themselves stay on suppliers.read.
+  @AnyPermission([PERMISSIONS.SUPPLIERS_READ], [PERMISSIONS.PROCUREMENT_MANAGE])
   @Get()
   list(@Query('all') all?: string) {
     return this.suppliers.list(all === '1');
