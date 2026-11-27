@@ -25,6 +25,11 @@ export class LinkInvoiceDto {
   @IsString() @IsNotEmpty() invoiceId!: string;
 }
 
+export class DeletePettyCashDto {
+  /** D-9/BR-14 — why the row is being removed; kept in the audit entry. */
+  @IsString() @MaxLength(500) reason!: string;
+}
+
 @ApiTags('petty-cash')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
@@ -68,6 +73,22 @@ export class PettyCashController {
     return this.petty.linkable(invoiceId);
   }
 
+  /**
+   * v2 §4.2 step 3: open bills for the expense form's *Invoice paid* picker.
+   * Read-only and server-side so a newly entered (or 101st) bill is always
+   * offered — must be declared before ':id'.
+   */
+  @Get('open-bills')
+  @AnyPermission(
+    [PERMISSIONS.PETTYCASH_READ],
+    [PERMISSIONS.PAYMENTS_READ],
+    [PERMISSIONS.PROCUREMENT_READ],
+    [PERMISSIONS.PROCUREMENT_MANAGE],
+  )
+  openBills(@Query('q') q?: string, @Query('supplierId') supplierId?: string) {
+    return this.petty.openBills({ q, supplierId });
+  }
+
   @Post()
   @RequirePermissions(PERMISSIONS.PETTYCASH_MANAGE)
   create(@Req() req, @Body() dto: PettyCashDto) {
@@ -81,10 +102,10 @@ export class PettyCashController {
     return this.petty.linkInvoice(id, dto.invoiceId, this.actor(req));
   }
 
-  /** No edit — a wrong row is deleted (audited) and re-entered. */
+  /** No edit — a wrong row is deleted (audited, with a required reason) and re-entered. */
   @Delete(':id')
   @RequirePermissions(PERMISSIONS.PETTYCASH_MANAGE)
-  remove(@Req() req, @Param('id') id: string) {
-    return this.petty.remove(id, this.actor(req));
+  remove(@Req() req, @Param('id') id: string, @Body() dto: DeletePettyCashDto) {
+    return this.petty.remove(id, this.actor(req), dto?.reason);
   }
 }

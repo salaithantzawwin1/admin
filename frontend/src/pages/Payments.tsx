@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, getToken, hasPermission } from '../api';
+import { api, ApiError, getToken, hasPermission } from '../api';
 import { PageHeader, Card, Button, Input, Select, Table, Empty, Badge } from '../components/ui';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -13,6 +13,10 @@ interface PaymentRow {
   method: string;
   reference?: string | null;
   note?: string | null;
+  /** v2 P1-2 — where the money came from and who handed it over */
+  fundingSource?: string | null;
+  payerName?: string | null;
+  payer?: { username: string; fullName?: string } | null;
   invoice: {
     id: string;
     invoiceNumber: string;
@@ -42,13 +46,31 @@ interface Payable {
 }
 
 const METHODS = ['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'];
+/** v2 D-2 — petty cash is deliberately absent: that payment only exists as the
+ *  product of a linked expense, so the server refuses the label here. */
+const SOURCES = ['COMPANY_BANK', 'COMPANY_CASH'];
+const SOURCE_LABELS: Record<string, string> = {
+  PETTY_CASH: 'Petty cash',
+  COMPANY_CASH: 'Company cash',
+  COMPANY_BANK: 'Company bank',
+};
 const PAY_STATUS_COLOR: Record<string, 'gray' | 'yellow' | 'green'> = {
   UNPAID: 'gray',
   PARTIALLY_PAID: 'yellow',
   PAID: 'green',
 };
 
-const emptyForm = { invoiceId: '', amount: '', date: '', method: 'BANK_TRANSFER', reference: '', note: '' };
+const emptyForm = {
+  invoiceId: '', amount: '', date: '', method: 'BANK_TRANSFER',
+  fundingSource: 'COMPANY_BANK', payerName: '', reference: '', note: '',
+};
+
+/** What POST /payments receives — kept so a duplicate can be re-sent confirmed. */
+type PaymentBody = {
+  invoiceId: string; amount: number; date?: string; method: string;
+  fundingSource: string; payerName?: string; reference?: string; note?: string;
+  confirmDuplicate?: true;
+};
 
 export default function Payments() {
   const canManage = hasPermission('payments.manage');
@@ -66,6 +88,8 @@ export default function Payments() {
   const [formError, setFormError] = useState('');
   const [formBusy, setFormBusy] = useState(false);
   const [toDelete, setToDelete] = useState<PaymentRow | null>(null);
+  // BR-15: a payment identical to an existing one is confirmed, never assumed
+  const [duplicate, setDuplicate] = useState<PaymentBody | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -94,28 +118,45 @@ export default function Payments() {
     if (!form) return;
     setFormError('');
     setFormBusy(true);
+    const body: PaymentBody = {
+      invoiceId: form.invoiceId,
+      amount: Number(form.amount),
+      date: form.date || undefined,
+      method: form.method,
+      fundingSource: form.fundingSource,
+      payerName: form.payerName || undefined,
+      reference: form.reference || undefined,
+      note: form.note || undefined,
+    };
     try {
-      await api('/payments', {
-        method: 'POST',
-        body: {
-          invoiceId: form.invoiceId,
-          amount: Number(form.amount),
-          date: form.date || undefined,
-          method: form.method,
-          reference: form.reference || undefined,
-          note: form.note || undefined,
-        },
-      });
+      await api('/payments', { method: 'POST', body });
       toast('Payment recorded');
       setForm(null);
       await load();
     } catch (e) {
+      // BR-15: an identical entry is not refused — the user is asked once and
+      // the same payload is re-sent with confirmDuplicate when they accept it
+      const code = e instanceof ApiError ? (e.details as { code?: string } | undefined)?.code : undefined;
+      if (code === 'DUPLICATE_PAYMENT') {
+        setDuplicate(body);
+        return;
+      }
       // over-payment and invoice-status rejections belong in this dialog, not in
       // a silent console error behind a closed modal
       setFormError(e instanceof Error ? e.message : 'Could not record the payment');
     } finally {
       setFormBusy(false);
     }
+  };
+
+  /** Only reached from the "record it again?" dialog. */
+  const confirmDuplicate = async () => {
+    if (!duplicate) return;
+    await api('/payments', { method: 'POST', body: { ...duplicate, confirmDuplicate: true } });
+    toast('Second payment recorded');
+    setDuplicate(null);
+    setForm(null);
+    await load();
   };
 
   const overdueCount = payables.filter((p) => p.daysOverdue > 0).length;
@@ -145,8 +186,8 @@ export default function Payments() {
         title="Payments"
         subtitle={
           canSeeVendor
-            ? 'Finance records money against APPROVED/POSTED invoices — an invoice flips UNPAID → PARTIALLY_PAID → PAID as its balance is settled (§26)'
-            : 'Money against APPROVED/POSTED invoices (UNPAID → PARTIALLY_PAID → PAID) — supplier identity is hidden on this page'
+            ? 'Company cash and bank payments — an invoice flips UNPAID → PARTIALLY_PAID → PAID as its balance is settled. Petty cash is recorded through its expense link instead.'
+            : 'Company cash and bank payments (UNPAID → PARTIALLY_PAID → PAID) — supplier identity is hidden on this page'
         }
         actions={
           <>
@@ -200,11 +241,11 @@ export default function Payments() {
 
       {/* ---------- payment register ---------- */}
       <h2 className="text-sm font-semibold text-gray-700 mb-2">Payment register</h2>
-      <Table head={['CODE', 'DATE', 'INVOICE', 'SUPPLIER', 'AMOUNT (MMK)', 'METHOD', 'REFERENCE', 'RECORDED BY', 'ACTIONS']}>
+      <Table head={['CODE', 'DATE', 'INVOICE', 'SUPPLIER', 'AMOUNT (MMK)', 'SOURCE', 'METHOD', 'PAID BY', 'REFERENCE', 'RECORDED BY', 'ACTIONS']}>
         {loading ? (
-          <tr><td colSpan={9}><Empty label="Loading…" /></td></tr>
+          <tr><td colSpan={11}><Empty label="Loading…" /></td></tr>
         ) : items.length === 0 ? (
-          <tr><td colSpan={9}><Empty label="No payments in this range" /></td></tr>
+          <tr><td colSpan={11}><Empty label="No payments in this range" /></td></tr>
         ) : items.map((p) => (
           <tr key={p.id} className="hover:bg-gray-50/60">
             <td className="px-4 py-2.5 font-medium text-gray-900">{p.paymentNumber}</td>
@@ -214,7 +255,13 @@ export default function Payments() {
             <td className="px-4 py-2.5 text-right tabular-nums font-medium text-green-700">
               {Number(p.amount).toLocaleString()}
             </td>
+            <td className="px-4 py-2.5">
+              {p.fundingSource
+                ? <Badge color={p.fundingSource === 'PETTY_CASH' ? 'blue' : 'gray'}>{SOURCE_LABELS[p.fundingSource] ?? p.fundingSource}</Badge>
+                : <span className="text-gray-400" title="Recorded before funding sources existed">—</span>}
+            </td>
             <td className="px-4 py-2.5">{p.method.replace('_', ' ')}</td>
+            <td className="px-4 py-2.5 text-gray-500">{p.payerName || p.payer?.fullName || p.payer?.username || '—'}</td>
             <td className="px-4 py-2.5 text-gray-500">{p.reference ?? '—'}</td>
             <td className="px-4 py-2.5 text-gray-500">{p.createdBy?.fullName || p.createdBy?.username || '—'}</td>
             <td className="px-4 py-2.5 text-center">
@@ -294,14 +341,26 @@ export default function Payments() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
-                <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+                <label className="block text-xs font-medium text-gray-500 mb-1">Paid from *</label>
+                <Select value={form.fundingSource} onChange={(e) => setForm({ ...form, fundingSource: e.target.value })}>
+                  {SOURCES.map((s) => <option key={s} value={s}>{SOURCE_LABELS[s] ?? s}</option>)}
+                </Select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">Method *</label>
                 <Select value={form.method} onChange={(e) => setForm({ ...form, method: e.target.value })}>
                   {METHODS.map((m) => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
                 </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+                <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Paid by</label>
+                <Input value={form.payerName} onChange={(e) => setForm({ ...form, payerName: e.target.value })} placeholder="Who handed the money over" />
               </div>
             </div>
             <div>
@@ -325,16 +384,31 @@ export default function Payments() {
         </Modal>
       )}
 
-      {/* delete — audited correction flow (no edit of money rows) */}
+      {/* BR-15 — the user decided it is a second, separate payment */}
+      {duplicate && (
+        <ConfirmDialog
+          title="Record this payment again?"
+          description={`MMK ${Number(duplicate.amount).toLocaleString()} on this date is already recorded for the same invoice. Confirm only if this is a second, separate payment — otherwise close this and correct the amount or date.`}
+          confirmLabel="Yes, record a second payment"
+          onClose={() => setDuplicate(null)}
+          onConfirm={confirmDuplicate}
+        />
+      )}
+
+      {/* delete — audited correction flow with a required reason (D-9/BR-14) */}
       {toDelete && (
         <ConfirmDialog
           title={`Delete ${toDelete.paymentNumber}?`}
           description={`A payment is never edited — delete (audited) and re-enter the corrected row. Amount: MMK ${Number(toDelete.amount).toLocaleString()} against ${toDelete.invoice.invoiceNumber}.`}
           variant="danger"
           confirmLabel="Delete payment"
+          withNote
+          noteRequired
+          notePlaceholder="Reason for deleting this payment (required — kept in the audit log)"
           onClose={() => setToDelete(null)}
-          onConfirm={async () => {
-            await api(`/payments/${toDelete.id}`, { method: 'DELETE' });
+          onConfirm={async (note) => {
+            await api(`/payments/${toDelete.id}`, { method: 'DELETE', body: { reason: note } });
+            toast('Payment deleted');
             setToDelete(null);
             await load();
           }}

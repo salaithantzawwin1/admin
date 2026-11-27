@@ -6,7 +6,7 @@
  *    positive, type must be TOPUP|EXPENSE, unknown account → 400.
  *  - list: totals computed (Σ TOPUP − Σ EXPENSE — no balance column, §23),
  *    invalid type filter → 400.
- *  - remove: audited WARNING deletion (no edit of monetary rows).
+ *  - remove: audited WARNING deletion with a required reason (v2 D-9/BR-14).
  *  - csv: header + rows + totals line; comma/quote escaping.
  *
  * Run:  cd backend && node -r ts-node/register/transpile-only test/petty-cash.test.ts
@@ -63,6 +63,8 @@ function makeEnv() {
     account: {
       findUnique: async ({ where }: any) => (where.id === 'acc-1' ? { id: 'acc-1', name: 'Petty Cash' } : null),
     },
+    // the ledger writes the row and its (optional) payment in one transaction
+    $transaction: async (fn: any) => (typeof fn === 'function' ? fn(prisma) : Promise.all(fn)),
   };
   const audit = { log: async (e: any) => { audits.push(e); } };
   const numbering = { next: async (prefix: string) => `${prefix}-202610-${String(1000 + seq).slice(1)}` };
@@ -131,16 +133,21 @@ async function main() {
 
   console.log('\n== delete (no edit of monetary rows) ==');
 
-  await test('remove deletes the row and audits WARNING', async () => {
+  await test('remove needs a reason, keeps it in the audit entry, then deletes', async () => {
     const { svc, env } = makeSvc();
     const row = await svc.create({ type: 'EXPENSE', amount: 700 }, ACTOR);
-    const res = await svc.remove(row.id, ACTOR);
+    await assert.rejects(() => svc.remove(row.id, ACTOR), /reason is required/);
+    await assert.rejects(() => svc.remove(row.id, ACTOR, ''), /reason is required/);
+    assert.strictEqual(env.rows.size, 1, 'a refusal must not delete anything');
+
+    const res = await svc.remove(row.id, ACTOR, 'entered twice by mistake');
     assert.strictEqual(res.success, true);
     assert.strictEqual(env.rows.size, 0);
     const a = env.audits.at(-1);
     assert.strictEqual(a.action, 'PETTY_CASH_DELETED');
     assert.strictEqual(a.severity, 'WARNING');
-    await assert.rejects(() => svc.remove('missing', ACTOR), /not found/);
+    assert.strictEqual(a.newValue.reason, 'entered twice by mistake');
+    await assert.rejects(() => svc.remove('missing', ACTOR, 'x'), /not found/);
   });
 
   console.log('\n== csv export (§41) ==');

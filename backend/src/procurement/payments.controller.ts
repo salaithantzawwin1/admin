@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Post, Query, Req, Res, UseGuards 
 import type { Request } from 'express';
 import type { Response } from 'express';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { IsDateString, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsNumber, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
@@ -15,8 +15,21 @@ class RecordPaymentDto {
   /** Payment date (defaults to now). */
   @IsOptional() @IsDateString() date?: string;
   @IsIn(PAYMENT_METHODS as unknown as string[]) method!: string;
+  /** v2 BR-7/D-3 — mandatory; `PETTY_CASH` reaches the service and is refused
+   *  with USE_PETTY_CASH_LINK (D-2 — it has exactly one writer: the expense). */
+  @IsString() @MaxLength(40) fundingSource!: string;
+  /** Staff member who physically paid (either an id or a free-text name). */
+  @IsOptional() @IsString() payerUserId?: string;
+  @IsOptional() @IsString() @MaxLength(160) payerName?: string;
   @IsOptional() @IsString() @MaxLength(160) reference?: string;
   @IsOptional() @IsString() @MaxLength(500) note?: string;
+  /** BR-15 — the user confirmed this is a second, separate payment. */
+  @IsOptional() @IsBoolean() confirmDuplicate?: boolean;
+}
+
+class DeletePaymentDto {
+  /** D-9/BR-14 — why the payment is being removed; kept in the audit entry. */
+  @IsString() @MaxLength(500) reason!: string;
 }
 
 @ApiBearerAuth()
@@ -74,7 +87,7 @@ export class PaymentsController {
     return this.payments.byId(id, hidesSupplier(req));
   }
 
-  /** Finance records a payment against an APPROVED/POSTED invoice. */
+  /** Finance records a company cash/bank payment (any bill not cancelled/rejected). */
   @Post()
   @RequirePermissions(PERMISSIONS.PAYMENTS_MANAGE)
   record(@Body() dto: RecordPaymentDto, @Req() req: Request) {
@@ -82,11 +95,11 @@ export class PaymentsController {
     return this.payments.record(dto, { userId: user.id, username: user.username });
   }
 
-  /** No edit — a wrong payment is deleted (audited) and re-entered. */
+  /** No edit — a wrong payment is deleted (audited, with a reason) and re-entered. */
   @Delete(':id')
   @RequirePermissions(PERMISSIONS.PAYMENTS_MANAGE)
-  remove(@Param('id') id: string, @Req() req: Request) {
+  remove(@Param('id') id: string, @Body() dto: DeletePaymentDto, @Req() req: Request) {
     const user = req.user as { id: string; username: string };
-    return this.payments.remove(id, { userId: user.id, username: user.username });
+    return this.payments.remove(id, { userId: user.id, username: user.username }, dto?.reason);
   }
 }

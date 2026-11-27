@@ -6,7 +6,9 @@ import { useScrollLock, useFocusTrap } from './Modal';
  * In-app styled replacement for window.confirm / window.prompt.
  *
  * - title + description explain the action
- * - optional "note for the requester" textarea (shown when withNote)
+ * - optional "note for the requester" textarea (shown when withNote); with
+ *   `noteRequired` the confirm button stays disabled until a reason is typed
+ *   (money deletions: the reason is written to the audit log)
  * - confirm button uses the given variant (danger for destructive actions)
  * - busy state while the confirm handler runs
  * - if onConfirm throws, the dialog STAYS OPEN and the error is shown inside
@@ -20,6 +22,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'primary',
   withNote = false,
+  noteRequired = false,
   notePlaceholder = 'Reason / note for the requester (optional)',
   onConfirm,
   onClose,
@@ -32,6 +35,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   variant?: 'primary' | 'danger' | 'ghost';
   withNote?: boolean;
+  /** the note is a required reason — confirm stays disabled while it is empty */
+  noteRequired?: boolean;
   notePlaceholder?: string;
   onConfirm: (note: string) => Promise<void> | void;
   onClose: () => void;
@@ -79,7 +84,7 @@ export function ConfirmDialog({
           {description && <div className="text-sm text-gray-600">{description}</div>}
           {error && <div className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</div>}
           {children}
-          {withNote && (
+          {(withNote || noteRequired) && (
             <Textarea
               rows={3}
               placeholder={notePlaceholder}
@@ -89,7 +94,7 @@ export function ConfirmDialog({
           )}
           <div className="flex justify-end gap-2 pt-1">
             <Button variant="ghost" disabled={busy} onClick={onClose}>{cancelLabel}</Button>
-            <Button variant={variant} disabled={busy} onClick={run}>
+            <Button variant={variant} disabled={busy || (noteRequired && !note.trim())} onClick={run}>
               {busy ? 'Working…' : confirmLabel}
             </Button>
           </div>

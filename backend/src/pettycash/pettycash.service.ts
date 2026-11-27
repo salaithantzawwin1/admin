@@ -74,7 +74,7 @@ export class PettyCashService {
       where: { id: invoiceId },
       select: {
         id: true, invoiceNumber: true, status: true, supplierId: true,
-        total: true, paidAmount: true,
+        total: true, paidAmount: true, supplier: { select: { name: true } },
       },
     });
     if (!inv) throw new NotFoundException('Invoice not found');
@@ -184,6 +184,52 @@ export class PettyCashService {
     return txn.row;
   }
 
+  /**
+   * Open bills for the expense form's *Invoice paid* picker (v2 §4.2 step 3).
+   *
+   * Server-side so the list is complete and current: the old screen-side picker
+   * read the first page of `/invoices` and cached it for the session, so a bill
+   * entered after the page loaded — or simply the 101st invoice — never appeared.
+   * Cancelled/rejected bills and settled bills are excluded here for the same
+   * reason the link itself refuses them.
+   */
+  async openBills(params: { q?: string; supplierId?: string; take?: number }) {
+    const take = Math.min(Math.max(Number(params.take) || 200, 1), 500);
+    const where: any = { status: { notIn: CLOSED_INVOICE_STATUSES } };
+    if (params.supplierId) where.supplierId = params.supplierId;
+    if (params.q?.trim()) {
+      const q = params.q.trim();
+      where.OR = [
+        { invoiceNumber: { contains: q, mode: 'insensitive' } },
+        { supplierInvoiceNumber: { contains: q, mode: 'insensitive' } },
+        { supplier: { name: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
+    const rows = await this.prisma.invoice.findMany({
+      where,
+      orderBy: [{ invoiceDate: 'desc' }, { invoiceNumber: 'desc' }],
+      take,
+      select: {
+        id: true, invoiceNumber: true, status: true, invoiceDate: true,
+        total: true, paidAmount: true,
+        supplier: { select: { id: true, name: true } },
+      },
+    });
+    const items = rows
+      .map((inv) => ({
+        id: inv.id,
+        invoiceNumber: inv.invoiceNumber,
+        status: inv.status,
+        invoiceDate: inv.invoiceDate,
+        total: Number(inv.total),
+        paidAmount: Number(inv.paidAmount),
+        balance: Number(inv.total) - Number(inv.paidAmount),
+        supplier: inv.supplier,
+      }))
+      .filter((inv) => inv.balance > PAYMENT_TOLERANCE);
+    return { items };
+  }
+
   /** Expenses that plausibly settled this invoice and are not linked yet. */
   async linkable(invoiceId: string) {
     const inv = await this.prisma.invoice.findUnique({
@@ -231,6 +277,20 @@ export class PettyCashService {
       );
     }
     const { inv, remaining } = await this.assertLinkable(invoiceId);
+    // The cash must have gone to the same shop the bill is from. A link is a
+    // statement about a payment, so pairing a stationery-shop expense with a
+    // hardware-shop invoice would make the register say something untrue — and
+    // paidAmount is derived from it, so the lie would spread.
+    const expensePayee = (expense.payee ?? '').trim().toLowerCase();
+    const invoiceSupplier = (inv.supplier?.name ?? '').trim().toLowerCase();
+    const sameSupplier = expense.supplierId
+      ? expense.supplierId === inv.supplierId
+      : expensePayee !== '' && expensePayee === invoiceSupplier;
+    if (!sameSupplier) {
+      throw new BadRequestException(
+        `Petty cash ${expense.code} was paid to ${expense.payee ?? '(no payee)'}, but ${inv.invoiceNumber} is from ${inv.supplier?.name ?? 'another supplier'} — link an expense paid to the same supplier`,
+      );
+    }
     const amount = Number(expense.amount);
     if (amount > remaining + PAYMENT_TOLERANCE) {
       throw new BadRequestException(
@@ -272,12 +332,12 @@ export class PettyCashService {
     return { success: true, paymentNumber, invoiceNumber: inv.invoiceNumber, amount };
   }
 
-  /** Corrections: a monetary row is never edited — delete (audited, WARNING)
-   *  and re-enter the corrected row keeps the audit chain honest.
+  /** Corrections: a monetary row is never edited — delete (audited, WARNING,
+   *  reason required) and re-enter the corrected row keeps the audit chain honest.
    *
    *  A linked expense owns its payment (BR-9): deleting it deletes the payment
    *  and restores the invoice rollup, all in one transaction. */
-  async remove(id: string, actor: Actor) {
+  async remove(id: string, actor: Actor, reason?: string) {
     const txn = await this.prisma.pettyCashTransaction.findUnique({
       where: { id },
       include: {
@@ -286,6 +346,12 @@ export class PettyCashService {
       },
     });
     if (!txn) throw new NotFoundException('Petty cash record not found');
+    // D-9/BR-14: the audit entry has to carry the reason the ledger changed, so
+    // the dialog requires one and the server refuses an empty one.
+    const why = (reason ?? '').trim();
+    if (!why) {
+      throw new BadRequestException('A reason is required to delete a petty-cash entry — it is kept in the audit log');
+    }
     // (v2 P2 adds: refuse when the invoice is RECORDED — the voucher froze it.)
     const payment = txn.payment;
     await this.prisma.$transaction(async (tx) => {
@@ -303,6 +369,7 @@ export class PettyCashService {
         invoiceNumber: txn.invoice?.invoiceNumber ?? null,
         paymentNumber: payment?.paymentNumber ?? null,
       },
+      newValue: { reason: why },
       severity: 'WARNING',
     });
     if (payment) {
@@ -313,6 +380,7 @@ export class PettyCashService {
           paymentNumber: payment.paymentNumber, amount: Number(payment.amount),
           invoiceNumber: txn.invoice?.invoiceNumber ?? null, via: `petty cash ${txn.code}`,
         },
+        newValue: { reason: why },
         severity: 'WARNING',
       });
     }

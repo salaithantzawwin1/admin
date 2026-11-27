@@ -911,12 +911,64 @@ function PaymentPanel({
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // v2 P1-2 — company cash / bank payments recorded straight from the bill
+  const canPay = hasPermission('payments.manage');
+  const [recOpen, setRecOpen] = useState(false);
+  const [recError, setRecError] = useState('');
+  const [recBusy, setRecBusy] = useState(false);
+  const [recDuplicate, setRecDuplicate] = useState<Record<string, unknown> | null>(null);
+  const [rec, setRec] = useState({
+    amount: '', date: '', method: 'BANK_TRANSFER', fundingSource: 'COMPANY_BANK',
+    payerName: '', reference: '',
+  });
+
   const paid = Number(invoice.paidAmount ?? 0);
   const total = Number(invoice.total ?? 0);
   const outstanding = total - paid;
   const payments = invoice.payments ?? [];
   const closed = invoice.status === 'CANCELLED' || invoice.status === 'REJECTED';
   const canLink = canManage && !closed && outstanding > 0.009;
+  const canRecord = canPay && !closed && outstanding > 0.009;
+
+  const openRecord = () => {
+    setRec({
+      amount: String(outstanding), date: new Date().toISOString().slice(0, 10),
+      method: 'BANK_TRANSFER', fundingSource: 'COMPANY_BANK', payerName: '', reference: '',
+    });
+    setRecError('');
+    setRecOpen(true);
+  };
+
+  const recordPayload = () => ({
+    invoiceId: invoice.id,
+    amount: Number(rec.amount),
+    date: rec.date || undefined,
+    method: rec.method,
+    fundingSource: rec.fundingSource,
+    payerName: rec.payerName || undefined,
+    reference: rec.reference || undefined,
+  });
+
+  const record = async () => {
+    setRecBusy(true);
+    setRecError('');
+    try {
+      await api('/payments', { method: 'POST', body: recordPayload() });
+      toast('Payment recorded');
+      setRecOpen(false);
+      await onChanged();
+    } catch (e) {
+      // BR-15 — the same payment twice is a question, not a refusal
+      const code = e instanceof ApiError ? (e.details as { code?: string } | undefined)?.code : undefined;
+      if (code === 'DUPLICATE_PAYMENT') {
+        setRecDuplicate(recordPayload());
+        return;
+      }
+      setRecError(e instanceof Error ? e.message : 'Could not record the payment');
+    } finally {
+      setRecBusy(false);
+    }
+  };
 
   const openLink = async () => {
     setOpen(true);
@@ -963,6 +1015,7 @@ function PaymentPanel({
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <span className="text-gray-500">Paid <span className="font-medium text-gray-900 tabular-nums">{money(paid)}</span></span>
           <span className="text-gray-500">Outstanding <span className={`font-medium tabular-nums ${outstanding > 0.009 ? 'text-orange-700' : 'text-green-700'}`}>{money(outstanding)}</span></span>
+          {canRecord && <Button onClick={openRecord}>+ Record payment</Button>}
           {canLink && <Button variant="ghost" onClick={() => void openLink()}>Link petty-cash expense</Button>}
         </div>
       </div>
@@ -1064,6 +1117,79 @@ function PaymentPanel({
             </Button>
           </div>
         </Modal>
+      )}
+
+      {/* v2 P1-2 — company cash / bank payment against this bill */}
+      {recOpen && (
+        <Modal title={`Record a payment against ${invoice.invoiceNumber}`} onClose={() => setRecOpen(false)} error={recError}>
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Outstanding: <span className="font-medium">{money(outstanding)} MMK</span>. Petty-cash money is not
+              recorded here — link the expense that paid the shop instead.
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Amount (MMK) *</label>
+              <Input
+                type="number" min={0.01} step="0.01" value={rec.amount}
+                onChange={(e) => setRec({ ...rec, amount: e.target.value })}
+                error={Number(rec.amount) > outstanding ? `More than the balance due (${money(outstanding)} Ks) — the server rejects an over-payment.` : undefined}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Paid from *</label>
+                <Select value={rec.fundingSource} onChange={(e) => setRec({ ...rec, fundingSource: e.target.value })}>
+                  <option value="COMPANY_BANK">Company bank</option>
+                  <option value="COMPANY_CASH">Company cash</option>
+                </Select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Method *</label>
+                <Select value={rec.method} onChange={(e) => setRec({ ...rec, method: e.target.value })}>
+                  {['BANK_TRANSFER', 'CASH', 'CHEQUE', 'OTHER'].map((m) => (
+                    <option key={m} value={m}>{m.replace(/_/g, ' ')}</option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Date</label>
+                <Input type="date" value={rec.date} onChange={(e) => setRec({ ...rec, date: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Paid by</label>
+                <Input value={rec.payerName} onChange={(e) => setRec({ ...rec, payerName: e.target.value })} placeholder="Who handed the money over" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Reference</label>
+              <Input value={rec.reference} onChange={(e) => setRec({ ...rec, reference: e.target.value })} placeholder="Transaction ref / cheque no." />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 mt-4">
+            <Button variant="ghost" onClick={() => setRecOpen(false)}>Cancel</Button>
+            <Button disabled={!rec.amount || Number(rec.amount) <= 0 || recBusy} onClick={() => void record()}>
+              {recBusy ? 'Recording…' : 'Record payment'}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {recDuplicate && (
+        <ConfirmDialog
+          title="Record this payment again?"
+          description={`MMK ${money(Number(recDuplicate.amount))} on this date is already recorded for ${invoice.invoiceNumber}. Confirm only if this is a second, separate payment.`}
+          confirmLabel="Yes, record a second payment"
+          onClose={() => setRecDuplicate(null)}
+          onConfirm={async () => {
+            await api('/payments', { method: 'POST', body: { ...recDuplicate, confirmDuplicate: true } });
+            toast('Second payment recorded');
+            setRecDuplicate(null);
+            setRecOpen(false);
+            await onChanged();
+          }}
+        />
       )}
     </div>
   );

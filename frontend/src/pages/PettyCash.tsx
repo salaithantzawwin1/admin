@@ -24,13 +24,16 @@ interface Totals { topup: number; expense: number; balance: number }
 
 interface Account { id: string; code?: string | null; name: string }
 
-/** An invoice an expense may settle (v2 P1-1 invoice picker). */
+/** An open invoice an expense may settle (v2 §4.2 step 3 picker). */
 interface BillOption {
   id: string;
   invoiceNumber: string;
   status: string;
-  total: string | number;
-  paidAmount: string | number;
+  invoiceDate: string;
+  total: number;
+  paidAmount: number;
+  /** total − paidAmount, computed server-side */
+  balance: number;
   supplier: { id: string; name: string };
 }
 
@@ -89,17 +92,19 @@ export default function PettyCash() {
     })();
   }, []);
 
-  // v2 P1-1: the bills an expense can settle — open (not cancelled/rejected)
-  // and still carrying a balance. Loaded lazily the first time the form opens.
+  // v2 §4.2 step 3: the bills an expense can settle — open (not cancelled or
+  // rejected) and still carrying a balance. Fetched server-side on EVERY open,
+  // because a cached first page meant a bill entered later (or the 101st bill)
+  // never appeared in the picker.
   const loadBills = useCallback(async () => {
-    if (!canSeeBills || bills.length) return;
+    if (!canSeeBills) return;
     try {
-      const r = await api<{ items: BillOption[] }>('/invoices?page=1&pageSize=100');
+      const r = await api<{ items: BillOption[] }>('/petty-cash/open-bills');
       setBills(r.items ?? []);
     } catch {
       setBills([]);
     }
-  }, [canSeeBills, bills.length]);
+  }, [canSeeBills]);
 
   const openForm = () => {
     setForm({ ...emptyForm });
@@ -107,16 +112,14 @@ export default function PettyCash() {
     void loadBills();
   };
 
+  // server already dropped closed and settled bills; only the order is ours
   const openBills = useMemo(
-    () => bills
-      .filter((b) => b.status !== 'CANCELLED' && b.status !== 'REJECTED')
-      .filter((b) => Number(b.total) - Number(b.paidAmount ?? 0) > 0.009)
-      .sort((a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber)),
+    () => [...bills].sort((a, b) => a.invoiceNumber.localeCompare(b.invoiceNumber)),
     [bills],
   );
 
   const pickedBill = form?.invoiceId ? openBills.find((b) => b.id === form.invoiceId) : undefined;
-  const pickedBalance = pickedBill ? Number(pickedBill.total) - Number(pickedBill.paidAmount ?? 0) : 0;
+  const pickedBalance = pickedBill ? pickedBill.balance : 0;
   const overOutstanding = Boolean(pickedBill) && Number(form?.amount ?? 0) > pickedBalance;
 
   // keeps "cash on hand" honest after a write even while the list is filtered
@@ -320,7 +323,7 @@ export default function PettyCash() {
                   <option value="">— none (ordinary expense) —</option>
                   {openBills.map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.invoiceNumber} · {b.supplier.name} · balance {money(Number(b.total) - Number(b.paidAmount ?? 0))}
+                      {b.invoiceNumber} · {b.supplier.name} · balance                       {money(b.balance)}
                     </option>
                   ))}
                 </Select>
@@ -363,7 +366,7 @@ export default function PettyCash() {
         </Modal>
       )}
 
-      {/* delete — audited correction flow (no edit) */}
+      {/* delete — audited correction flow with a required reason (D-9/BR-14) */}
       {toDelete && (
         <ConfirmDialog
           title={`Delete ${toDelete.code}?`}
@@ -374,9 +377,13 @@ export default function PettyCash() {
           }
           variant="danger"
           confirmLabel="Delete entry"
+          withNote
+          noteRequired
+          notePlaceholder="Reason for deleting this entry (required — kept in the audit log)"
           onClose={() => setToDelete(null)}
-          onConfirm={async () => {
-            await api(`/petty-cash/${toDelete.id}`, { method: 'DELETE' });
+          onConfirm={async (note) => {
+            await api(`/petty-cash/${toDelete.id}`, { method: 'DELETE', body: { reason: note } });
+            toast('Entry deleted');
             setToDelete(null);
             await load();
             refreshCash();
