@@ -2,9 +2,9 @@
 
 **Last updated:** 27 Nov 2026
 **Requirements:** `doc/AMS-Payment-Finance-Requirements-v2.md` (approved)
-**Environment:** **P1-1 and P1-2 are deployed to both stacks and verified by API.**
-- TESTING — `http://192.168.100.110:8030`, API `127.0.0.1:3011`, build `61e07cc`
-- PRODUCTION — `http://192.168.100.110/` (`:80`), API `127.0.0.1:3000`, build `61e07cc`
+**Environment:** **P1-1 and P1-2 are deployed to both stacks; verified by API, and by a browser click-through on testing.**
+- TESTING — `http://192.168.100.110:8030`, API `127.0.0.1:3011`, build `4a28824`
+- PRODUCTION — `http://192.168.100.110/` (`:80`), API `127.0.0.1:3000`, build `4a28824`
 
 Production was rebuilt and migrated on 27 Nov 2026 (migration `00000000000093_petty_cash_invoice_link` applied 06:06 UTC; DB backed up to `backups/ams-prod_2026-11-27_123624.sql.gz` immediately before). Both stacks now run the same checkout.
 
@@ -15,7 +15,7 @@ Production was rebuilt and migrated on 27 Nov 2026 (migration `00000000000093_pe
 | Phase | Scope | State |
 |---|---|---|
 | **P1-1** | Petty-cash expense ↔ invoice link + auto payment, cancel/reject guard, advisory float, supplier guard on the link | ✅ **Done — testing + production, verified by API** |
-| **P1-2** | Company cash / bank payments (`+ Record payment`), funding source, relaxed status guard, payer + reference, duplicate confirmation, payments-page columns and CSV, deletion reason | ✅ **Done — testing + production, verified by API** |
+| **P1-2** | Company cash / bank payments (`+ Record payment`), funding source, relaxed status guard, payer + reference, duplicate confirmation, payments-page columns and CSV, deletion reason | ✅ **Done — testing + production; API on both, browser click-through on testing** |
 | **Phase 2** | `financeModuleEnabled` toggle, `financeStatus` + voucher, `finance.*` RBAC, `Supplier.apAccountId`, `FinanceSettings`, GL export + blocked list | ⏳ Not started |
 | **Phase 3** | Float reconciliation, company-cash tracking, multi-invoice payments, refunds | ⏳ Not decided |
 
@@ -67,6 +67,10 @@ The form's *Invoice paid* dropdown used to read the first page of `/invoices` (`
 
 There is still **no edit** for a money row: a correction is delete (with a reason) and re-enter.
 
+### What the click-through fixed (`4a28824`)
+
+Driving the screens by hand as `finance1` found two gates stricter in the UI than in the API. `PettyCash.tsx` showed the *Invoice paid* picker only with `procurement.read/manage`, and `Invoices.tsx` showed *Link petty-cash expense* only with `procurement.manage` — while `GET /petty-cash/open-bills` and `GET /petty-cash/linkable/:id` accept `pettycash.read`/`payments.read` and `POST /petty-cash/:id/link-invoice` accepts `pettycash.manage`/`payments.manage`. A Finance-only user therefore never saw either control, although the API would have served them. Both gates now mirror the controller, and the picker's option text lost a run of stray spaces. Re-checked on testing: both controls appear for `finance1`.
+
 ---
 
 ## 4. Shipped alongside (not part of the payment phases)
@@ -104,7 +108,28 @@ API smoke test on **INV-202611-0016** (500,000 Ks, POSTED, UNPAID):
 
 The test DB was returned to its starting state afterwards (no leftover payments; the invoice is `UNPAID` again at 0). The audit entries from the run remain — the trail is append-only.
 
-Production was verified by health, UI 200, the applied migration and build provenance only: **no production data was written**, and the UI has not been click-through tested on either stack (verification is compile + service tests + API).
+### Browser click-through (testing, 27 Nov 2026, signed in as `finance1`)
+
+`finance1` holds `payments.manage`, `pettycash.manage`, `payments.read`, `pettycash.read`, `invoices.read` — 18 permissions, and **no** `procurement.manage`. Every step below was performed in the UI on `:8030`; nothing was scripted except the two statements marked *(API in the same session)*.
+
+| Step | Performed | Result |
+|---|---|---|
+| Pay a bill | Payments → *+ Record payment* → INV-202611-0016, 500,000, **Paid from** Company cash, method CASH, *Paid by* "Daw Mya (Finance)", reference CASH-001 | `PY-202611-0012` written; the register shows Source, Paid by and Reference; the invoice reads `PAID` 500,000, the outstanding table empties and *+ Record payment* disables |
+| Delete with no reason | *Delete* on that row, confirm untouched | the dialog's **Delete payment** stays disabled until a reason is typed |
+| Delete with a reason | typed a reason, confirmed | row removed, invoice `UNPAID` 0, and the `PAYMENT_DELETED` audit entry carries `{"reason": "…"}` |
+| Instalments | 200,000 then 300,000, Company bank / BANK TRANSFER | invoice `PARTIALLY PAID` 200,000 of 500,000, then `PAID` 500,000 |
+| Over-payment | 300,000 against the remaining 100,000 | refused in the dialog: "More than the balance due (100,000 Ks) — the server rejects an over-payment"; amount cleared, nothing written |
+| Duplicate | same bill, 200,000, same day, *Record* | "Record this payment again?" — Cancel wrote nothing; "Yes, record a second payment" added a separate row (`PARTIALLY PAID` 400,000) |
+| Clean-up | both rows deleted with reasons | invoice back to `UNPAID` 0 |
+| Invoice panel | opened INV-202611-0016 | Paid / Outstanding, the payment list with source, method and note, *+ Record payment* and *Link petty-cash expense* |
+| Link picker | *Link petty-cash expense* | "No unlinked petty-cash expense for this supplier" — the stationery-shop expense is not offered for a hardware bill |
+| Supplier guard | `POST /petty-cash/PC-202610-0002/link-invoice` *(API in the same session)* | 400 "Petty cash PC-202610-0002 was paid to Stationery shop, but INV-202611-0016 is from Unique Myanmar — link an expense paid to the same supplier"; nothing linked |
+| Expense form picker | Petty Cash → *+ Record entry* → EXPENSE | *Invoice paid* lists `INV-202611-0016 · Unique Myanmar · balance 500,000` and picking it prefills the payee; the list is fetched on every open, not cached |
+| Expense delete | *Delete* on PC-202610-0002 | "Delete entry" disabled until a reason is typed — cancelled, nothing deleted |
+
+The database was left at the starting state afterwards: 0 payments, INV-202611-0016 `UNPAID` 0, PC-202610-0002 unlinked. As before, the audit rows from the run remain.
+
+Production was verified by health, UI 200, the applied migration and build provenance only: **no production data was written there**, and its UI has not been click-through tested — the click-through above was on testing.
 
 ---
 
@@ -121,7 +146,7 @@ Production was verified by health, UI 200, the applied migration and build prove
 ### Open / not done
 
 - **Q-1** — does one shop payment ever cover two invoices? Until answered: one payment = one invoice.
-- **UI click-through** — the P1-1/P1-2 screens have not been exercised by hand; verification so far is compile + service tests + API.
+- **UI click-through** — done on testing as `finance1` (§5); production's UI has still not been driven by hand. The click-through is what caught the two permission gates fixed in `4a28824`.
 
 ---
 

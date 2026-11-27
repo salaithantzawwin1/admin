@@ -1,8 +1,8 @@
 # AMS — Payment & Finance Status: Revised Requirements (v2)
 
-**Status:** Approved (27 Nov 2026) · **P1-1 and P1-2 implemented and deployed** to testing (`:8030`) and production (`:80`). Phase 2 has not started.
+**Status:** Approved (27 Nov 2026) · **P1-1 and P1-2 implemented and deployed** to testing (`:8030`) and production (`:80`). The P1-2 screens were then driven by hand on testing as `finance1`. Phase 2 has not started.
 **Supersedes:** v1 — "Final Requirements and Change List"
-**Baseline code:** `/opt/admin` @ `61e07cc` (P1-1 on `62ef8c0`, P1-2 on `84c5b58`/`61e07cc`)
+**Baseline code:** `/opt/admin` @ `4a28824` (P1-1 on `62ef8c0`, P1-2 on `84c5b58`/`61e07cc`, UI permission gates for the link/picker on `4a28824`)
 **Related:** `doc/PAYMENT-FINANCE-PROGRESS.md` (what is built, what is left)
 
 Confirmed decisions are marked ✅. Assumptions used to move forward are marked 🟡. Open items are listed in §18 and are **not** to be implemented until answered.
@@ -369,7 +369,7 @@ Schema: `Payment.fundingSource/payerUserId/payerName/pettyCashTransactionId`; `P
 ### P1-2 — Cash and bank payments *(shipped to testing and production, 27 Nov 2026)*
 
 `POST /payments` relaxes the status guard and refuses `PETTY_CASH`; *+ Record payment* modal for `COMPANY_CASH` / `COMPANY_BANK` on the invoice detail and the Payments page; payments page columns and CSV; duplicate prompt.
-**Exit criteria:** a 500,000 Ks company-cash payment flips the invoice to `PAID`; petty-cash payments still cannot be created here. **Met** — verified on testing by API (a COMPANY_CASH payment rolled the invoice up, `PETTY_CASH` answered 400 `USE_PETTY_CASH_LINK`, and a second identical payment required `confirmDuplicate`).
+**Exit criteria:** a 500,000 Ks company-cash payment flips the invoice to `PAID`; petty-cash payments still cannot be created here. **Met** — verified on testing by API *and* by a browser click-through as `finance1`: a 500,000 Ks `COMPANY_CASH`/`CASH` payment on INV-202611-0016 moved it `UNPAID → PAID` at 500,000 with the source and payer in the register; 200,000 + 300,000 showed `PARTIALLY_PAID → PAID`; 300,000 against the remaining 100,000 was refused in the dialog; the same amount twice opened "record this payment again?" instead of writing a second row; deleting either the payment or an expense left the confirm button dead until a reason was typed. The *Paid from* control offers only company bank / company cash, so `PETTY_CASH` has no UI route (the API still answers 400 `USE_PETTY_CASH_LINK`). The click-through also found and fixed two UI gates that hid the petty-cash pickers from every Finance-only role (`4a28824`).
 
 ### Phase 2 — Finance-ready *(behind the toggle)*
 
@@ -389,13 +389,13 @@ Each phase is independently shippable. **P1-1 must precede P1-2** — shipping c
 The item numbers are kept so earlier references stay valid; each line states the phase it belongs to. ✅ = shipped and verified, ⏳ = not built yet.
 
 1. A petty-cash `EXPENSE` of 500,000 Ks linked to INV-202611-0016 produces exactly one payment (`PETTY_CASH`, `CASH`), and the invoice becomes `PAID`. — **P1-1** ✅
-2. `POST /payments` with `fundingSource = PETTY_CASH` is rejected with `USE_PETTY_CASH_LINK`. — **P1-2** ✅
+2. `POST /payments` with `fundingSource = PETTY_CASH` is rejected with `USE_PETTY_CASH_LINK`. — **P1-2** ✅ (API; the UI's *Paid from* list only has the two company sources)
 3. Deleting the linked expense deletes the payment and returns the invoice to `UNPAID`, with an audit entry naming who and why. — **P1-1** ✅ (the "why" is the required `reason`, stored in the audit entry's `newValue`)
 4. A `TOPUP` never changes any invoice. — **P1-1** ✅
 5. An expense larger than the invoice's outstanding balance cannot be linked. — **P1-1** ✅
-6. Payments of 200,000 and 300,000 show `PARTIALLY_PAID` then `PAID`; a 300,000 payment against a 100,000 balance is rejected. — **P1-2** ✅
+6. Payments of 200,000 and 300,000 show `PARTIALLY_PAID` then `PAID`; a 300,000 payment against a 100,000 balance is rejected. — **P1-2** ✅ (UI: the dialog refuses the over-payment "More than the balance due" and the balance stays 100,000)
 7. `CANCELLED`/`REJECTED` is refused with 409 while `paidAmount > 0`. — **P1-1** ✅
-8. Entering an identical payment (same invoice, amount, date) prompts for confirmation and is not silently accepted. — **P1-2** ✅
+8. Entering an identical payment (same invoice, amount, date) prompts for confirmation and is not silently accepted. — **P1-2** ✅ (UI: "Record this payment again?" — cancelling writes nothing; confirming adds a separate row)
 9. With `financeModuleEnabled = false`, no Finance column, panel, voucher field, export menu or `finance.*` capability is visible anywhere. — **Phase 2** ⏳ (the toggle does not exist yet; today no Finance surface is rendered at all)
 10. With the toggle on, `RECORDED` succeeds with voucher number + date alone, while printing the uncoded-line warning; the invoice then appears in the export blocked list. — **Phase 2** ⏳
 11. Account coding can be corrected after `RECORDED`, and payment rows on a `RECORDED` invoice cannot be deleted. — **Phase 2** ⏳
