@@ -76,6 +76,8 @@ export class InvoicesService {
           supplier: { select: { id: true, name: true } },
           purchaseOrder: { select: { id: true, poNumber: true, status: true } },
           items: true,
+          // the list flags POSTED bills that still have no paper on file
+          _count: { select: { attachments: true } },
         },
       }),
     ]);

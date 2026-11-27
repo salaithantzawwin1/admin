@@ -42,6 +42,8 @@ interface Invoice {
   invoiceNumber: string;
   supplierInvoiceNumber: string;
   status: string;
+  /** list payload only: how many bill papers are attached */
+  _count?: { attachments: number } | null;
   invoiceDate: string;
   dueDate?: string | null;
   subtotal: string | number;
@@ -248,7 +250,17 @@ export default function Invoices() {
             <tbody className="divide-y divide-gray-100">
               {rows.map((inv) => (
                 <tr key={inv.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => openDetail(inv)}>
-                  <td className="px-4 py-3 font-medium">{inv.invoiceNumber}</td>
+                  <td className="px-4 py-3 font-medium whitespace-nowrap">
+                    {inv.invoiceNumber}
+                    {inv.status === 'POSTED' && (inv._count?.attachments ?? 0) === 0 && (
+                      <span
+                        title="POSTED bill has no attachment yet"
+                        className="ml-2 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-amber-100 px-2 py-0.5 align-middle text-xs font-medium text-amber-800"
+                      >
+                        📎 no bill
+                      </span>
+                    )}
+                  </td>
                   {canSeeSupplier && <td className="px-4 py-3 text-gray-500">{inv.supplierInvoiceNumber}</td>}
                   <td className="px-4 py-3">{inv.supplier.name}</td>
                   <td className="px-4 py-3 text-gray-500">{inv.purchaseOrder?.poNumber ?? '—'}</td>
