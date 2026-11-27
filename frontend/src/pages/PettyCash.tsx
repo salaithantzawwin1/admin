@@ -43,7 +43,11 @@ const money = (v: string | number) => Number(v ?? 0).toLocaleString();
 
 export default function PettyCash() {
   const canManage = hasPermission('pettycash.manage');
-  const canSeeBills = hasPermission('procurement.read') || hasPermission('procurement.manage');
+  // mirrors GET /petty-cash/open-bills: Finance reads bills with pettycash.read /
+  // payments.read, so a Finance user (not only Procurement) gets the picker
+  const canSeeBills =
+    hasPermission('procurement.read') || hasPermission('procurement.manage') ||
+    hasPermission('pettycash.read') || hasPermission('payments.read');
   const [items, setItems] = useState<Txn[]>([]);
   const [totals, setTotals] = useState<Totals>({ topup: 0, expense: 0, balance: 0 });
   // unfiltered balance — "cash on hand" must not follow the list filters
@@ -323,7 +327,7 @@ export default function PettyCash() {
                   <option value="">— none (ordinary expense) —</option>
                   {openBills.map((b) => (
                     <option key={b.id} value={b.id}>
-                      {b.invoiceNumber} · {b.supplier.name} · balance                       {money(b.balance)}
+                      {b.invoiceNumber} · {b.supplier.name} · balance {money(b.balance)}
                     </option>
                   ))}
                 </Select>
