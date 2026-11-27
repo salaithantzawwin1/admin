@@ -707,7 +707,7 @@ function InvoiceAttachments({
     <div className="border border-gray-200 rounded-lg p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
         <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">Bill attachments ({items.length})</div>
-        {canManage && !posted && (
+        {canManage && (
           <label className={`text-sm px-3 py-1.5 rounded-lg cursor-pointer border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
             {busy ? 'Uploading…' : '+ Attach photo / PDF'}
             <input
@@ -725,7 +725,7 @@ function InvoiceAttachments({
         )}
       </div>
       {posted && (
-        <p className="text-xs text-gray-400 mb-2">This bill is POSTED — its papers are part of the audit trail and can no longer be changed.</p>
+        <p className="text-xs text-gray-400 mb-2">This bill is POSTED — attached files are part of the audit trail and can no longer be removed. You can still attach supporting documents.</p>
       )}
       {error && <div className="text-sm text-red-600 bg-red-50 rounded px-3 py-2 mb-2">{error}</div>}
       {loading ? (
