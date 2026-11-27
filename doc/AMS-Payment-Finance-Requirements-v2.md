@@ -1,8 +1,8 @@
 # AMS — Payment & Finance Status: Revised Requirements (v2)
 
-**Status:** Approved (27 Nov 2026) · P1-1 implemented, deployed to testing only
+**Status:** Approved (27 Nov 2026) · **P1-1 and P1-2 implemented and deployed** to testing (`:8030`) and production (`:80`). Phase 2 has not started.
 **Supersedes:** v1 — "Final Requirements and Change List"
-**Baseline code:** `/opt/admin` @ `ef0b326` (P1-1 committed on top)
+**Baseline code:** `/opt/admin` @ `61e07cc` (P1-1 on `62ef8c0`, P1-2 on `84c5b58`/`61e07cc`)
 **Related:** `doc/PAYMENT-FINANCE-PROGRESS.md` (what is built, what is left)
 
 Confirmed decisions are marked ✅. Assumptions used to move forward are marked 🟡. Open items are listed in §18 and are **not** to be implemented until answered.
@@ -32,14 +32,14 @@ Confirmed decisions are marked ✅. Assumptions used to move forward are marked 
 | ID | Decision | Consequence |
 |---|---|---|
 | **D-1** ✅ | Three separate status axes: approval (`Invoice.status`), payment to supplier (`paymentStatus`, derived), finance processing (`financeStatus`) | One word no longer carries three meanings |
-| **D-2** ✅ | **Single write path per funding source.** `PETTY_CASH` payments can only be produced by linking a petty-cash expense. `POST /payments` rejects `PETTY_CASH` | Double counting is structurally impossible, not merely discouraged |
+| **D-2** ✅ | **Single write path per funding source.** `PETTY_CASH` payments can only be produced by linking a petty-cash expense. `POST /payments` rejects `PETTY_CASH` | Double counting is structurally impossible, not merely discouraged — enforced since P1-2 by `400 USE_PETTY_CASH_LINK` |
 | **D-3** ✅ | Funding source has **3 values**: `PETTY_CASH`, `COMPANY_CASH`, `COMPANY_BANK` | No staff-payable state in AMS |
 | **D-4** ✅ | Administration's current behaviour is preserved: the petty-cash **expense** is the record of paying a shop; v2 only adds an optional invoice link to it | Data entry grows by one optional field, not by a second workflow |
 | **D-5** ✅ | Petty-cash float balance is **advisory**: insufficient balance warns, never blocks. Balance is not used by any export or report as an authoritative figure | Wrong float data cannot stop correct work |
 | **D-6** ✅ | `RECORDED` requires **only** `voucherNumber` + `voucherDate`. Missing expense-account coding is a non-blocking warning, and the GL export blocks those invoices | Finance is not gated on Administration's coding |
 | **D-7** ✅ | `RECORDED` freezes **payment amounts**, not account coding: coding can still be added/corrected afterwards without breaking the audit trail | Export backlog is fixable |
 | **D-8** ✅ | All Finance surfaces sit behind `financeModuleEnabled`, **default off**, changeable by `SYSTEM_ADMIN` only | Administration's screens do not change while Finance is absent |
-| **D-9** ✅ | An invoice with `paidAmount > 0` cannot be `CANCELLED`/`REJECTED`; payments must be removed first (reason + audit entry). A `RECORDED` invoice's payments cannot be removed at all | No state where an invoice is void but money is still counted |
+| **D-9** ✅ | An invoice with `paidAmount > 0` cannot be `CANCELLED`/`REJECTED`; payments must be removed first (reason + audit entry). A `RECORDED` invoice's payments cannot be removed at all | No state where an invoice is void but money is still counted. The reason is enforced since P1-2 (`DELETE` takes `{ reason }`, kept in the audit entry's `newValue`); the `RECORDED` freeze waits for `financeStatus` (Phase 2) |
 | **D-10** ✅ | GL export = CSV, two journals (accrual + payment); invoices missing an expense account or AP account are **blocked and listed**, never exported incomplete | Unbalanced journals cannot leave the system |
 | **D-11** ✅ | Payments are allowed while an invoice is **not** `CANCELLED`/`REJECTED` (relaxes today's `PAYABLE_STATUSES` guard) | Shop is often paid before approval or before the bill is entered |
 | **D-12** ✅ | Personal money and reimbursement are **out of AMS scope in v2**; they stay in Finance's external process. `fundingSource` remains a free `String` so `PERSONAL` can be added additively later | Simplicity now, no migration pain later |
@@ -67,7 +67,7 @@ Business meaning:
 - **Payment to supplier** = "money actually reached the shop for this bill". Never typed by hand.
 - **Finance processing** = "where the paperwork sits". Never changes amounts; never changes `POSTED`.
 
-> Worked example — **INV-202611-0016** (500,000 Ks, POSTED, no payments). Today it shows `UNPAID`, which is wrong: the shop has been paid. After v2, Administration links the petty-cash expense that paid the shop and it becomes `PAID` in the same moment. `financeStatus` stays `PENDING`.
+> Worked example — **INV-202611-0016** (500,000 Ks, POSTED). It still shows `UNPAID`, and in the test data that is now *correct*: the only unlinked expense is a stationery-shop payment, and the supplier guard refuses to link it to a bill from a different supplier. When Administration enters the expense that did pay this shop (or links it), the invoice becomes `PAID` in the same moment. `financeStatus` stays `PENDING`.
 
 ---
 
@@ -110,14 +110,14 @@ Administration's real behaviour today (confirmed): **when a shop is paid, one pe
 
 1. Administration buys from the shop and pays from the float.
 2. In AMS → Petty Cash → **New expense**: payee (shop), amount, date, float account — exactly as today.
-3. **New:** optional *Invoice* picker, filtered to that supplier and to invoices not `CANCELLED`/`REJECTED`, each showing its outstanding balance.
+3. **New:** optional *Invoice* picker listing open bills — not `CANCELLED`/`REJECTED`, still carrying a balance, newest first — each showing its outstanding balance. It is served by `GET /petty-cash/open-bills`, so a bill entered a moment ago (or the 101st bill) is always offered. The list is **not** filtered to a supplier: on this form the payee is free text and the expense is not tied to a supplier until it is saved. Picking a bill pre-fills the payee with that supplier's name, and the link itself refuses an expense whose payee/supplier does not match the bill's supplier.
 4. On save, in a single database transaction: the expense is created **and** the payment row (`fundingSource = PETTY_CASH`, `method = CASH`, `pettyCashTransactionId` = the expense, date = the expense date) is created; the invoice rolls up.
 5. If the expense amount exceeds the invoice's outstanding balance, the link is refused (whole-amount only in v2 — no partial allocation).
 6. If only the float balance is exceeded, a **warning** is shown and saving proceeds (D-5).
 
 ### 4.3 Existing unlinked expenses (backfill of the business fact)
 
-Yesterday's expenses are not auto-matched. On the invoice detail, *Link petty-cash expense* lists that supplier's unlinked expenses; Administration picks the right one and the payment is created. Amount/date guessed matching is deliberately **not** implemented (a wrong guess corrupts `paidAmount`).
+Yesterday's expenses are not auto-matched. On the invoice detail, *Link petty-cash expense* lists that supplier's unlinked expenses (matched by stored supplier, or by the payee name); Administration picks the right one and the payment is created. The link is refused when the expense was paid to a different supplier, so a link can never make the register state something untrue. Amount/date guessed matching is deliberately **not** implemented (a wrong guess corrupts `paidAmount`).
 
 ### 4.4 Secondary flows (no float involvement)
 
@@ -295,17 +295,18 @@ Index: `@@index([financeStatus])`.
 | Phase | Method & path | Change | Permission |
 |---|---|---|---|
 | P1-1 | `POST /petty-cash` (existing) | accept optional `invoiceId`; when present, create expense **+** payment in one transaction (refuse if amount > outstanding) | `pettycash.manage` (unchanged) |
-| P1-1 | `POST /petty-cash/:id/link-invoice` (new) | `{ invoiceId }` → create the payment for an existing expense; 409 if already linked or over-paying | `payments.manage` |
-| P1-1 | `GET /petty-cash/linkable/:invoiceId` (new, added during build) | unlinked expenses of that supplier, for the picker | `pettycash.read` / `payments.read` / `procurement.read` |
-| P1-1 | `DELETE /petty-cash/:id` (existing) | also delete the linked payment and re-roll the invoice, audited; 409 when `RECORDED` | unchanged |
+| P1-1 | `POST /petty-cash/:id/link-invoice` (new) | `{ invoiceId }` → create the payment for an existing expense. **400** when the expense is larger than the balance **or was paid to a different supplier**; **409** when the expense is already linked | `pettycash.manage` / `payments.manage` |
+| P1-1 | `GET /petty-cash/linkable/:invoiceId` (new, added during build) | unlinked expenses of that supplier, for the link dialog | `pettycash.read` / `payments.read` / `procurement.read` / `procurement.manage` |
+| P1-2 | `GET /petty-cash/open-bills` (new, added with P1-2) | open bills (not `CANCELLED`/`REJECTED`, balance > 0) for the expense form's *Invoice* picker; server-side, so it is complete and current (the old screen-side picker read page 1 of `/invoices` and cached it, hiding the 101st bill and anything entered later) | `pettycash.read` / `payments.read` / `procurement.read` / `procurement.manage` |
+| P1-1 | `DELETE /petty-cash/:id` (existing) | `{ reason }` **required** (400 without it); also delete the linked payment and re-roll the invoice, both audited with that reason. 409 when `RECORDED` — **Phase 2**, `financeStatus` does not exist yet | unchanged |
 | P1-1 | `POST /invoices/:id/{cancel,reject}` (existing) | 409 when `paidAmount > 0` (D-9) | unchanged |
 | P1-1 | `GET /invoices/:id` (existing) | include `payments[]` and `pettyCashExpenses[]` | unchanged |
-| P1-2 | `POST /payments` (existing) | accept `fundingSource` (`PETTY_CASH` → 400 `USE_PETTY_CASH_LINK`), `payerUserId`/`payerName`; relax guard to "not CANCELLED/REJECTED" | `payments.manage` |
-| P1-2 | `DELETE /payments/:id` (existing) | 409 for `PETTY_CASH` (landed in P1-1), reason required, 409 when `RECORDED` | `payments.manage` |
+| P1-2 | `POST /payments` (existing) | `fundingSource` **required** (`PETTY_CASH` → 400 `USE_PETTY_CASH_LINK`), optional `payerUserId`/`payerName`, guard relaxed to "not CANCELLED/REJECTED"; an identical invoice+amount+day answers 409 `DUPLICATE_PAYMENT` until re-sent with `confirmDuplicate: true` | `payments.manage` |
+| P1-2 | `DELETE /payments/:id` (existing) | `{ reason }` **required** (400 without it, kept in the audit entry), 409 for a `PETTY_CASH` payment (delete the expense instead; landed in P1-1), 409 when `RECORDED` (Phase 2) | `payments.manage` |
 | P2 | `PATCH /invoices/:id/finance` (new) | `{ status, voucherNumber?, voucherDate? }`; `RECORDED` needs voucher only; returns the coding-warning list | `procurement.manage` (hand-over), `finance.manage` (recorded) |
 | P2 | `GET /reports/gl-export` (new) | `?from&to&kind=accrual\|payment\|both&format=csv` → CSV + blocked-invoice report | `finance.export` |
 | P2 | `GET/PUT /settings/finance` (new) | toggle + account defaults | `SYSTEM_ADMIN` |
-| P2 | `GET /payments/csv` (existing) | add funding source and payer columns | `payments.read` |
+| P1-2 | `GET /payments/csv` (existing) | **done** — `Funding source` and `Paid by` columns added | `payments.read` |
 
 ---
 
@@ -315,13 +316,15 @@ Index: `@@index([financeStatus])`.
 |---|---|---|
 | P1-1 | Petty Cash → New expense | **optional Invoice picker** (open bills with a balance, shows outstanding); shop name pre-fills payee; warning when float balance is short; linked rows show `→ INV-… · PY-…` |
 | P1-1 | Invoice detail | *Payment to supplier* panel: paid / outstanding, payment list (source, method, note), **Link petty-cash expense**, warning when the picked expense exceeds the balance |
+| P1-2 | Invoice detail | **+ Record payment** in the same panel: source `COMPANY_CASH` / `COMPANY_BANK`, amount, date, method, paid-by, reference; a duplicate asks once before it is recorded |
 | P1-1 | Invoices list | Payment column now truthful; no new column |
-| P1-2 | Invoice detail | **+ Record payment** modal — source `COMPANY_CASH` / `COMPANY_BANK`, amount, date, payer, reference |
-| P1-2 | Payments page | Funding source and payer columns; CSV updated |
+| P1-2 | Payments page | *Source* and *Paid by* columns; CSV carries `Funding source` and `Paid by`; the delete dialog requires a reason (both here and on Petty Cash) |
 | P2 (toggle on) | Invoices list | Finance column + filter (PENDING grey / HANDED OVER blue / RECORDED green) |
 | P2 (toggle on) | Invoice detail | Finance panel: hand over; voucher number + date; mark recorded (warns about uncoded lines but does not block) |
 | P2 (toggle on) | Reports → GL export | Date range, journal type, preview, CSV download, blocked-invoice list with reasons and links |
 | P2 (toggle on) | RBAC matrix | `finance.read`, `finance.manage`, `finance.export` rows |
+
+**Shipped alongside these phases (not part of the payment design):** invoice bill attachments — an *Attachments* tab on the invoice detail, uploads frozen once the bill is `POSTED`, and a `📎 no bill` flag on POSTED invoices with no file. See `PAYMENT-FINANCE-PROGRESS.md` §2.
 
 ---
 
@@ -358,15 +361,15 @@ Rules: never export an invoice whose lines lack an account code, whose supplier 
 
 ## 16. Revised implementation phases
 
-### P1-1 — Truthful payment via petty cash *(shipped to testing)*
+### P1-1 — Truthful payment via petty cash *(shipped to testing and production, 27 Nov 2026)*
 
 Schema: `Payment.fundingSource/payerUserId/payerName/pettyCashTransactionId`; `PettyCashTransaction.invoiceId/supplierId`. Expense invoice picker + atomic expense/payment creation. Link-existing-expense flow. Cancel/reject guard. Advisory float panel. Audit on removal.
-**Exit criteria:** an existing unlinked expense can be linked to INV-202611-0016 and the invoice shows `PAID`; no way exists to create a petty-cash payment without an expense.
+**Exit criteria:** an existing unlinked expense can be linked to INV-202611-0016 and the invoice shows `PAID`; no way exists to create a petty-cash payment without an expense. **Met** — verified on testing by API; the link is additionally refused when the expense was paid to another supplier.
 
-### P1-2 — Cash and bank payments
+### P1-2 — Cash and bank payments *(shipped to testing and production, 27 Nov 2026)*
 
-`POST /payments` relaxes the status guard and refuses `PETTY_CASH`; *+ Record payment* modal for `COMPANY_CASH` / `COMPANY_BANK`; payments page columns and CSV; duplicate prompt.
-**Exit criteria:** a 500,000 Ks company-cash payment flips the invoice to `PAID`; petty-cash payments still cannot be created here.
+`POST /payments` relaxes the status guard and refuses `PETTY_CASH`; *+ Record payment* modal for `COMPANY_CASH` / `COMPANY_BANK` on the invoice detail and the Payments page; payments page columns and CSV; duplicate prompt.
+**Exit criteria:** a 500,000 Ks company-cash payment flips the invoice to `PAID`; petty-cash payments still cannot be created here. **Met** — verified on testing by API (a COMPANY_CASH payment rolled the invoice up, `PETTY_CASH` answered 400 `USE_PETTY_CASH_LINK`, and a second identical payment required `confirmDuplicate`).
 
 ### Phase 2 — Finance-ready *(behind the toggle)*
 
@@ -383,19 +386,21 @@ Each phase is independently shippable. **P1-1 must precede P1-2** — shipping c
 
 ## 17. Acceptance criteria
 
-1. A petty-cash `EXPENSE` of 500,000 Ks linked to INV-202611-0016 produces exactly one payment (`PETTY_CASH`, `CASH`), and the invoice becomes `PAID`.
-2. `POST /payments` with `fundingSource = PETTY_CASH` is rejected with `USE_PETTY_CASH_LINK`.
-3. Deleting the linked expense deletes the payment and returns the invoice to `UNPAID`, with an audit entry naming who and why.
-4. A `TOPUP` never changes any invoice.
-5. An expense larger than the invoice's outstanding balance cannot be linked.
-6. Payments of 200,000 and 300,000 show `PARTIALLY_PAID` then `PAID`; a 300,000 payment against a 100,000 balance is rejected.
-7. `CANCELLED`/`REJECTED` is refused with 409 while `paidAmount > 0`.
-8. Entering an identical payment (same invoice, amount, date) prompts for confirmation and is not silently accepted.
-9. With `financeModuleEnabled = false`, no Finance column, panel, voucher field, export menu or `finance.*` capability is visible anywhere.
-10. With the toggle on, `RECORDED` succeeds with voucher number + date alone, while printing the uncoded-line warning; the invoice then appears in the export blocked list.
-11. Account coding can be corrected after `RECORDED`, and payment rows on a `RECORDED` invoice cannot be deleted.
-12. Moving finance status changes no amount: `paidAmount` and `paymentStatus` are identical before and after, in both the UI and the audit log.
-13. A user without Finance permissions sees no finance field at all, and the Administration workflow gains at most one optional dropdown.
+The item numbers are kept so earlier references stay valid; each line states the phase it belongs to. ✅ = shipped and verified, ⏳ = not built yet.
+
+1. A petty-cash `EXPENSE` of 500,000 Ks linked to INV-202611-0016 produces exactly one payment (`PETTY_CASH`, `CASH`), and the invoice becomes `PAID`. — **P1-1** ✅
+2. `POST /payments` with `fundingSource = PETTY_CASH` is rejected with `USE_PETTY_CASH_LINK`. — **P1-2** ✅
+3. Deleting the linked expense deletes the payment and returns the invoice to `UNPAID`, with an audit entry naming who and why. — **P1-1** ✅ (the "why" is the required `reason`, stored in the audit entry's `newValue`)
+4. A `TOPUP` never changes any invoice. — **P1-1** ✅
+5. An expense larger than the invoice's outstanding balance cannot be linked. — **P1-1** ✅
+6. Payments of 200,000 and 300,000 show `PARTIALLY_PAID` then `PAID`; a 300,000 payment against a 100,000 balance is rejected. — **P1-2** ✅
+7. `CANCELLED`/`REJECTED` is refused with 409 while `paidAmount > 0`. — **P1-1** ✅
+8. Entering an identical payment (same invoice, amount, date) prompts for confirmation and is not silently accepted. — **P1-2** ✅
+9. With `financeModuleEnabled = false`, no Finance column, panel, voucher field, export menu or `finance.*` capability is visible anywhere. — **Phase 2** ⏳ (the toggle does not exist yet; today no Finance surface is rendered at all)
+10. With the toggle on, `RECORDED` succeeds with voucher number + date alone, while printing the uncoded-line warning; the invoice then appears in the export blocked list. — **Phase 2** ⏳
+11. Account coding can be corrected after `RECORDED`, and payment rows on a `RECORDED` invoice cannot be deleted. — **Phase 2** ⏳
+12. Moving finance status changes no amount: `paidAmount` and `paymentStatus` are identical before and after, in both the UI and the audit log. — **Phase 2** ⏳
+13. A user without Finance permissions sees no finance field at all, and the Administration workflow gains at most one optional dropdown. — **Phase 2** ⏳
 
 ---
 
@@ -417,4 +422,5 @@ No implementation may rely on a different answer to Q-1.
 - **No refunds, credit notes or reversals**; corrections are delete-and-re-enter before `RECORDED`.
 - **No multi-currency**: MMK only; the CSV carries a currency column for the future.
 - **Tax** remains a single invoice-level amount; per-line tax codes are out of scope.
-- **No payment-proof attachment** is required by any rule.
+- **No payment-proof attachment** is required by any rule. (Bill attachments themselves *are* implemented: the invoice's *Attachments* tab, frozen uploads on `POSTED`, and the `📎 no bill` flag — they are not a payment control.)
+- **Deleting money requires a reason** (a payment row or a petty-cash entry); it is written to the audit entry and cannot be left blank. There is still no edit — a correction is delete-and-re-enter.
