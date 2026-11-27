@@ -4,7 +4,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { PrismaService } from '../prisma/prisma.module';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
-import { RequirePermissions } from '../auth/permissions.guard';
+import { PermissionsGuard, RequirePermissions } from '../auth/permissions.guard';
 import { PERMISSIONS } from '../auth/permissions';
 import { csvRow } from '../util/csv';
 
@@ -70,7 +70,7 @@ function clampInt(value: string | undefined, fallback: number, min: number, max:
 
 @ApiTags('audit')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @RequirePermissions(PERMISSIONS.AUDIT_READ)
 @Controller('audit-logs')
 export class AuditController {
